@@ -6,7 +6,7 @@
 //
 
 import SwiftUI
-import gnode
+import GNodeKit
 
 struct GNodeTestView: View {
     @State private var testResult: String = NSLocalizedString("app.test.initial", comment: "")

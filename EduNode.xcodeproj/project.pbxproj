@@ -7,8 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		003E37B32F41B56400E20FD0 /* gnode in Frameworks */ = {isa = PBXBuildFile; productRef = 003E37B22F41B56400E20FD0 /* gnode */; };
-		003E37B62F41B58200E20FD0 /* gnode in Frameworks */ = {isa = PBXBuildFile; productRef = 003E37B52F41B58200E20FD0 /* gnode */; };
+		003E38052F44909900E20FD0 /* GNodeKit in Frameworks */ = {isa = PBXBuildFile; productRef = 003E38042F44909900E20FD0 /* GNodeKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,8 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				003E37B62F41B58200E20FD0 /* gnode in Frameworks */,
-				003E37B32F41B56400E20FD0 /* gnode in Frameworks */,
+				003E38052F44909900E20FD0 /* GNodeKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -119,8 +117,7 @@
 			);
 			name = EduNode;
 			packageProductDependencies = (
-				003E37B22F41B56400E20FD0 /* gnode */,
-				003E37B52F41B58200E20FD0 /* gnode */,
+				003E38042F44909900E20FD0 /* GNodeKit */,
 			);
 			productName = EduNode;
 			productReference = 003E37852F41B52D00E20FD0 /* EduNode.app */;
@@ -206,7 +203,7 @@
 			mainGroup = 003E377C2F41B52D00E20FD0;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				003E37B42F41B58200E20FD0 /* XCLocalSwiftPackageReference "../gnode" */,
+				003E38032F44909900E20FD0 /* XCLocalSwiftPackageReference "../GNodeKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 003E37862F41B52D00E20FD0 /* Products */;
@@ -607,20 +604,16 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		003E37B42F41B58200E20FD0 /* XCLocalSwiftPackageReference "../gnode" */ = {
+		003E38032F44909900E20FD0 /* XCLocalSwiftPackageReference "../GNodeKit" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = ../gnode;
+			relativePath = ../GNodeKit;
 		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		003E37B22F41B56400E20FD0 /* gnode */ = {
+		003E38042F44909900E20FD0 /* GNodeKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = gnode;
-		};
-		003E37B52F41B58200E20FD0 /* gnode */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = gnode;
+			productName = GNodeKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

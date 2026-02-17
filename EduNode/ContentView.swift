@@ -7,7 +7,7 @@
 
 import SwiftUI
 import SwiftData
-import gnode
+import GNodeKit
 
 struct ContentView: View {
     private enum Tab: Hashable {
