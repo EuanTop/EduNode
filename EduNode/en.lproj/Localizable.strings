@@ -1,2 +1,7 @@
 "app.tab.editor" = "Node Editor";
 "app.tab.docs" = "Docs";
+"app.files.title" = "Files";
+"app.files.new" = "New";
+"app.files.delete" = "Delete";
+"app.files.empty" = "No file selected";
+"app.files.defaultName" = "Graph %d";

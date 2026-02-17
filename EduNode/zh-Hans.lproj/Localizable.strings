@@ -1,2 +1,7 @@
 "app.tab.editor" = "节点编辑器";
 "app.tab.docs" = "文档";
+"app.files.title" = "文件";
+"app.files.new" = "新建";
+"app.files.delete" = "删除";
+"app.files.empty" = "未选择文件";
+"app.files.defaultName" = "图表 %d";
