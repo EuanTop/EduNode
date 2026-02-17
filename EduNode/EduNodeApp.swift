@@ -8,6 +8,9 @@
 import SwiftUI
 import SwiftData
 import TipKit
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @main
 struct EduNodeApp: App {
@@ -32,7 +35,21 @@ struct EduNodeApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .onAppear {
+                    configureCatalystTitlebarIfNeeded()
+                }
         }
         .modelContainer(sharedModelContainer)
+    }
+
+    @MainActor
+    private func configureCatalystTitlebarIfNeeded() {
+        #if targetEnvironment(macCatalyst)
+        for case let windowScene as UIWindowScene in UIApplication.shared.connectedScenes {
+            guard let titlebar = windowScene.titlebar else { continue }
+            titlebar.titleVisibility = .hidden
+            titlebar.toolbar = nil
+        }
+        #endif
     }
 }

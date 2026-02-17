@@ -16,11 +16,11 @@ struct ContentView: View {
     }
 
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \GNodeWorkspaceFile.updatedAt, order: .reverse) private var workspaceFiles: [GNodeWorkspaceFile]
+    @Query(sort: \GNodeWorkspaceFile.createdAt, order: .forward) private var workspaceFiles: [GNodeWorkspaceFile]
 
     @State private var selectedTab: Tab = .editor
     @State private var selectedFileID: UUID?
-    @State private var splitVisibility: NavigationSplitViewVisibility = .all
+    @State private var splitVisibility: NavigationSplitViewVisibility = .automatic
 
     var body: some View {
         GeometryReader { rootGeometry in
@@ -33,6 +33,7 @@ struct ContentView: View {
                             .transition(.opacity)
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 VStack {
                     topBar
@@ -40,6 +41,7 @@ struct ContentView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.2), value: selectedTab)
         .onAppear {
@@ -114,6 +116,7 @@ struct ContentView: View {
             .background(Color(white: 0.1))
         }
         .navigationSplitViewStyle(.balanced)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .transition(.opacity)
     }
 
@@ -132,9 +135,8 @@ struct ContentView: View {
     }
 
     private var selectedWorkspaceFile: GNodeWorkspaceFile? {
-        if let selectedFileID,
-           let found = workspaceFiles.first(where: { $0.id == selectedFileID }) {
-            return found
+        if let selectedFileID {
+            return workspaceFiles.first(where: { $0.id == selectedFileID })
         }
         return workspaceFiles.first
     }
@@ -177,14 +179,18 @@ struct ContentView: View {
     private func deleteSelectedWorkspaceFile() {
         guard let current = selectedWorkspaceFile else { return }
         let currentID = current.id
-        let nextSelection = workspaceFiles.first(where: { $0.id != currentID })?.id
+        let orderedIDs = workspaceFiles.map(\.id)
+        let currentIndex = orderedIDs.firstIndex(of: currentID) ?? 0
+        let remainingIDs = orderedIDs.filter { $0 != currentID }
+
         modelContext.delete(current)
         try? modelContext.save()
 
-        if workspaceFiles.count <= 1 {
+        if remainingIDs.isEmpty {
             createWorkspaceFile(selectAfterCreate: true)
         } else {
-            selectedFileID = nextSelection
+            let nextIndex = min(currentIndex, remainingIDs.count - 1)
+            selectedFileID = remainingIDs[nextIndex]
         }
     }
 
