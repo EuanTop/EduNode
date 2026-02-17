@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		003E37B32F41B56400E20FD0 /* gnode in Frameworks */ = {isa = PBXBuildFile; productRef = 003E37B22F41B56400E20FD0 /* gnode */; };
+		003E37B62F41B58200E20FD0 /* gnode in Frameworks */ = {isa = PBXBuildFile; productRef = 003E37B52F41B58200E20FD0 /* gnode */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		003E37952F41B52F00E20FD0 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +57,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				003E37B62F41B58200E20FD0 /* gnode in Frameworks */,
+				003E37B32F41B56400E20FD0 /* gnode in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +119,8 @@
 			);
 			name = EduNode;
 			packageProductDependencies = (
+				003E37B22F41B56400E20FD0 /* gnode */,
+				003E37B52F41B58200E20FD0 /* gnode */,
 			);
 			productName = EduNode;
 			productReference = 003E37852F41B52D00E20FD0 /* EduNode.app */;
@@ -192,9 +201,13 @@
 			knownRegions = (
 				en,
 				Base,
+				"zh-Hans",
 			);
 			mainGroup = 003E377C2F41B52D00E20FD0;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				003E37B42F41B58200E20FD0 /* XCLocalSwiftPackageReference "../gnode" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 003E37862F41B52D00E20FD0 /* Products */;
 			projectDirPath = "";
@@ -400,11 +413,13 @@
 				DEVELOPMENT_TEAM = R262R2D38Q;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -432,11 +447,13 @@
 				DEVELOPMENT_TEAM = R262R2D38Q;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -578,6 +595,24 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		003E37B42F41B58200E20FD0 /* XCLocalSwiftPackageReference "../gnode" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../gnode;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		003E37B22F41B56400E20FD0 /* gnode */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = gnode;
+		};
+		003E37B52F41B58200E20FD0 /* gnode */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = gnode;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 003E377D2F41B52D00E20FD0 /* Project object */;
 }

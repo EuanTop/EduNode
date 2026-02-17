@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import TipKit
 
 @main
 struct EduNodeApp: App {
@@ -22,6 +23,10 @@ struct EduNodeApp: App {
             fatalError("Could not create ModelContainer: \(error)")
         }
     }()
+
+    init() {
+        try? Tips.configure()
+    }
 
     var body: some Scene {
         WindowGroup {

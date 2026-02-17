@@ -6,56 +6,46 @@
 //
 
 import SwiftUI
-import SwiftData
+import gnode
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    private enum Tab: Hashable {
+        case editor
+        case docs
+    }
+
+    @State private var selectedTab: Tab = .editor
 
     var body: some View {
-        NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
-                    }
-                }
-                .onDelete(perform: deleteItems)
-            }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                }
-            }
-        } detail: {
-            Text("Select an item")
-        }
-    }
+        ZStack {
+            // 画布始终在底层（全屏）
+            NodeEditorView()
+                .ignoresSafeArea()
 
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
+            // 文档视图（覆盖在画布上方）
+            if selectedTab == .docs {
+                NodeDocumentationView()
+                    .transition(.opacity)
+            }
 
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
+            // 顶部页面切换（始终覆盖在最上层）
+            VStack {
+                Picker("", selection: $selectedTab) {
+                    Text("app.tab.editor").tag(Tab.editor)
+                    Text("app.tab.docs").tag(Tab.docs)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .padding(.top, 8)
+
+                Spacer()
             }
         }
+        .preferredColorScheme(.dark)
+        .animation(.easeInOut(duration: 0.2), value: selectedTab)
     }
 }
 
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
 }
