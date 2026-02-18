@@ -1,0 +1,54 @@
+[
+  {
+    "id": "ubd",
+    "name_en": "Understanding by Design (UbD)",
+    "name_zh": "逆向设计（UbD）",
+    "description_en": "Start from outcomes and evidence, then design learning activities.",
+    "description_zh": "先确定目标和证据，再反推教学活动。",
+    "grade_hints": ["middle", "high", "初中", "高中"],
+    "subject_hints": ["science", "math", "history", "理", "文"],
+    "scenario_hints": ["formal", "class", "课堂"],
+    "toolkit_preset_ids": ["context-hook", "contrast-analysis", "exit-ticket"],
+    "template_focus_en": "Core understanding and transfer evidence",
+    "template_focus_zh": "核心理解与迁移证据"
+  },
+  {
+    "id": "constructivism",
+    "name_en": "Constructivism",
+    "name_zh": "建构主义",
+    "description_en": "Build new knowledge from prior ideas through interaction.",
+    "description_zh": "通过互动在原有认知上建构新知识。",
+    "grade_hints": ["elementary", "middle", "小学", "初中"],
+    "subject_hints": ["language", "social", "语文", "社会"],
+    "scenario_hints": ["workshop", "discussion", "研讨", "讨论"],
+    "toolkit_preset_ids": ["context-hook", "peer-discussion", "task-driven"],
+    "template_focus_en": "Activate prior concept and reconstruct understanding",
+    "template_focus_zh": "激活旧知并重构新概念"
+  },
+  {
+    "id": "inquiry",
+    "name_en": "Inquiry-Based Learning",
+    "name_zh": "探究式学习",
+    "description_en": "Use questions and investigation cycles to drive learning.",
+    "description_zh": "以问题和探究循环驱动学习。",
+    "grade_hints": ["middle", "high", "初中", "高中"],
+    "subject_hints": ["science", "lab", "physics", "chemistry", "科学", "实验"],
+    "scenario_hints": ["lab", "project", "实验", "项目"],
+    "toolkit_preset_ids": ["experiment-observe", "peer-discussion", "exit-ticket"],
+    "template_focus_en": "Question formation and evidence-based explanation",
+    "template_focus_zh": "问题提出与证据解释"
+  },
+  {
+    "id": "collaborative",
+    "name_en": "Collaborative Learning",
+    "name_zh": "合作学习",
+    "description_en": "Improve outcomes with structured collaboration and peer support.",
+    "description_zh": "通过结构化协作与互助提升学习成效。",
+    "grade_hints": ["all", "全学段"],
+    "subject_hints": ["language", "project", "综合", "语文"],
+    "scenario_hints": ["class", "workshop", "课堂", "workshop"],
+    "toolkit_preset_ids": ["peer-discussion", "task-driven", "exit-ticket"],
+    "template_focus_en": "Shared task and peer feedback loop",
+    "template_focus_zh": "共同任务与同伴反馈闭环"
+  }
+]
