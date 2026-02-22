@@ -180,6 +180,7 @@ struct EduToolkitPreset: Hashable, Identifiable {
 
 enum EduPlanning {
     static let rolePrefix = "edunode.role="
+    private static let zhuhaiSampleID = "zhuhai_birds_v3"
 
     static func loadModelRules() -> [EduModelRule] {
         let decoder = JSONDecoder()
@@ -321,15 +322,6 @@ enum EduPlanning {
             )
         }
 
-        let courseTitle = draft.courseName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? S("template.untitledCourse")
-            : draft.courseName
-        let goalsSummary = draft.goalsText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? S("template.noGoals")
-            : draft.goalsText
-        let modelName = modelRule.displayName(isChinese: isChinese)
-        let durationMinutes = draft.lessonDurationMinutes
-
         let templateConfig = modelTemplateConfig(for: modelRule.id, isChinese: isChinese)
 
         let knowledgeNode: any GNode = {
@@ -357,32 +349,28 @@ enum EduPlanning {
             ? Array(toolkitPresets().prefix(templateConfig.toolkitCount))
             : Array(presets.prefix(templateConfig.toolkitCount))
 
-        var firstToolkitNode: (any GNode)?
-
         for (index, preset) in selectedPresets.enumerated() {
             let y = -70.0 + Double(index) * 130.0
-            let presetType = toolkitType(forPresetID: preset.id)
+            let placement = toolkitPlacement(forPresetID: preset.id)
             let toolkitNode: any GNode = {
-                if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: EduNodeType.toolkit) {
+                if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: placement.nodeType) {
                     registered.attributes.name = "\(S("template.toolkit")): \(preset.title(isChinese: isChinese))"
                     if let node = registered as? any NodeTextEditable {
                         node.editorTextValue = preset.intent(isChinese: isChinese)
                     }
-                    if let node = registered as? any NodeOptionSelectable {
-                        node.editorSelectedOption = presetType
+                    if let node = registered as? EduToolkitNode {
+                        node.editorSelectedMethodID = placement.methodID
                     }
                     return registered
                 }
                 return EduToolkitNode(
                     name: "\(S("template.toolkit")): \(preset.title(isChinese: isChinese))",
+                    category: placement.category,
                     value: preset.intent(isChinese: isChinese),
-                    selectedType: presetType
+                    selectedMethodID: placement.methodID
                 )
             }()
-            add(toolkitNode, type: EduNodeType.toolkit, x: -220, y: y, role: "toolkit")
-            if firstToolkitNode == nil {
-                firstToolkitNode = toolkitNode
-            }
+            add(toolkitNode, type: placement.nodeType, x: -220, y: y, role: "toolkit")
         }
 
         var metricNodes: [any GNode] = []
@@ -440,72 +428,12 @@ enum EduPlanning {
         }()
         add(summaryScript, type: EduNodeType.evaluationSummary, x: 640, y: -90, role: "evaluation_summary")
 
-        let lessonPlanExpression = """
-		function process(summary, knowledge, toolkit) {
-			    var title = \(jsQuoted(courseTitle));
-			    var goalText = \(jsQuoted(goalsSummary));
-			    var duration = \(durationMinutes);
-			    var modelName = \(jsQuoted(modelName));
-			    var summaryText = String(summary || "Pending");
-			    var knowledgeText = String(knowledge || "");
-			    var toolkitText = String(toolkit || "");
-
-		    var markdown = "# " + title + "\\n\\n"
-		        + "## Teaching Model\\n" + modelName + "\\n\\n"
-		        + "## Goals\\n" + goalText + "\\n\\n"
-		        + "## Time Boundary\\n" + duration + " minutes\\n\\n"
-		        + "## Knowledge Focus\\n" + knowledgeText + "\\n\\n"
-		        + "## Toolkit\\n" + toolkitText + "\\n\\n"
-		        + "## Evaluation Summary\\n" + summaryText;
-
-	    return { markdown: markdown };
-	}
-	"""
-        let lessonPlanScript: any GNode = {
-            if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: EduNodeType.generateLesson) {
-                registered.attributes.name = S("template.lessonPlan")
-                if let node = registered as? ScriptNode {
-                    node.setExpression(lessonPlanExpression)
-                }
-                return registered
-            }
-            return ScriptNode(name: S("template.lessonPlan"), expression: lessonPlanExpression)
-        }()
-        add(lessonPlanScript, type: EduNodeType.generateLesson, x: 360, y: 210, role: "lesson_plan")
-
-        let exportExpression = """
-function process(markdown) {
-    var title = \(jsQuoted(courseTitle));
-    var md = String(markdown || "");
-    var html = "<section><h1>" + title + "</h1><pre>" + md + "</pre></section>";
-    return { html: html };
-}
-"""
-        let exportScript: any GNode = {
-            if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: EduNodeType.exportPPT) {
-                registered.attributes.name = S("template.exportPPT")
-                if let node = registered as? ScriptNode {
-                    node.setExpression(exportExpression)
-                }
-                return registered
-            }
-            return ScriptNode(name: S("template.exportPPT"), expression: exportExpression)
-        }()
-        add(exportScript, type: EduNodeType.exportPPT, x: 640, y: 210, role: "export_ppt")
-
         for (index, node) in metricNodes.enumerated() {
             connectFirstOutput(from: node, to: metricScript, inputIndex: index, in: graph)
         }
 
         connectOutput(from: metricScript, outputIndex: 0, to: summaryScript, inputIndex: 0, in: graph)
         connectOutput(from: metricScript, outputIndex: 2, to: summaryScript, inputIndex: 1, in: graph)
-
-        connectOutput(from: summaryScript, outputIndex: 2, to: lessonPlanScript, inputIndex: 0, in: graph)
-        connectOutput(from: knowledgeNode, outputIndex: 0, to: lessonPlanScript, inputIndex: 1, in: graph)
-        if let firstToolkitNode {
-            connectFirstOutput(from: firstToolkitNode, to: lessonPlanScript, inputIndex: 2, in: graph)
-        }
-        connectOutput(from: lessonPlanScript, outputIndex: 0, to: exportScript, inputIndex: 0, in: graph)
 
         let serializedNodes = entries.map { entry in
             SerializableNode(from: entry.node, nodeType: entry.type)
@@ -542,9 +470,6 @@ function process(markdown) {
             )
         }
 
-        let levelBasic = isChinese ? "基础" : "Basic"
-        let levelIntermediate = isChinese ? "进阶" : "Intermediate"
-
         func makeKnowledge(_ titleZH: String, _ titleEN: String, _ contentZH: String, _ contentEN: String, level: String) -> any GNode {
             let title = isChinese ? titleZH : titleEN
             let content = isChinese ? contentZH : contentEN
@@ -559,124 +484,465 @@ function process(markdown) {
             return EduKnowledgeNode(name: title, content: content, level: level)
         }
 
-        func makeToolkit(_ titleZH: String, _ titleEN: String, _ contentZH: String, _ contentEN: String, type: String) -> any GNode {
+        func makeToolkit(
+            _ titleZH: String,
+            _ titleEN: String,
+            _ contentZH: String,
+            _ contentEN: String,
+            nodeType: String,
+            methodID: String,
+            formText: [String: String] = [:],
+            formOptions: [String: String] = [:]
+        ) -> any GNode {
             let title = isChinese ? titleZH : titleEN
             let content = isChinese ? contentZH : contentEN
-            if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: EduNodeType.toolkit) {
+            if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: nodeType) {
                 registered.attributes.name = title
                 if let node = registered as? any NodeTextEditable {
                     node.editorTextValue = content
                 }
-                if let node = registered as? any NodeOptionSelectable {
-                    node.editorSelectedOption = type
+                if let node = registered as? EduToolkitNode {
+                    node.editorSelectedMethodID = methodID
+                }
+                if let formNode = registered as? any NodeFormEditable {
+                    for (fieldID, optionValue) in formOptions {
+                        formNode.setEditorFormOptionValue(optionValue, for: fieldID)
+                    }
+                    for (fieldID, textValue) in formText {
+                        formNode.setEditorFormTextFieldValue(textValue, for: fieldID)
+                    }
                 }
                 return registered
             }
+            let category = EduToolkitCategory.fromNodeType(nodeType) ?? .communicationNegotiation
             return EduToolkitNode(
                 name: title,
+                category: category,
                 value: content,
-                selectedType: type
+                selectedMethodID: methodID,
+                textFieldValues: formText,
+                optionFieldValues: formOptions
             )
         }
 
-        let k1 = makeKnowledge(
-            "知识点1：广东珠海的地理气候",
-            "K1: Zhuhai Geography & Climate",
-            "珠海位于广东南部沿海，气候温暖湿润，适合多种鸟类栖息与迁徙停留。",
-            "Zhuhai has a warm and humid coastal climate that supports habitats for many bird species.",
-            level: levelBasic
-        )
-        let k2 = makeKnowledge(
-            "知识点2：留鸟与候鸟分类",
-            "K2: Resident vs Migratory Birds",
-            "根据是否长居本地，鸟类可分为留鸟与候鸟。",
-            "Birds can be categorized into resident and migratory types based on seasonal movement.",
-            level: levelBasic
-        )
-        let k3 = makeKnowledge(
-            "知识点3：珠海常见鸟学名读音",
-            "K3: Pronunciation of Common Bird Names",
-            "学习珠海常见鸟类名称读音，便于课堂表达与观察记录。",
-            "Practice pronunciation of common bird names used in classroom discussion and observation logs.",
-            level: levelIntermediate
-        )
-        let k4 = makeKnowledge(
-            "知识点4：常见候鸟1（示例）",
-            "K4: Migratory Bird A",
-            "示例候鸟：记录外形、活动时间和栖息地。",
-            "Example migratory bird: describe appearance, activity time, and habitat.",
-            level: levelIntermediate
-        )
-        let k5 = makeKnowledge(
-            "知识点5：常见候鸟2（示例）",
-            "K5: Migratory Bird B",
-            "示例候鸟：对比与候鸟1的差异。",
-            "Example migratory bird: compare with Migratory Bird A.",
-            level: levelIntermediate
-        )
-        let k6 = makeKnowledge(
-            "知识点6：常见留鸟1（示例）",
-            "K6: Resident Bird A",
-            "示例留鸟：聚焦本地常见特征与行为。",
-            "Example resident bird: focus on local traits and behavior.",
-            level: levelIntermediate
-        )
-        let k7 = makeKnowledge(
-            "知识点7：常见留鸟2（示例）",
-            "K7: Resident Bird B",
-            "示例留鸟：与留鸟1进行同类对比。",
-            "Example resident bird: compare with Resident Bird A.",
-            level: levelIntermediate
+        let levelRemember = S("edu.knowledge.type.remember")
+        let levelUnderstand = S("edu.knowledge.type.understand")
+        let levelApply = S("edu.knowledge.type.apply")
+        let levelAnalyze = S("edu.knowledge.type.analyze")
+        let levelCreate = S("edu.knowledge.type.create")
+
+        let tCheckinGrouping = makeToolkit(
+            "签到分组（年龄×难度）",
+            "Check-in Grouping (Age × Difficulty)",
+            "根据年龄段（6-13岁）与鸟巢搭建难度，将学生分到7个目标鸟组，高年龄优先进入高难度组。",
+            "Students are grouped into 7 bird teams by age band (6-13) and nest-building difficulty; older learners take higher-difficulty tasks.",
+            nodeType: EduNodeType.toolkitCommunicationNegotiation,
+            methodID: "pogil",
+            formText: [
+                "pogil_role_dict": isChinese
+                    ? "签到助教 | 核对名单并登记年龄段\n分组助教 | 按年龄和巢型难度分配到7组\n组内队长 | 组织两人协作与任务卡填写"
+                    : "Check-in TA | Verify attendance and age band\nGrouping TA | Assign 7 bird teams by age and nest difficulty\nTeam lead | Coordinate pair work and worksheet completion",
+                "pogil_inquiry_ladder": isChinese
+                    ? "1. 你属于哪个年龄段？\n2. 你们组负责哪种鸟？\n3. 该鸟巢搭建的关键挑战是什么？"
+                    : "1. Which age band are you in?\n2. Which bird is your team responsible for?\n3. What is the key challenge of this nest?",
+                "pogil_sheet_focus": isChinese
+                    ? "完成签到分组卡，明确组别、目标鸟种与巢型任务。"
+                    : "Complete check-in grouping card: team, target bird, and nest task.",
+                "pogil_teacher_trigger_optional": isChinese
+                    ? "若年龄与任务难度不匹配，教师现场手动重分。"
+                    : "Teacher manually rebalances when age and difficulty mismatch."
+            ],
+            formOptions: [
+                "pogil_checkpoint": "teacher_gate"
+            ]
         )
 
-        let gameToolkit = makeToolkit(
-            "Toolkit：萝卜蹲（读音巩固）",
-            "Toolkit: Bird Name Game",
-            "游戏规则：用鸟类学名进行“萝卜蹲”，巩固读音与快速辨识。",
-            "Use bird names in a quick response game to reinforce pronunciation and recognition.",
-            type: S("edu.toolkit.type.game")
+        let tWarmupPuzzle = makeToolkit(
+            "暖场游戏：一起拼一拼",
+            "Warm-up Game: Puzzle Sprint",
+            "两人一组拼图破冰，快速进入鸟类主题。",
+            "Pairs solve bird puzzles as an icebreaker and theme entry.",
+            nodeType: EduNodeType.toolkitCommunicationNegotiation,
+            methodID: "game_mechanism",
+            formText: [
+                "game_goal_mapping": isChinese
+                    ? "拼图行为 -> 识别鸟类外形 -> 触发后续知识学习兴趣。"
+                    : "Puzzle actions -> identify bird morphology -> trigger learning interest.",
+                "game_core_rules": isChinese
+                    ? "每组先拼出图，再读出鸟名；完成后获得下一环节线索。"
+                    : "Each pair completes puzzle then reads bird name; completion unlocks next clue.",
+                "game_reward_mechanism": isChinese
+                    ? "完成前3组优先选择展示顺序并获得奖励贴纸。"
+                    : "Top 3 teams choose showcase order first and receive stickers.",
+                "game_mission_chain": isChinese
+                    ? "任务1 | 拼出鸟图 | 获得鸟名卡\n任务2 | 读出鸟名 | 获得鸟叫线索\n任务3 | 猜测留鸟/候鸟 | 获得分组优先权"
+                    : "Mission 1 | Complete puzzle | Unlock bird name card\nMission 2 | Read name aloud | Unlock call clue\nMission 3 | Predict resident/migratory | Unlock grouping priority",
+                "game_difficulty_curve_optional": isChinese
+                    ? "先单图识别，再混合图快速匹配。"
+                    : "From single-image recognition to mixed-image rapid matching."
+            ],
+            formOptions: [
+                "game_progression": "mission"
+            ]
         )
-        let groupingToolkit = makeToolkit(
-            "Toolkit：分层分组任务",
-            "Toolkit: Differentiated Group Tasks",
-            "按学生年龄或教师手动分组：每组负责1种鸟类，输出观察卡片与口头汇报。",
-            "Group by age range or teacher assignment; each group studies one bird and reports observations.",
-            type: S("edu.toolkit.type.practice")
+
+        let tContextHook = makeToolkit(
+            "故事导入：古元版画里的鸟飞出来了",
+            "Story Hook: Birds Fly Out of Ancient Prints",
+            "动画展示古元版画中的鸟儿飞出画作，村长发布求助信，召集“鸟巢建筑师”。",
+            "Animation: birds fly out from Gu Yuan prints; village chief posts help letter to recruit 'nest architects'.",
+            nodeType: EduNodeType.toolkitPerceptionInquiry,
+            methodID: "context_hook",
+            formText: [
+                "context_hook_material": isChinese
+                    ? "古元版画鸟主题动画 + 村长求助信"
+                    : "Gu Yuan print animation + village chief help letter",
+                "context_hook_questions": isChinese
+                    ? "1. 鸟儿为什么要在那洲安家？\n2. 你愿意成为哪种鸟的建筑师？\n3. 你们组准备如何帮助它？"
+                    : "1. Why do these birds need homes in Nazhou?\n2. Which bird would you like to design for?\n3. How will your team help it?"
+            ],
+            formOptions: [
+                "context_hook_response_pattern": "think_pair_share",
+                "context_hook_time_budget": "5min"
+            ]
         )
-        let afterClassToolkit = makeToolkit(
-            "Toolkit：拍图识鸟（月度）",
-            "Toolkit: Photo Bird ID (Monthly)",
-            "课后1个月使用老师指定软件拍图识鸟，累计记录并在月末分享。",
-            "For one month, students use the designated app to identify birds from photos and share records.",
-            type: S("edu.toolkit.type.observation")
+
+        let kGeographyClimate = makeKnowledge(
+            "珠海与那洲的地理气候",
+            "Zhuhai & Nazhou Geography-Climate",
+            "珠海沿海、温暖湿润、湿地与村庄并存，为不同鸟类提供了多样栖息环境。",
+            "Zhuhai is coastal, warm, and humid; wetlands and villages create diverse bird habitats.",
+            level: levelUnderstand
+        )
+        let kResidentMigratory = makeKnowledge(
+            "留鸟与候鸟分类",
+            "Resident vs Migratory Birds",
+            "鸟类按是否长期停留可分留鸟与候鸟，这决定了观察时段与筑巢策略。",
+            "Birds are resident or migratory by seasonal stay, shaping observation windows and nesting strategy.",
+            level: levelUnderstand
+        )
+        let kPronunciation = makeKnowledge(
+            "7种鸟名读音与识字",
+            "Pronunciation of 7 Bird Names",
+            "先学会发音与识字，再进行“那洲村里有什么鸟”游戏巩固。",
+            "Learners practice pronunciation first, then reinforce with gameplay.",
+            level: levelApply
         )
 
-        add(k1, type: EduNodeType.knowledge, x: -620, y: -220, role: "knowledge")
-        add(k2, type: EduNodeType.knowledge, x: -360, y: -220, role: "knowledge")
-        add(k3, type: EduNodeType.knowledge, x: -100, y: -220, role: "knowledge")
-        add(gameToolkit, type: EduNodeType.toolkit, x: 200, y: -220, role: "toolkit")
+        let tBirdNameGame = makeToolkit(
+            "游戏：那洲村里有什么鸟？",
+            "Game: What Birds Live in Nazhou?",
+            "用鸟名版“萝卜蹲”巩固读音、记忆和快速切换。",
+            "Bird-name squat game to reinforce pronunciation, memory, and fast switching.",
+            nodeType: EduNodeType.toolkitCommunicationNegotiation,
+            methodID: "game_mechanism",
+            formText: [
+                "game_goal_mapping": isChinese
+                    ? "跟读与接龙 -> 加深7种鸟名记忆 -> 为分组建巢任务做准备。"
+                    : "Chant-and-pass -> reinforce 7 bird names -> prepare for group nest task.",
+                "game_core_rules": isChinese
+                    ? "按节奏点名：A蹲完B蹲；错误则全组重来。"
+                    : "Rhythmic call chain: A squats then calls B; mistakes reset group turn.",
+                "game_reward_mechanism": isChinese
+                    ? "连续正确的组获得“观察先锋”徽章。"
+                    : "Consecutive-correct teams earn 'Observation Pioneer' badges.",
+                "game_level_blueprint": isChinese
+                    ? "关卡1 | 读准鸟名\n关卡2 | 读名+判断留鸟/候鸟\n关卡3 | 读名+说出巢型"
+                    : "Level 1 | Pronounce names\nLevel 2 | Name + resident/migratory\nLevel 3 | Name + nest type",
+                "game_difficulty_curve_optional": isChinese
+                    ? "从慢节奏到快节奏，逐步减少提示。"
+                    : "Increase rhythm speed and gradually remove prompts."
+            ],
+            formOptions: [
+                "game_progression": "level"
+            ]
+        )
 
-        add(k4, type: EduNodeType.knowledge, x: 170, y: -80, role: "knowledge")
-        add(k5, type: EduNodeType.knowledge, x: 170, y: 20, role: "knowledge")
-        add(k6, type: EduNodeType.knowledge, x: 170, y: 120, role: "knowledge")
-        add(k7, type: EduNodeType.knowledge, x: 170, y: 220, role: "knowledge")
-        add(groupingToolkit, type: EduNodeType.toolkit, x: 500, y: 70, role: "toolkit")
-        add(afterClassToolkit, type: EduNodeType.toolkit, x: 790, y: 70, role: "toolkit")
+        let kNestCharacteristics = makeKnowledge(
+            "鸟巢特性与巢型",
+            "Nest Characteristics & Types",
+            "鸟巢常见有碗状、盘状、悬挂巢，不同鸟种对应不同结构与材料需求。",
+            "Common nest types include bowl, plate, and hanging; each bird species has different structural needs.",
+            level: levelAnalyze
+        )
+        let kBuildStrategy = makeKnowledge(
+            "鸟巢搭建三步策略",
+            "Three-step Nest Building Strategy",
+            "第一步基础结构；第二步材料填充；第三步创意装饰。三步都需要在任务卡上记录。",
+            "Step 1 structure, Step 2 material filling, Step 3 creative decoration; each step is recorded on task cards.",
+            level: levelApply
+        )
+        let kTaskCard = makeKnowledge(
+            "任务卡四步填写",
+            "Four-step Worksheet Prompts",
+            "结构选择、蓝图与命名、建造日志、成果与期待（含获奖宣言）。",
+            "Structure choice, blueprint naming, build log, and final outcomes with award declaration.",
+            level: levelCreate
+        )
 
-        connectFirstOutput(from: k1, to: k2, inputIndex: 2, in: graph)
-        connectFirstOutput(from: k2, to: k3, inputIndex: 2, in: graph)
-        connectFirstOutput(from: k3, to: gameToolkit, inputIndex: 0, in: graph)
+        let kBulbul = makeKnowledge(
+            "红耳鹎（留鸟）",
+            "Red-whiskered Bulbul (Resident)",
+            "留鸟；建议碗状巢。观察重点：枝叶间活动、警戒叫声、隐蔽性需求。",
+            "Resident bird; bowl nest recommended. Focus on branch movement, alert calls, and shelter needs.",
+            level: levelRemember
+        )
+        let kDove = makeKnowledge(
+            "朱颈斑鸠（留鸟）",
+            "Spotted Dove (Resident)",
+            "留鸟；建议盘状巢。观察重点：开阔处停留、稳固支撑与安全高度。",
+            "Resident bird; plate nest recommended. Focus on open-area perching and stable support.",
+            level: levelRemember
+        )
+        let kStarling = makeKnowledge(
+            "黑领椋鸟（留鸟）",
+            "Black-collared Starling (Resident)",
+            "留鸟；建议悬挂巢。观察重点：群体活动、巢位固定方式与防坠要求。",
+            "Resident bird; hanging nest recommended. Focus on flock behavior and anti-drop structure.",
+            level: levelRemember
+        )
+        let kGoshawk = makeKnowledge(
+            "凤头鹰（留鸟）",
+            "Crested Goshawk (Resident)",
+            "留鸟；建议盘状巢。观察重点：高位支撑、稳定受力与隐蔽边界。",
+            "Resident bird; plate nest recommended. Focus on elevated support and stable load paths.",
+            level: levelRemember
+        )
+        let kEgret = makeKnowledge(
+            "小白鹭（候鸟）",
+            "Little Egret (Migratory)",
+            "候鸟；建议盘状巢。观察重点：水域活动、季节停留与巢位选择。",
+            "Migratory bird; plate nest recommended. Focus on waterside behavior and seasonal stay.",
+            level: levelRemember
+        )
+        let kMallard = makeKnowledge(
+            "绿头鸭（候鸟）",
+            "Mallard (Migratory)",
+            "候鸟；建议碗状巢。观察重点：近水觅食、保温需求与巢体包裹性。",
+            "Migratory bird; bowl nest recommended. Focus on near-water feeding and thermal needs.",
+            level: levelRemember
+        )
+        let kWoodSandpiper = makeKnowledge(
+            "林鹬（候鸟）",
+            "Wood Sandpiper (Migratory)",
+            "候鸟；建议碗状巢。观察重点：湿地停歇、轻量结构与隐蔽纹理。",
+            "Migratory bird; bowl nest recommended. Focus on wetland stops and lightweight hidden structure.",
+            level: levelRemember
+        )
 
-        connectFirstOutput(from: k3, to: k4, inputIndex: 2, in: graph)
-        connectFirstOutput(from: k3, to: k5, inputIndex: 2, in: graph)
-        connectFirstOutput(from: k3, to: k6, inputIndex: 2, in: graph)
-        connectFirstOutput(from: k3, to: k7, inputIndex: 2, in: graph)
+        let tBuildWorkshop = makeToolkit(
+            "分组任务：两人协作搭建鸟巢",
+            "Group Task: Pair Nest Construction",
+            "每组围绕目标鸟种完成结构选择、材料建造、创意装饰与任务卡记录。",
+            "Each team completes structure choice, material building, creative decoration, and worksheet records.",
+            nodeType: EduNodeType.toolkitCommunicationNegotiation,
+            methodID: "pogil",
+            formText: [
+                "pogil_role_dict": isChinese
+                    ? "结构设计师 | 决定巢型与基础结构\n材料工程师 | 负责稻秆与连接稳定\n记录员 | 完成四步任务卡并准备展示"
+                    : "Structure designer | Decide nest type and base frame\nMaterial engineer | Handle straw filling and stability\nRecorder | Complete 4-step worksheet and showcase prep",
+                "pogil_inquiry_ladder": isChinese
+                    ? "1. 这只鸟需要什么巢型？\n2. 我们如何用稻秆实现结构稳定？\n3. 我们的创意装饰如何回应鸟的需求？"
+                    : "1. What nest type does this bird need?\n2. How do we stabilize with straw materials?\n3. How does our decoration respond to bird needs?",
+                "pogil_sheet_focus": isChinese
+                    ? "任务卡四步：结构选择 -> 蓝图命名 -> 建造日志 -> 成果与期待。"
+                    : "Worksheet 4-step flow: structure -> blueprint naming -> build log -> final outcomes.",
+                "pogil_teacher_trigger_optional": isChinese
+                    ? "当小组在结构稳定性上连续失败2次时，教师介入示范。"
+                    : "Teacher intervenes after two failed stability attempts."
+            ],
+            formOptions: [
+                "pogil_checkpoint": "teacher_gate"
+            ]
+        )
 
-        connectFirstOutput(from: k4, to: groupingToolkit, inputIndex: 0, in: graph)
-        connectFirstOutput(from: k5, to: groupingToolkit, inputIndex: 0, in: graph)
-        connectFirstOutput(from: k6, to: groupingToolkit, inputIndex: 0, in: graph)
-        connectFirstOutput(from: k7, to: groupingToolkit, inputIndex: 0, in: graph)
-        connectFirstOutput(from: groupingToolkit, to: afterClassToolkit, inputIndex: 0, in: graph)
+        let tExhibitionAwards = makeToolkit(
+            "展览与颁奖",
+            "Exhibition & Awards",
+            "把鸟巢安置到展区，完成跨组讲解、互评与颁奖。",
+            "Place nests in exhibition space for cross-team walkthrough, peer review, and awards.",
+            nodeType: EduNodeType.toolkitCommunicationNegotiation,
+            methodID: "world_cafe",
+            formText: [
+                "cafe_core_question": isChinese
+                    ? "你的鸟巢最能回应该鸟哪一种关键需求？"
+                    : "Which key need of your bird does this nest address best?",
+                "cafe_table_topics": isChinese
+                    ? "桌1 | 结构稳定性\n桌2 | 材料适配性\n桌3 | 创意与美感\n桌4 | 对鸟需求的回应度"
+                    : "Table 1 | Structural stability\nTable 2 | Material suitability\nTable 3 | Creativity and aesthetics\nTable 4 | Alignment to bird needs",
+                "cafe_rotation_plan": isChinese
+                    ? "每轮4分钟，顺时针轮转，保留1名“主讲”留桌。"
+                    : "4-minute clockwise rotations; one host remains at each table.",
+                "cafe_harvest_rule": isChinese
+                    ? "每桌输出1条“最优亮点+1条可改进建议”，汇总后颁奖。"
+                    : "Each table outputs one top strength + one improvement suggestion for awards.",
+                "cafe_output_template_optional": isChinese
+                    ? "作品名 | 目标鸟 | 亮点 | 改进建议"
+                    : "Artifact | Target Bird | Highlight | Improvement"
+            ]
+        )
+
+        let tReflection = makeToolkit(
+            "课末反思：建造日志与获奖宣言",
+            "End Reflection: Build Log & Award Declaration",
+            "回顾建造亮点与挑战，形成下一次改进承诺。",
+            "Review highlights/challenges and commit to next-round improvements.",
+            nodeType: EduNodeType.toolkitRegulationMetacognition,
+            methodID: "reflection_protocol",
+            formText: [
+                "reflect_prompt_group": isChinese
+                    ? "回顾今天：我们做得最好的一点是什么？\n最难的地方是什么？\n下次我们准备如何做得更好？"
+                    : "Review today: What did we do best?\nWhat was hardest?\nWhat will we improve next time?",
+                "reflect_timing": isChinese ? "展览与颁奖后立即进行（8分钟）" : "Immediately after exhibition and awards (8 min)",
+                "reflect_kss_keep": isChinese ? "保留：最有效的结构与协作做法" : "Keep: most effective structure and teamwork behaviors",
+                "reflect_kss_stop": isChinese ? "停止：导致巢体不稳或沟通低效的做法" : "Stop: unstable build or inefficient communication behaviors",
+                "reflect_kss_start": isChinese ? "开始：下一轮先验证结构再装饰" : "Start: validate structure before decoration next round",
+                "reflect_action_commitment_optional": isChinese ? "每组写1条可执行改进行动并指定责任人。" : "Each team writes one actionable improvement with owner."
+            ],
+            formOptions: [
+                "reflect_structure_template": "kss",
+                "reflect_channel": "written"
+            ]
+        )
+
+        let tAfterClassObservation = makeToolkit(
+            "课后延伸：拍图识鸟（月度）",
+            "Post-class Extension: Monthly Photo Bird ID",
+            "学生用教师指定的第三方工具在生活中拍图识鸟，持续1个月并在月末分享。",
+            "Students use a teacher-selected third-party tool for one month of photo-based bird identification and sharing.",
+            nodeType: EduNodeType.toolkitPerceptionInquiry,
+            methodID: "field_observation",
+            formText: [
+                "field_obs_site": isChinese ? "那洲村与周边湿地/社区" : "Nazhou village and nearby wetlands/community",
+                "field_obs_focus": isChinese ? "记录鸟种、出现时间、行为线索与环境位置。" : "Record species, appearance time, behavior clues, and location context.",
+                "field_obs_sampling_rule": isChinese ? "每周≥2次，每次10分钟，持续1个月。" : "At least 2 times/week, 10 minutes each, for one month.",
+                "field_obs_record_template": isChinese ? "日期 | 地点 | 鸟种 | 证据图 | 一句观察描述" : "Date | Site | Species | Photo evidence | One-line observation",
+                "field_obs_tool_ref": isChinese ? "教师指定第三方识图工具（班级统一版本）。" : "Teacher-designated third-party image-ID tool (class-standard version).",
+                "field_obs_class_dict": isChinese
+                    ? "留鸟 | 常年可见，记录稳定活动区域\n候鸟 | 季节性出现，记录来去时间窗口"
+                    : "Resident | Seen year-round; record stable activity zones\nMigratory | Seasonal; record arrival/departure windows"
+            ],
+            formOptions: [
+                "field_obs_task_structure": "classification",
+                "field_obs_capture": "photo"
+            ]
+        )
+
+        let tRubric = makeToolkit(
+            "课堂评价指标（三维三级）",
+            "Class Evaluation Rubric (3D × 3L)",
+            "课堂版三维三级：知识理解与运用、技能掌握与实践、情感态度与价值观；等级为初级/良好/优秀。",
+            "Classroom 3-dimension/3-level rubric: knowledge use, skill practice, and attitude/value; levels are Basic/Good/Excellent.",
+            nodeType: EduNodeType.toolkitRegulationMetacognition,
+            methodID: "rubric_checklist",
+            formText: [
+                "rubric_dimension_dict": isChinese
+                    ? "知识理解与运用 | 能说出鸟类分类与巢型依据\n技能掌握与实践 | 能完成稳定结构与材料搭建\n情感态度与价值观 | 能协作并体现生态关怀"
+                    : "Knowledge Use | Explain bird classification and nest rationale\nSkill Practice | Build stable structure with suitable materials\nAttitude & Value | Collaborate and show ecological care",
+                "rubric_weight_config": isChinese
+                    ? "知识理解与运用 | 35\n技能掌握与实践 | 40\n情感态度与价值观 | 25"
+                    : "Knowledge Use | 35\nSkill Practice | 40\nAttitude & Value | 25",
+                "rubric_level_descriptions": isChinese
+                    ? "初级 | 在提示下完成基础识别与搭建\n良好 | 能独立完成并解释主要设计理由\n优秀 | 能迁移知识、优化设计并高质量协作"
+                    : "Basic | Complete with prompts\nGood | Independently complete with clear rationale\nExcellent | Transfer knowledge, optimize design, and collaborate effectively",
+                "rubric_band_ranges": isChinese
+                    ? "初级 | 0-59\n良好 | 60-84\n优秀 | 85-100"
+                    : "Basic | 0-59\nGood | 60-84\nExcellent | 85-100",
+                "rubric_evidence_library_optional": isChinese
+                    ? "证据示例：任务卡填写、鸟巢实物、展览讲解记录。"
+                    : "Evidence examples: worksheets, nest artifact, exhibition explanation notes.",
+                "rubric_feedback_template_optional": isChinese
+                    ? "你们在【维度】表现为【等级】；建议下一步【行动】。"
+                    : "In [dimension], your level is [band]; next step: [action]."
+            ],
+            formOptions: [
+                "rubric_levels": "level3",
+                "rubric_summary_strategy": "grade_band"
+            ]
+        )
+
+        let tDashboard = makeToolkit(
+            "评价汇总（课中+课后）",
+            "Evaluation Summary (In-class + After-class)",
+            "汇总课堂评价与月度拍图识鸟数据，形成后续教学改进输入。",
+            "Aggregate in-class rubric and monthly photo-ID results as input for follow-up instruction.",
+            nodeType: EduNodeType.toolkitRegulationMetacognition,
+            methodID: "learning_dashboard",
+            formText: [
+                "dashboard_metric_dict": isChinese
+                    ? "课堂掌握度 | 三维三级课堂评分\n合作表现 | 组内协作观察记录\n延伸参与度 | 月度拍图识鸟提交率"
+                    : "Class Mastery | 3D×3L classroom rating\nCollaboration | Teamwork observation logs\nExtension Participation | Monthly photo-ID submission rate",
+                "dashboard_source_mapping": isChinese
+                    ? "课堂掌握度 | 评价指标节点\n合作表现 | 展览互评+教师观察\n延伸参与度 | 拍图识鸟记录"
+                    : "Class Mastery | Rubric node\nCollaboration | Exhibition peer review + teacher notes\nExtension Participation | Photo-ID records",
+                "dashboard_alert_threshold": isChinese
+                    ? "任一指标连续2次低于60触发复教与小组支持。"
+                    : "Any metric below 60 for two cycles triggers reteaching and group support.",
+                "dashboard_view_mode_optional": isChinese
+                    ? "课次趋势 + 组别对比摘要"
+                    : "Lesson trend + group comparison summary"
+            ],
+            formOptions: [
+                "dashboard_cycle": "per_lesson"
+            ]
+        )
+
+        add(tCheckinGrouping, type: EduNodeType.toolkitCommunicationNegotiation, x: -1700, y: -420, role: "toolkit")
+        add(tWarmupPuzzle, type: EduNodeType.toolkitCommunicationNegotiation, x: -1240, y: -420, role: "toolkit")
+        add(tContextHook, type: EduNodeType.toolkitPerceptionInquiry, x: -780, y: -420, role: "toolkit")
+        add(kGeographyClimate, type: EduNodeType.knowledge, x: -320, y: -420, role: "knowledge")
+        add(kResidentMigratory, type: EduNodeType.knowledge, x: 140, y: -420, role: "knowledge")
+        add(kPronunciation, type: EduNodeType.knowledge, x: 600, y: -420, role: "knowledge")
+        add(tBirdNameGame, type: EduNodeType.toolkitCommunicationNegotiation, x: 1060, y: -420, role: "toolkit")
+
+        let birdColumnX = 1520.0
+        add(kBulbul, type: EduNodeType.knowledge, x: birdColumnX, y: -700, role: "knowledge")
+        add(kDove, type: EduNodeType.knowledge, x: birdColumnX, y: -520, role: "knowledge")
+        add(kStarling, type: EduNodeType.knowledge, x: birdColumnX, y: -340, role: "knowledge")
+        add(kGoshawk, type: EduNodeType.knowledge, x: birdColumnX, y: -160, role: "knowledge")
+        add(kEgret, type: EduNodeType.knowledge, x: birdColumnX, y: 20, role: "knowledge")
+        add(kMallard, type: EduNodeType.knowledge, x: birdColumnX, y: 200, role: "knowledge")
+        add(kWoodSandpiper, type: EduNodeType.knowledge, x: birdColumnX, y: 380, role: "knowledge")
+
+        add(kNestCharacteristics, type: EduNodeType.knowledge, x: 1980, y: -420, role: "knowledge")
+        add(kBuildStrategy, type: EduNodeType.knowledge, x: 2440, y: -420, role: "knowledge")
+        add(kTaskCard, type: EduNodeType.knowledge, x: 2900, y: -420, role: "knowledge")
+        add(tBuildWorkshop, type: EduNodeType.toolkitCommunicationNegotiation, x: 3360, y: -420, role: "toolkit")
+        add(tExhibitionAwards, type: EduNodeType.toolkitCommunicationNegotiation, x: 3820, y: -420, role: "toolkit")
+        add(tReflection, type: EduNodeType.toolkitRegulationMetacognition, x: 4280, y: -420, role: "toolkit")
+        add(tAfterClassObservation, type: EduNodeType.toolkitPerceptionInquiry, x: 4740, y: -420, role: "toolkit")
+
+        add(tRubric, type: EduNodeType.toolkitRegulationMetacognition, x: 4280, y: 220, role: "evaluation_metric")
+        add(tDashboard, type: EduNodeType.toolkitRegulationMetacognition, x: 4740, y: 220, role: "evaluation_summary")
+
+        connectFirstOutput(from: tCheckinGrouping, to: tWarmupPuzzle, inputIndex: 0, in: graph)
+        connectFirstOutput(from: tWarmupPuzzle, to: tContextHook, inputIndex: 0, in: graph)
+        connectFirstOutput(from: tContextHook, to: kGeographyClimate, inputIndex: 0, in: graph)
+        connectFirstOutput(from: kGeographyClimate, to: kResidentMigratory, inputIndex: 0, in: graph)
+        connectFirstOutput(from: kResidentMigratory, to: kPronunciation, inputIndex: 0, in: graph)
+        connectFirstOutput(from: kPronunciation, to: tBirdNameGame, inputIndex: 0, in: graph)
+
+        connectFirstOutput(from: tBirdNameGame, to: kBulbul, inputIndex: 0, in: graph)
+        connectFirstOutput(from: kBulbul, to: kDove, inputIndex: 0, in: graph)
+        connectFirstOutput(from: kDove, to: kStarling, inputIndex: 0, in: graph)
+        connectFirstOutput(from: kStarling, to: kGoshawk, inputIndex: 0, in: graph)
+        connectFirstOutput(from: kGoshawk, to: kEgret, inputIndex: 0, in: graph)
+        connectFirstOutput(from: kEgret, to: kMallard, inputIndex: 0, in: graph)
+        connectFirstOutput(from: kMallard, to: kWoodSandpiper, inputIndex: 0, in: graph)
+
+        connectFirstOutput(from: kWoodSandpiper, to: kNestCharacteristics, inputIndex: 0, in: graph)
+        connectFirstOutput(from: kNestCharacteristics, to: kBuildStrategy, inputIndex: 0, in: graph)
+        connectFirstOutput(from: kBuildStrategy, to: kTaskCard, inputIndex: 0, in: graph)
+        connectFirstOutput(from: kTaskCard, to: tBuildWorkshop, inputIndex: 0, in: graph)
+        connectFirstOutput(from: tBuildWorkshop, to: tExhibitionAwards, inputIndex: 0, in: graph)
+        connectFirstOutput(from: tExhibitionAwards, to: tReflection, inputIndex: 0, in: graph)
+        connectFirstOutput(from: tReflection, to: tAfterClassObservation, inputIndex: 0, in: graph)
+
+        connectFirstOutput(from: tBuildWorkshop, to: tRubric, inputIndex: 0, in: graph)
+        connectFirstOutput(from: tExhibitionAwards, to: tRubric, inputIndex: 0, in: graph)
+        connectFirstOutput(from: tReflection, to: tRubric, inputIndex: 0, in: graph)
+        connectFirstOutput(from: tRubric, to: tDashboard, inputIndex: 0, in: graph)
+        connectFirstOutput(from: tAfterClassObservation, to: tDashboard, inputIndex: 0, in: graph)
 
         let serializedNodes = entries.map { entry in
             SerializableNode(from: entry.node, nodeType: entry.type)
@@ -690,15 +956,19 @@ function process(markdown) {
             connections: graph.getAllConnections(),
             canvasState: canvasState
         )
-        document.metadata.description = "edunode.sample=zhuhai_birds;edunode.model=inquiry"
+        document.metadata.description = "edunode.sample=\(zhuhaiSampleID);edunode.model=inquiry"
 
         return (try? encodeDocument(document)) ?? Data()
     }
 
     static func migrateLegacyKnowledgeInputsAndSampleConnectionsIfNeeded(data: Data) -> Data? {
         guard let document = try? decodeDocument(from: data) else { return nil }
+        if shouldUpgradeZhuhaiSample(document) {
+            return makeZhuhaiBirdSampleDocumentData(isChinese: documentPrefersChinese(document))
+        }
+
         let hasLegacyKnowledge = document.nodes.contains {
-            $0.nodeType == EduNodeType.knowledge && $0.inputPorts.count < 3
+            $0.nodeType == EduNodeType.knowledge && $0.inputPorts.count != 1
         }
         let isZhuhai = isZhuhaiSample(document)
         let sampleNeedsRepair = isZhuhai && hasMissingZhuhaiKnowledgeConnections(in: document)
@@ -782,6 +1052,18 @@ function process(markdown) {
         }
     }
 
+    static func filledToolkitNodeCount(in data: Data) -> Int {
+        guard let document = try? decodeDocument(from: data) else { return 0 }
+        let types = Set(EduNodeType.allToolkitTypes)
+        return document.nodes.reduce(into: 0) { count, node in
+            guard types.contains(node.nodeType) else { return }
+            let textValue = (node.nodeData["value"] ?? node.nodeData["content"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !textValue.isEmpty {
+                count += 1
+            }
+        }
+    }
+
     static func roles(in data: Data) -> Set<String> {
         guard let document = try? decodeDocument(from: data) else { return [] }
         return Set(document.nodes.compactMap { node in
@@ -793,8 +1075,42 @@ function process(markdown) {
         roles(in: data).contains(role)
     }
 
+    static func isZhuhaiSampleData(_ data: Data) -> Bool {
+        guard let document = try? decodeDocument(from: data) else { return false }
+        return isZhuhaiSample(document)
+    }
+
     private static func isZhuhaiSample(_ document: GNodeDocument) -> Bool {
         document.metadata.description?.contains("edunode.sample=zhuhai_birds") == true
+    }
+
+    private static func shouldUpgradeZhuhaiSample(_ document: GNodeDocument) -> Bool {
+        guard isZhuhaiSample(document) else { return false }
+        let description = document.metadata.description ?? ""
+        guard !description.contains("edunode.sample=\(zhuhaiSampleID)") else { return false }
+        if description.contains("edunode.sample=zhuhai_birds_v2") {
+            return true
+        }
+        return legacyZhuhaiNamePrefixes.contains { prefix in
+            document.nodes.contains(where: { $0.attributes.name.hasPrefix(prefix) })
+        }
+    }
+
+    private static func documentPrefersChinese(_ document: GNodeDocument) -> Bool {
+        if document.nodes.contains(where: { containsChinese($0.attributes.name) }) {
+            return true
+        }
+        return Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
+    }
+
+    private static func containsChinese(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            (0x4E00...0x9FFF).contains(scalar.value)
+        }
+    }
+
+    private static var legacyZhuhaiNamePrefixes: [String] {
+        ["知识点1", "知识点2", "知识点3", "知识点4", "知识点5", "知识点6", "知识点7", "K1:", "K2:", "K3:", "K4:", "K5:", "K6:", "K7:"]
     }
 
     private static func hasMissingZhuhaiKnowledgeConnections(in document: GNodeDocument) -> Bool {
@@ -836,12 +1152,12 @@ function process(markdown) {
             return
         }
 
-        appendConnectionIfMissing(from: k1, to: k2, targetInputIndex: 2, connections: &connections)
-        appendConnectionIfMissing(from: k2, to: k3, targetInputIndex: 2, connections: &connections)
-        appendConnectionIfMissing(from: k3, to: k4, targetInputIndex: 2, connections: &connections)
-        appendConnectionIfMissing(from: k3, to: k5, targetInputIndex: 2, connections: &connections)
-        appendConnectionIfMissing(from: k3, to: k6, targetInputIndex: 2, connections: &connections)
-        appendConnectionIfMissing(from: k3, to: k7, targetInputIndex: 2, connections: &connections)
+        appendConnectionIfMissing(from: k1, to: k2, targetInputIndex: 0, connections: &connections)
+        appendConnectionIfMissing(from: k2, to: k3, targetInputIndex: 0, connections: &connections)
+        appendConnectionIfMissing(from: k3, to: k4, targetInputIndex: 0, connections: &connections)
+        appendConnectionIfMissing(from: k3, to: k5, targetInputIndex: 0, connections: &connections)
+        appendConnectionIfMissing(from: k3, to: k6, targetInputIndex: 0, connections: &connections)
+        appendConnectionIfMissing(from: k3, to: k7, targetInputIndex: 0, connections: &connections)
     }
 
     private static func appendConnectionIfMissing(
@@ -905,7 +1221,7 @@ function process(markdown) {
         case "collaborative":
             return ModelTemplateConfig(
                 toolkitCount: 3,
-                knowledgeLevel: isChinese ? "进阶" : "Intermediate",
+                knowledgeLevel: S("edu.knowledge.type.apply"),
                 metricInputs: [
                     ModelMetricInput(key: "knowledge", displayName: S("template.metricKnowledge"), defaultValue: 74),
                     ModelMetricInput(key: "engagement", displayName: S("template.metricEngagement"), defaultValue: 81),
@@ -917,7 +1233,7 @@ function process(markdown) {
         case "inquiry":
             return ModelTemplateConfig(
                 toolkitCount: 3,
-                knowledgeLevel: isChinese ? "高阶" : "Advanced",
+                knowledgeLevel: S("edu.knowledge.type.analyze"),
                 metricInputs: [
                     ModelMetricInput(key: "knowledge", displayName: S("template.metricKnowledge"), defaultValue: 76),
                     ModelMetricInput(key: "engagement", displayName: S("template.metricEngagement"), defaultValue: 78),
@@ -929,7 +1245,7 @@ function process(markdown) {
         case "constructivism":
             return ModelTemplateConfig(
                 toolkitCount: 3,
-                knowledgeLevel: isChinese ? "基础" : "Basic",
+                knowledgeLevel: S("edu.knowledge.type.understand"),
                 metricInputs: [
                     ModelMetricInput(key: "knowledge", displayName: S("template.metricKnowledge"), defaultValue: 72),
                     ModelMetricInput(key: "engagement", displayName: S("template.metricEngagement"), defaultValue: 79),
@@ -940,7 +1256,7 @@ function process(markdown) {
         default:
             return ModelTemplateConfig(
                 toolkitCount: 3,
-                knowledgeLevel: isChinese ? "进阶" : "Intermediate",
+                knowledgeLevel: S("edu.knowledge.type.apply"),
                 metricInputs: [
                     ModelMetricInput(key: "knowledge", displayName: S("template.metricKnowledge"), defaultValue: 78),
                     ModelMetricInput(key: "engagement", displayName: S("template.metricEngagement"), defaultValue: 82),
@@ -950,22 +1266,50 @@ function process(markdown) {
         }
     }
 
-    private static func toolkitType(forPresetID presetID: String) -> String {
+    private static func toolkitPlacement(forPresetID presetID: String) -> ToolkitPlacement {
         switch presetID {
         case "context-hook":
-            return S("edu.toolkit.type.demonstration")
+            return ToolkitPlacement(
+                nodeType: EduNodeType.toolkitPerceptionInquiry,
+                category: .perceptionInquiry,
+                methodID: "context_hook"
+            )
         case "experiment-observe":
-            return S("edu.toolkit.type.observation")
+            return ToolkitPlacement(
+                nodeType: EduNodeType.toolkitPerceptionInquiry,
+                category: .perceptionInquiry,
+                methodID: "field_observation"
+            )
         case "peer-discussion":
-            return S("edu.toolkit.type.discussion")
+            return ToolkitPlacement(
+                nodeType: EduNodeType.toolkitCommunicationNegotiation,
+                category: .communicationNegotiation,
+                methodID: "structured_debate"
+            )
         case "task-driven":
-            return S("edu.toolkit.type.practice")
+            return ToolkitPlacement(
+                nodeType: EduNodeType.toolkitConstructionPrototype,
+                category: .constructionPrototype,
+                methodID: "low_fidelity_prototype"
+            )
         case "contrast-analysis":
-            return S("edu.toolkit.type.inquiry")
+            return ToolkitPlacement(
+                nodeType: EduNodeType.toolkitPerceptionInquiry,
+                category: .perceptionInquiry,
+                methodID: "source_analysis"
+            )
         case "exit-ticket":
-            return S("edu.toolkit.type.peerReview")
+            return ToolkitPlacement(
+                nodeType: EduNodeType.toolkitRegulationMetacognition,
+                category: .regulationMetacognition,
+                methodID: "reflection_protocol"
+            )
         default:
-            return EduToolkitNode.defaultType
+            return ToolkitPlacement(
+                nodeType: EduNodeType.toolkitCommunicationNegotiation,
+                category: .communicationNegotiation,
+                methodID: "role_play"
+            )
         }
     }
 
@@ -1117,6 +1461,12 @@ private struct ModelTemplateConfig {
     let toolkitCount: Int
     let knowledgeLevel: String
     let metricInputs: [ModelMetricInput]
+}
+
+private struct ToolkitPlacement {
+    let nodeType: String
+    let category: EduToolkitCategory
+    let methodID: String
 }
 
 private struct TemplateNodeEntry {

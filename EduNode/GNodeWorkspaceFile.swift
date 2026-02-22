@@ -30,6 +30,7 @@ final class GNodeWorkspaceFile {
     var learningScenario: String
     var curriculumStandard: String
     var resourceConstraints: String
+    var knowledgeToolkitMarkedDone: Bool
     var lessonPlanMarkedDone: Bool
     var evaluationMarkedDone: Bool
 
@@ -59,6 +60,7 @@ final class GNodeWorkspaceFile {
         learningScenario: String = "",
         curriculumStandard: String = "",
         resourceConstraints: String = "",
+        knowledgeToolkitMarkedDone: Bool = false,
         lessonPlanMarkedDone: Bool = false,
         evaluationMarkedDone: Bool = false,
         createdAt: Date = .now,
@@ -89,6 +91,7 @@ final class GNodeWorkspaceFile {
         self.learningScenario = learningScenario
         self.curriculumStandard = curriculumStandard
         self.resourceConstraints = resourceConstraints
+        self.knowledgeToolkitMarkedDone = knowledgeToolkitMarkedDone
         self.lessonPlanMarkedDone = lessonPlanMarkedDone
         self.evaluationMarkedDone = evaluationMarkedDone
         self.createdAt = createdAt

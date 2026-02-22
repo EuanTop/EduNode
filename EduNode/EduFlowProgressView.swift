@@ -38,7 +38,6 @@ struct EduFlowProgressView: View {
 
     private let containerBackground = Color(red: 0.10, green: 0.11, blue: 0.13)
     private let chipTextColor = Color.white.opacity(0.92)
-    private let chipHintColor = Color.white.opacity(0.66)
 
     var body: some View {
         HStack(spacing: 8) {
@@ -82,13 +81,6 @@ struct EduFlowProgressView: View {
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
                 .foregroundStyle(chipTextColor)
-
-            if state.isManual {
-                Text(state.isDone ? S("flow.marked") : S("flow.tapToMark"))
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(chipHintColor)
-                    .lineLimit(1)
-            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
