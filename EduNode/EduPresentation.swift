@@ -29,9 +29,9 @@ struct EduPresentationBaseSlide: Identifiable {
     var kindLabel: String {
         switch kind {
         case .knowledge:
-            return isChinese ? "Knowledge" : "Knowledge"
+            return isChinese ? "知识讲授" : "Knowledge"
         case .toolkit:
-            return isChinese ? "Toolkit" : "Toolkit"
+            return isChinese ? "课堂活动" : "Activity"
         }
     }
 }
@@ -90,7 +90,7 @@ enum EduPresentationPlanner {
                     ? (isChinese ? "（未填写知识点）" : "(Knowledge point not filled)")
                     : normalized(parsed.textValue)
                 let level = normalized(parsed.selectedOption)
-                let subtitle = level.isEmpty ? (isChinese ? "Knowledge" : "Knowledge") : level
+                let subtitle = level
                 return EduPresentationBaseSlide(
                     id: serialized.id,
                     position: position,
@@ -98,9 +98,13 @@ enum EduPresentationPlanner {
                     kind: .knowledge,
                     title: title,
                     subtitle: subtitle,
-                    summary: compact(knowledge, maxLength: 120),
-                    knowledgeText: compact(knowledge, maxLength: 220),
-                    keyPoints: [compact(knowledge, maxLength: 180)],
+                    summary: knowledge,
+                    knowledgeText: knowledge,
+                    keyPoints: knowledgeKeyPoints(
+                        knowledge: knowledge,
+                        level: level,
+                        isChinese: isChinese
+                    ),
                     isChinese: isChinese
                 )
             }
@@ -119,7 +123,9 @@ enum EduPresentationPlanner {
             let keyPoints = toolkitKeyPoints(
                 textFields: parsed.formTextFields,
                 optionFields: parsed.formOptionFields,
-                summary: summary
+                summary: summary,
+                method: subtitle,
+                isChinese: isChinese
             )
 
             return EduPresentationBaseSlide(
@@ -160,11 +166,10 @@ enum EduPresentationPlanner {
             let firstTitle = source.first?.title ?? "Slide"
             let title = source.count == 1 ? firstTitle : "\(firstTitle) +\(source.count - 1)"
             let subtitle = source
-                .map(\.kindLabel)
-                .reduce(into: [String]()) { result, next in
-                    if !result.contains(next) { result.append(next) }
-                }
-                .joined(separator: " + ")
+                .map(\.subtitle)
+                .map { normalized($0) }
+                .first(where: { !$0.isEmpty })
+                ?? ""
             let keyline = source
                 .map(\.summary)
                 .first(where: { !normalized($0).isEmpty })
@@ -179,7 +184,7 @@ enum EduPresentationPlanner {
                     anchorPosition: anchor,
                     slideTitle: title,
                     subtitle: subtitle,
-                    keyline: compact(keyline, maxLength: 150)
+                    keyline: normalized(keyline)
                 )
             )
 
@@ -190,69 +195,61 @@ enum EduPresentationPlanner {
     }
 
     static func composeSlides(from groups: [EduPresentationSlideGroup], isChinese: Bool) -> [EduPresentationComposedSlide] {
-        groups.enumerated().map { index, group in
-            let knowledgeItems = group.sourceSlides
-                .filter { $0.kind == .knowledge }
-                .map(\.knowledgeText)
-                .map { compact($0, maxLength: 72) }
-                .filter { !normalized($0).isEmpty }
-            let limitedKnowledgeItems = Array(knowledgeItems.prefix(2))
+            groups.enumerated().map { index, group in
+                let resolvedChinese = group.sourceSlides.first?.isChinese ?? isChinese
 
-            let toolkitItems = group.sourceSlides
-                .filter { $0.kind == .toolkit }
-                .map { slide in
-                    if normalized(slide.subtitle).isEmpty {
-                        return compact(slide.title, maxLength: 72)
-                    }
-                    return compact("\(slide.title) · \(slide.subtitle)", maxLength: 72)
+                let knowledgeItems = deduplicated(
+                    group.sourceSlides
+                        .filter { $0.kind == .knowledge }
+                        .flatMap { splitLines($0.knowledgeText) }
+                        .map { normalized($0) }
+                        .filter { !normalized($0).isEmpty }
+                )
+
+                let toolkitContentItems = deduplicated(
+                    group.sourceSlides
+                        .filter { $0.kind == .toolkit }
+                        .flatMap(\.keyPoints)
+                        .flatMap { splitLines($0) }
+                        .map { normalized($0) }
+                        .filter { !normalized($0).isEmpty }
+                )
+
+                let toolkitItems = deduplicated(
+                    group.sourceSlides
+                        .filter { $0.kind == .toolkit }
+                        .flatMap { toolkitPresentationItems(for: $0, isChinese: resolvedChinese) }
+                        .map { normalized($0) }
+                        .filter { !normalized($0).isEmpty }
+                )
+
+                let keyPoints: [String]
+                if !knowledgeItems.isEmpty {
+                    keyPoints = knowledgeItems
+                } else if !toolkitContentItems.isEmpty {
+                    keyPoints = toolkitContentItems
+                } else {
+                    keyPoints = toolkitItems
                 }
-            let limitedToolkitItems = Array(toolkitItems.prefix(2))
 
-            let keyPoints = deduplicated(
-                group.sourceSlides.flatMap(\.keyPoints)
-                    .map { compact($0, maxLength: 88) }
-                    .filter { !normalized($0).isEmpty }
-            )
-            let fallbackKeyPoints: [String]
-            if keyPoints.isEmpty {
-                fallbackKeyPoints = group.sourceSlides
-                    .map(\.summary)
-                    .map { compact($0, maxLength: 88) }
-                    .filter { !normalized($0).isEmpty }
-            } else {
-                fallbackKeyPoints = keyPoints
+                let speakerNotes = presentationSpeakerNotes(
+                    knowledgeItems: knowledgeItems,
+                    toolkitItems: toolkitItems,
+                    isChinese: resolvedChinese
+                )
+
+                return EduPresentationComposedSlide(
+                    id: group.id,
+                    index: index + 1,
+                    title: group.slideTitle,
+                    subtitle: group.subtitle,
+                    knowledgeItems: knowledgeItems,
+                    toolkitItems: toolkitItems,
+                    keyPoints: keyPoints,
+                    speakerNotes: Array(speakerNotes.prefix(2))
+                )
             }
-            let limitedKeyPoints = Array(fallbackKeyPoints.prefix(4))
-
-            let knowledgePrompt = limitedKnowledgeItems.first ?? group.sourceSlides.first?.summary ?? ""
-            let toolkitPrompt = limitedToolkitItems.isEmpty
-                ? (isChinese ? "围绕核心知识进行讲授互动。" : "Run guided discussion around the key idea.")
-                : limitedToolkitItems.joined(separator: isChinese ? "、" : ", ")
-            let speakerNotes = [
-                isChinese
-                    ? "开场先聚焦：\(compact(knowledgePrompt, maxLength: 62))"
-                    : "Open with focus: \(compact(knowledgePrompt, maxLength: 62))",
-                isChinese
-                    ? "实施活动：\(compact(toolkitPrompt, maxLength: 68))"
-                    : "Run activity: \(compact(toolkitPrompt, maxLength: 68))",
-                isChinese
-                    ? "结尾追问并收束本页核心产出。"
-                    : "Close with check questions and explicit outcomes."
-            ]
-            let limitedSpeakerNotes = speakerNotes.map { compact($0, maxLength: 72) }
-
-            return EduPresentationComposedSlide(
-                id: group.id,
-                index: index + 1,
-                title: compact(group.slideTitle, maxLength: 54),
-                subtitle: compact(group.subtitle, maxLength: 40),
-                knowledgeItems: limitedKnowledgeItems,
-                toolkitItems: limitedToolkitItems,
-                keyPoints: limitedKeyPoints,
-                speakerNotes: limitedSpeakerNotes
-            )
         }
-    }
 
     private static func parseLiveNode(serialized: SerializableNode) -> ParsedLiveNode {
         var textValue = normalized(serialized.nodeData["content"] ?? serialized.nodeData["value"] ?? "")
@@ -288,15 +285,15 @@ enum EduPresentationPlanner {
         isChinese: Bool
     ) -> String {
         if !normalized(textValue).isEmpty {
-            return compact(textValue, maxLength: 120)
+            return normalized(textValue)
         }
         if let firstField = textFields.first(where: { !normalized($0.value).isEmpty }) {
-            return compact("\(firstField.label): \(firstField.value)", maxLength: 120)
+            return normalized(firstField.value)
         }
         if let firstOption = optionFields.first(where: { !normalized($0.selectedOption).isEmpty }) {
-            return compact("\(firstOption.label): \(firstOption.selectedOption)", maxLength: 120)
+            return normalized(firstOption.selectedOption)
         }
-        return isChinese ? "（待补充活动内容）" : "(Activity details pending)"
+        return isChinese ? "（待补充课堂内容）" : "(Class content pending)"
     }
 
     private static func toolkitSubtitle(selectedOption: String, nodeType: String, isChinese: Bool) -> String {
@@ -321,27 +318,191 @@ enum EduPresentationPlanner {
     private static func toolkitKeyPoints(
         textFields: [NodeEditorTextFieldSpec],
         optionFields: [NodeEditorOptionFieldSpec],
-        summary: String
+        summary: String,
+        method: String,
+        isChinese: Bool
     ) -> [String] {
         var points: [String] = []
+        let normalizedMethod = normalized(method)
+        let normalizedSummary = normalized(summary)
+
+        if !normalizedMethod.isEmpty {
+            points.append(isChinese ? "方法：\(normalizedMethod)" : "Method: \(normalizedMethod)")
+        }
+        if !normalizedSummary.isEmpty {
+            points.append(normalizedSummary)
+        }
 
         for field in optionFields {
             let selected = normalized(field.selectedOption)
             guard !selected.isEmpty else { continue }
-            points.append(compact("\(field.label): \(selected)", maxLength: 110))
+            points.append(selected)
         }
 
         for field in textFields {
-            let value = normalized(field.value)
-            guard !value.isEmpty else { continue }
-            points.append(compact("\(field.label): \(value)", maxLength: 130))
+            let excerpt = fieldValueExcerpt(field)
+            guard !excerpt.isEmpty else { continue }
+            points.append(excerpt)
         }
 
         if points.isEmpty {
-            points.append(compact(summary, maxLength: 120))
+            points.append(summary)
         }
 
-        return Array(deduplicated(points).prefix(6))
+        return deduplicated(points)
+    }
+
+    private static func knowledgeKeyPoints(knowledge: String, level: String, isChinese: Bool) -> [String] {
+        let normalizedKnowledge = normalized(knowledge)
+        guard !normalizedKnowledge.isEmpty else {
+            return [isChinese ? "先澄清本页核心概念。" : "Clarify the core idea of this slide first."]
+        }
+
+        let normalizedLevel = normalized(level)
+        if normalizedLevel.isEmpty {
+            return splitLines(normalizedKnowledge)
+        }
+
+        var lines = splitLines(normalizedKnowledge)
+        if lines.isEmpty { lines = [normalizedKnowledge] }
+        lines.insert(isChinese ? "知识层级：\(normalizedLevel)" : "Knowledge level: \(normalizedLevel)", at: 0)
+        return lines
+    }
+
+    private static func groupLeadline(for source: [EduPresentationBaseSlide]) -> String {
+        guard !source.isEmpty else { return "" }
+        let isChinese = source.first?.isChinese ?? false
+        let knowledgeCount = source.filter { $0.kind == .knowledge }.count
+        let toolkitCount = source.filter { $0.kind == .toolkit }.count
+
+        if knowledgeCount > 0 && toolkitCount > 0 {
+            return isChinese
+                ? "先明确本页关键知识，再用课堂活动完成理解、练习与表达。"
+                : "Anchor key knowledge first, then use class activity for understanding and expression."
+        }
+        if knowledgeCount > 0 {
+            return isChinese
+                ? "聚焦核心知识点，强调概念理解与迁移应用。"
+                : "Focus on core knowledge with conceptual understanding and transfer."
+        }
+        return isChinese
+            ? "以活动驱动学习推进，强调协作、表达与反思。"
+            : "Drive learning through activity with collaboration, expression, and reflection."
+    }
+
+    private static func toolkitPresentationItems(for slide: EduPresentationBaseSlide, isChinese: Bool) -> [String] {
+        var lines: [String] = []
+
+        let summaryLines = splitLines(slide.summary)
+        if summaryLines.isEmpty {
+            if !normalized(slide.summary).isEmpty {
+                lines.append(normalized(slide.summary))
+            }
+        } else {
+            lines.append(contentsOf: summaryLines)
+        }
+
+        for keyPoint in slide.keyPoints {
+            let normalizedPoint = normalized(keyPoint)
+            guard !normalizedPoint.isEmpty else { continue }
+            if normalizedPoint.hasPrefix("Method:") || normalizedPoint.hasPrefix("方法：") {
+                continue
+            }
+            lines.append(contentsOf: splitLines(normalizedPoint))
+        }
+
+        if lines.isEmpty {
+            lines.append(isChinese ? "未填写活动内容。" : "Activity content not filled.")
+        }
+        return deduplicated(lines)
+    }
+
+    private static func presentationSpeakerNotes(
+        knowledgeItems: [String],
+        toolkitItems: [String],
+        isChinese: Bool
+    ) -> [String] {
+        let knowledgeAnchor = normalized(knowledgeItems.first ?? "")
+        let toolkitAnchor = normalized(toolkitItems.first ?? "")
+
+        if toolkitItems.isEmpty {
+            return [
+                isChinese
+                ? (knowledgeAnchor.isEmpty ? "先用一个问题激活已有经验，再讲本页核心。" : "先追问“\(knowledgeAnchor)”相关经验，再讲本页核心。")
+                : (knowledgeAnchor.isEmpty ? "Activate prior experience with one question, then teach the core idea." : "Open with one question on \(knowledgeAnchor), then teach the core idea."),
+                isChinese
+                ? "结尾用1个应用问题检查学生是否能迁移。"
+                : "Close with one transfer question to check understanding."
+            ]
+        }
+
+        return [
+            isChinese
+            ? (knowledgeAnchor.isEmpty ? "先给活动目标和成功标准，再示范第一步。" : "先围绕“\(knowledgeAnchor)”明确目标，再示范第一步。")
+            : (knowledgeAnchor.isEmpty ? "State goal and success criteria first, then model step one." : "Frame the goal around \(knowledgeAnchor), then model step one."),
+            isChinese
+            ? (toolkitAnchor.isEmpty ? "活动后让学生解释依据，并进行同伴互评。" : "活动后围绕“\(toolkitAnchor)”进行依据说明与同伴互评。")
+            : (toolkitAnchor.isEmpty ? "After activity, ask students to explain evidence and peer-review." : "After \(toolkitAnchor), ask for evidence-based explanation and peer feedback.")
+        ]
+    }
+
+    private static func fieldValueExcerpt(_ field: NodeEditorTextFieldSpec) -> String {
+        switch field.editorKind {
+        case .text:
+            return normalized(field.value)
+        case .tags:
+            let tags = splitLines(field.value)
+            return tags.joined(separator: "、")
+        case .orderedList:
+            let items = splitLines(field.value)
+            return items.enumerated()
+                .map { "\($0.offset + 1). \($0.element)" }
+                .joined(separator: "\n")
+        case .keyValueTable:
+            let rows = parseTableRows(from: field.value)
+            let rendered = rows.map { row in
+                let left = normalized(row.0)
+                let right = normalized(row.1)
+                if left.isEmpty { return right }
+                if right.isEmpty { return left }
+                return "\(left)：\(right)"
+            }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+            return rendered
+        }
+    }
+
+    private static func splitLines(_ raw: String) -> [String] {
+        raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private static func parseTableRows(from raw: String) -> [(String, String)] {
+        splitLines(raw).map { line in
+            if line.contains("|") || line.contains("｜") {
+                let normalized = line.replacingOccurrences(of: "｜", with: "|")
+                let components = normalized
+                    .split(separator: "|", omittingEmptySubsequences: false)
+                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                let left = components.first ?? ""
+                let right = components.dropFirst().filter { !$0.isEmpty }.joined(separator: " / ")
+                return (left, right)
+            }
+            if line.contains(":") || line.contains("：") {
+                let normalized = line.replacingOccurrences(of: "：", with: ":")
+                let components = normalized
+                    .split(separator: ":", omittingEmptySubsequences: false)
+                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                let left = components.first ?? ""
+                let right = components.dropFirst().filter { !$0.isEmpty }.joined(separator: " / ")
+                return (left, right)
+            }
+            return (line, "")
+        }
     }
 
     private static func orderByColumns(_ slides: [EduPresentationBaseSlide]) -> [EduPresentationBaseSlide] {
@@ -404,17 +565,6 @@ enum EduPresentationPlanner {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func compact(_ value: String, maxLength: Int) -> String {
-        let cleaned = value
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .joined(separator: " / ")
-        if cleaned.count <= maxLength { return cleaned }
-        return String(cleaned.prefix(maxLength)) + "..."
-    }
-
     private static func deduplicated(_ values: [String]) -> [String] {
         var seen = Set<String>()
         var result: [String] = []
@@ -465,11 +615,12 @@ enum EduPresentationHTMLExporter {
             ? (isChinese ? "课程演讲" : "Course Presentation")
             : courseName
 
-        let knowledgeTitle = isChinese ? "知识点" : "Knowledge"
-        let toolkitTitle = isChinese ? "工具方法" : "Toolkit"
-        let coreTitle = isChinese ? "核心要点" : "Core Points"
-        let notesTitle = isChinese ? "讲述备注" : "Speaker Notes"
+        let toolkitContentTitle = isChinese ? "活动设计" : "Toolkit Content"
+        let activityTitle = isChinese ? "课堂活动" : "Class Activity"
+        let cuePrefix = isChinese ? "讲述提示：" : "Presenter cue: "
         let emptyMessage = isChinese ? "当前没有可生成的演讲页面。" : "No slide content available."
+        let emptyMainFallback = isChinese ? "请先补充节点内容后生成课件页面。" : "Add node content to generate a meaningful slide."
+        let emptyActivityFallback = isChinese ? "可在画布中连接对应课堂活动节点。" : "Connect a class activity node in the canvas to populate this panel."
         let prevLabel = isChinese ? "上一页" : "Prev"
         let nextLabel = isChinese ? "下一页" : "Next"
 
@@ -479,63 +630,116 @@ enum EduPresentationHTMLExporter {
                 <section class="slide \(interactive ? "active" : "")">
                   <article class="slide-sheet">
                     <header class="hero">
-                      <div class="meta">Slide 1</div>
-                      <h1>\(escapeHTML(title))</h1>
-                      <p>\(escapeHTML(emptyMessage))</p>
+                      <div class="hero-row">
+                        <h1>\(escapeHTML(title))</h1>
+                      </div>
+                      <div class="hero-meta">
+                        <p class="lead">\(escapeHTML(emptyMessage))</p>
+                      </div>
                     </header>
+                    <section class="main-layout solo">
+                      <article class="main-card knowledge-card">
+                        \(knowledgeBodyHTML(items: [], fallback: emptyMainFallback, centerIfSingleParagraph: false))
+                      </article>
+                    </section>
+                    <footer class="foot">
+                      <span class="cue-spacer"></span>
+                      <span class="slide-index">01</span>
+                    </footer>
                   </article>
                 </section>
                 """
             }
 
             return slides.enumerated().map { index, slide in
-                let knowledgeHTML = listHTML(
-                    items: slide.knowledgeItems,
-                    fallback: isChinese ? "本页无独立知识讲授条目。" : "No standalone knowledge item on this slide."
-                )
-                let toolkitHTML = listHTML(
-                    items: slide.toolkitItems,
-                    fallback: isChinese ? "本页无工具活动配置。" : "No toolkit activity on this slide."
-                )
-                let keyPointsHTML = listHTML(
-                    items: slide.keyPoints,
-                    fallback: isChinese ? "待补充关键要点。" : "Key points pending."
-                )
-                let notesHTML = listHTML(
-                    items: slide.speakerNotes,
-                    fallback: isChinese ? "待补充讲述备注。" : "Speaker notes pending."
-                )
+                let hasKnowledge = !slide.knowledgeItems.isEmpty
+                let hasToolkit = !slide.toolkitItems.isEmpty
+                let subtitle = slide.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                let levelChip = hasKnowledge ? levelChipHTML(from: subtitle) : ""
+                let leadHTML = (!hasKnowledge && !subtitle.isEmpty)
+                    ? "<p class=\"lead\">\(escapeHTML(subtitle))</p>"
+                    : ""
+                let heroMeta = levelChip + leadHTML
+                let heroMetaHTML = heroMeta.isEmpty ? "" : "<div class=\"hero-meta\">\(heroMeta)</div>"
+                let toolkitIconBadgeHTML = hasToolkit ? toolkitIconHTML() : ""
+                let showActivityAside = hasKnowledge && hasToolkit
+                let showToolkitDualPanel = hasToolkit && !hasKnowledge
+                let layoutClass = (showActivityAside || showToolkitDualPanel) ? "main-layout" : "main-layout solo"
+
+                let mainCardClass: String
+                let mainBodyHTML: String
+                let mainHeaderHTML: String
+                if hasKnowledge {
+                    let centerSingleParagraph = !hasToolkit && slide.knowledgeItems.count == 1
+                    mainCardClass = centerSingleParagraph
+                        ? "main-card knowledge-card center-brief"
+                        : "main-card knowledge-card"
+                    mainBodyHTML = knowledgeBodyHTML(
+                        items: slide.knowledgeItems,
+                        fallback: emptyMainFallback,
+                        centerIfSingleParagraph: centerSingleParagraph
+                    )
+                    mainHeaderHTML = ""
+                } else {
+                    let densityClass = activityDensityClass(for: slide.keyPoints)
+                    mainCardClass = densityClass.isEmpty
+                        ? "main-card activity-main"
+                        : "main-card activity-main \(densityClass)"
+                    mainBodyHTML = activityBodyHTML(
+                        items: slide.keyPoints,
+                        fallback: emptyMainFallback
+                    )
+                    mainHeaderHTML = "<h2>\(escapeHTML(toolkitContentTitle))</h2>"
+                }
+
+                let activityBlock: String
+                if showActivityAside || showToolkitDualPanel {
+                    let densityClass = activityDensityClass(for: slide.toolkitItems)
+                    let activityCardClass = densityClass.isEmpty
+                        ? "activity-card"
+                        : "activity-card \(densityClass)"
+                    let activityHTML = activityBodyHTML(
+                        items: slide.toolkitItems,
+                        fallback: emptyActivityFallback
+                    )
+                    activityBlock = """
+                    <aside class="\(activityCardClass)">
+                      <h2>\(escapeHTML(activityTitle))</h2>
+                      \(activityHTML)
+                    </aside>
+                    """
+                } else {
+                    activityBlock = ""
+                }
+                let cueLine = slide.speakerNotes.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let cueHTML = cueLine.isEmpty
+                    ? "<span class=\"cue-spacer\"></span>"
+                    : "<p class=\"cue\">\(escapeHTML(cuePrefix + cueLine))</p>"
+                let indexLabel = String(format: "%02d", slide.index)
 
                 return """
                 <section class="slide\(interactive && index == 0 ? " active" : "")">
                   <article class="slide-sheet">
                     <header class="hero">
-                      <div class="meta">Slide \(slide.index)</div>
-                      <h1>\(escapeHTML(slide.title))</h1>
-                      <p>\(escapeHTML(slide.subtitle))</p>
+                      <div class="hero-row">
+                        <h1>\(escapeHTML(slide.title))</h1>
+                        \(toolkitIconBadgeHTML)
+                      </div>
+                      \(heroMetaHTML)
                     </header>
 
-                    <section class="grid-two">
-                      <article class="card">
-                        <h2>\(escapeHTML(knowledgeTitle))</h2>
-                        \(knowledgeHTML)
+                    <section class="\(layoutClass)">
+                      <article class="\(mainCardClass)">
+                        \(mainHeaderHTML)
+                        \(mainBodyHTML)
                       </article>
-                      <article class="card">
-                        <h2>\(escapeHTML(toolkitTitle))</h2>
-                        \(toolkitHTML)
-                      </article>
+                      \(activityBlock)
                     </section>
 
-                    <section class="grid-two">
-                      <article class="card">
-                        <h2>\(escapeHTML(coreTitle))</h2>
-                        \(keyPointsHTML)
-                      </article>
-                      <article class="card">
-                        <h2>\(escapeHTML(notesTitle))</h2>
-                        \(notesHTML)
-                      </article>
-                    </section>
+                    <footer class="foot">
+                      \(cueHTML)
+                      <span class="slide-index">\(indexLabel)</span>
+                    </footer>
                   </article>
                 </section>
                 """
@@ -591,15 +795,16 @@ enum EduPresentationHTMLExporter {
             }
             body {
               margin: 0;
-              background: #eef1f5;
+              background: #0f1115;
               color: #111111;
-              font: 16px/1.38 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+              font: 16px/1.35 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
               -webkit-text-size-adjust: 100%;
               text-size-adjust: 100%;
             }
             body.preview {
               overflow: auto;
               scrollbar-gutter: stable both-edges;
+              padding: 8px 0 24px;
             }
             body.interactive {
               overflow: hidden;
@@ -615,8 +820,8 @@ enum EduPresentationHTMLExporter {
               display: flex;
               flex-direction: column;
               align-items: center;
-              gap: 18px;
-              padding: 8px 0 24px;
+              gap: 14px;
+              padding: 0 0 20px;
             }
             body.interactive .deck {
               height: 100vh;
@@ -637,7 +842,7 @@ enum EduPresentationHTMLExporter {
               display: flex;
               width: 100%;
               min-height: 0;
-              padding: 0;
+              padding: 2px 0;
               align-items: center;
               justify-content: center;
             }
@@ -645,110 +850,243 @@ enum EduPresentationHTMLExporter {
               position: absolute;
               inset: 0;
               display: none;
-              padding: 20px;
+              padding: 18px;
             }
             body.embedded .slide {
               width: 100%;
               height: 100%;
+              padding: 0;
             }
             .slide.active { display: flex; }
             .slide-sheet {
-              width: min(82vw, 1280px);
+              width: min(86vw, 1366px);
               height: auto;
               aspect-ratio: 16 / 9;
               margin: 0 auto;
               background: #ffffff;
-              border: 1px solid #d7dde8;
-              border-radius: 16px;
-              box-shadow: 0 16px 36px rgba(13, 19, 34, 0.14);
-              padding: clamp(8px, 1.8cqw, 24px) clamp(10px, 2cqw, 28px);
+              border: 1px solid #dbe1ea;
+              border-radius: 14px;
+              box-shadow: 0 16px 34px rgba(6, 10, 18, 0.30);
+              padding: 4.8cqw 4.6cqw 3.9cqw;
               display: grid;
-              grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr);
-              gap: clamp(6px, 1cqw, 12px);
-              overflow: hidden;
-              container-type: inline-size;
+              grid-template-rows: auto auto minmax(0, 1fr) auto;
+              gap: 1.8cqw;
+              overflow: visible;
+              container-type: size;
             }
             body.interactive .slide-sheet {
-              width: min(90vw, 1280px);
+              width: min(92vw, 1366px);
             }
             body.embedded .slide-sheet {
               width: min(100vw, calc(100vh * 16 / 9));
             }
+            .hero-row {
+              display: flex;
+              align-items: flex-start;
+              justify-content: space-between;
+              gap: 1.2cqw;
+            }
             .hero h1 {
-              margin: 6px 0 4px;
-              font-size: clamp(12px, 2.6cqw, 34px);
-              line-height: 1.12;
-              color: #111111;
-              display: -webkit-box;
-              -webkit-line-clamp: 2;
-              -webkit-box-orient: vertical;
-              overflow: hidden;
-            }
-            .hero p {
               margin: 0;
-              color: #4a5567;
-              font-size: clamp(10px, 1.15cqw, 16px);
-              display: -webkit-box;
-              -webkit-line-clamp: 1;
-              -webkit-box-orient: vertical;
-              overflow: hidden;
+              font-size: 5.0cqw;
+              line-height: 1.08;
+              color: #111111;
+              white-space: pre-wrap;
+              word-break: break-word;
             }
-            .meta {
-              display: inline-block;
-              font-size: clamp(8px, 0.9cqw, 12px);
+            .hero-meta {
+              display: flex;
+              flex-wrap: wrap;
+              align-items: center;
+              gap: 0.68cqw;
+              margin-top: 0.78cqw;
+            }
+            .lead {
+              margin: 0;
+              color: #465062;
+              font-size: 1.82cqw;
+              white-space: pre-wrap;
+              word-break: break-word;
+            }
+            .toolkit-icon {
+              width: 2.3cqw;
+              height: 2.3cqw;
+              min-width: 22px;
+              min-height: 22px;
               border-radius: 999px;
-              padding: clamp(2px, 0.3cqw, 4px) clamp(6px, 0.8cqw, 10px);
-              background: #111111;
-              color: #ffffff;
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              background: #e8eefb;
+              border: 1px solid #cad7f3;
+              font-size: 1.28cqw;
+              line-height: 1;
+              flex-shrink: 0;
             }
-            .grid-two {
-              display: grid;
-              grid-template-columns: 1fr 1fr;
-              gap: clamp(6px, 1cqw, 10px);
-              min-height: 0;
+            .toolkit-icon img {
+              width: 1.28cqw;
+              height: 1.28cqw;
+              min-width: 12px;
+              min-height: 12px;
+              display: block;
             }
-            .card {
-              border: 1px solid #d7dde8;
-              border-radius: 10px;
-              padding: clamp(6px, 1cqw, 12px) clamp(8px, 1.2cqw, 14px);
-              min-height: 0;
-              overflow: hidden;
-              background: #ffffff;
-            }
-            .card h2 {
-              margin: 0 0 6px;
-              font-size: clamp(8px, 0.95cqw, 12px);
-              letter-spacing: 0.24px;
-              text-transform: uppercase;
-              color: #1e2f55;
-              display: -webkit-box;
-              -webkit-line-clamp: 1;
-              -webkit-box-orient: vertical;
-              overflow: hidden;
-            }
-            ul {
+            .level-chip {
               margin: 0;
-              padding-left: clamp(10px, 1.4cqw, 18px);
-              max-height: 100%;
-              overflow: hidden;
+              display: inline-flex;
+              align-items: center;
+              padding: 0.26cqw 0.78cqw;
+              border-radius: 999px;
+              background: #1d8f5a;
+              border: 1px solid #1a7e4f;
+              color: #ffffff;
+              font-size: 1.26cqw;
+              line-height: 1.1;
+              letter-spacing: 0.01em;
             }
-            li {
-              margin: clamp(2px, 0.5cqw, 6px) 0;
-              font-size: clamp(9px, 0.95cqw, 14px);
+            .main-layout {
+              display: grid;
+              grid-template-columns: minmax(0, 1fr) minmax(0, 0.62fr);
+              gap: 1.25cqw;
+              min-height: 0;
+            }
+            .main-layout.solo {
+              grid-template-columns: 1fr;
+            }
+            .main-card, .activity-card {
+              border: 1px solid #d6dde8;
+              border-radius: 1.05cqw;
+              background: #ffffff;
+              padding: 1.1cqw 1.35cqw;
+              min-height: 0;
+              overflow: visible;
+            }
+            .knowledge-card.center-brief {
+              display: flex;
+            }
+            .knowledge-content {
+              width: 100%;
+              display: flex;
+              flex-direction: column;
+              gap: 0.44cqw;
+            }
+            .knowledge-card.center-brief .knowledge-content {
+              min-height: 100%;
+              justify-content: center;
+              align-items: center;
+            }
+            .knowledge-line {
+              margin: 0;
               color: #111111;
-              display: -webkit-box;
-              -webkit-line-clamp: 2;
-              -webkit-box-orient: vertical;
-              overflow: hidden;
+              font-size: 1.58cqw;
+              line-height: 1.34;
+              white-space: pre-wrap;
+              word-break: break-word;
+              text-align: left;
             }
-            .muted {
+            .knowledge-card.center-brief .knowledge-line {
+              text-align: center;
+              font-size: 1.84cqw;
+              line-height: 1.4;
+            }
+            .activity-content {
+              width: 100%;
+              display: flex;
+              flex-direction: column;
+              gap: 0.34cqw;
+            }
+            .activity-line {
+              margin: 0;
+              color: #111111;
+              font-size: 1.38cqw;
+              line-height: 1.26;
+              white-space: pre-wrap;
+              word-break: break-word;
+            }
+            .activity-ordered {
+              margin: 0.16cqw 0 0.24cqw;
+              padding-left: 1.34cqw;
+            }
+            .activity-ordered li {
+              margin: 0.2cqw 0;
+              color: #111111;
+              font-size: 1.38cqw;
+              line-height: 1.24;
+              white-space: pre-wrap;
+              word-break: break-word;
+            }
+            .activity-card.compact,
+            .main-card.compact {
+              padding: 1.0cqw 1.18cqw;
+            }
+            .activity-card.tight,
+            .main-card.tight {
+              padding: 0.92cqw 1.06cqw;
+            }
+            .activity-card.ultra,
+            .main-card.ultra {
+              padding: 0.86cqw 1cqw;
+            }
+            .activity-card.compact .activity-line,
+            .activity-card.compact .activity-ordered li,
+            .main-card.compact .activity-line,
+            .main-card.compact .activity-ordered li {
+              font-size: 1.24cqw;
+              line-height: 1.2;
+            }
+            .activity-card.tight .activity-line,
+            .activity-card.tight .activity-ordered li,
+            .main-card.tight .activity-line,
+            .main-card.tight .activity-ordered li {
+              font-size: 1.1cqw;
+              line-height: 1.16;
+            }
+            .activity-card.ultra .activity-line,
+            .activity-card.ultra .activity-ordered li,
+            .main-card.ultra .activity-line,
+            .main-card.ultra .activity-ordered li {
+              font-size: 0.98cqw;
+              line-height: 1.12;
+            }
+            .main-card h2,
+            .activity-card h2 {
+              margin: 0 0 0.65cqw;
+              font-size: 1.44cqw;
+              line-height: 1.15;
+              color: #1f2f52;
+              letter-spacing: 0.02em;
+            }
+            .empty {
+              margin: 0;
               color: #677488;
-              font-style: italic;
-              font-size: clamp(9px, 0.95cqw, 14px);
-              display: -webkit-box;
-              -webkit-line-clamp: 3;
-              -webkit-box-orient: vertical;
-              overflow: hidden;
+              font-size: 1.48cqw;
+              line-height: 1.36;
+              white-space: pre-wrap;
+              word-break: break-word;
+            }
+            .foot {
+              display: flex;
+              align-items: flex-end;
+              justify-content: space-between;
+              gap: 1.1cqw;
+              min-height: 2.2cqw;
+            }
+            .cue {
+              margin: 0;
+              color: #5d6777;
+              font-size: 1.32cqw;
+              line-height: 1.3;
+              white-space: pre-wrap;
+              word-break: break-word;
+            }
+            .cue-spacer {
+              min-height: 1px;
+            }
+            .slide-index {
+              font-size: 1.22cqw;
+              line-height: 1;
+              color: #7a8496;
+              letter-spacing: 0.08em;
+              flex-shrink: 0;
             }
             .controls {
               position: fixed;
@@ -808,7 +1146,7 @@ enum EduPresentationHTMLExporter {
                 border-radius: 0;
                 box-shadow: none;
                 padding: 14mm 16mm;
-                overflow: hidden;
+                overflow: visible;
               }
               .controls { display: none !important; }
             }
@@ -825,13 +1163,196 @@ enum EduPresentationHTMLExporter {
         """
     }
 
-    private static func listHTML(items: [String], fallback: String) -> String {
-        if items.isEmpty {
-            return "<p class=\"muted\">\(escapeHTML(fallback))</p>"
+    private static func knowledgeBodyHTML(
+        items: [String],
+        fallback: String,
+        centerIfSingleParagraph: Bool
+    ) -> String {
+        let lines = items
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !lines.isEmpty else {
+            return "<p class=\"empty\">\(escapeHTML(fallback))</p>"
         }
-        let li = items.map { "<li>\(escapeHTML($0))</li>" }.joined()
-        return "<ul>\(li)</ul>"
+
+        let paragraphs = lines.map { line in
+            "<p class=\"knowledge-line\">\(escapeHTML(line))</p>"
+        }.joined()
+
+        if centerIfSingleParagraph && lines.count == 1 {
+            return "<div class=\"knowledge-content centered\">\(paragraphs)</div>"
+        }
+        return "<div class=\"knowledge-content\">\(paragraphs)</div>"
     }
+
+    private static func activityBodyHTML(items: [String], fallback: String) -> String {
+        let lines = items
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !lines.isEmpty else {
+            return "<p class=\"empty\">\(escapeHTML(fallback))</p>"
+        }
+
+        enum ActivityBlock {
+            case paragraph(String)
+            case ordered([String])
+        }
+
+        var blocks: [ActivityBlock] = []
+        var orderedBuffer: [String] = []
+
+        func flushOrderedBuffer() {
+            guard !orderedBuffer.isEmpty else { return }
+            blocks.append(.ordered(orderedBuffer))
+            orderedBuffer.removeAll()
+        }
+
+        for line in lines {
+            if let orderedItem = orderedLineContent(from: line) {
+                orderedBuffer.append(orderedItem)
+            } else {
+                flushOrderedBuffer()
+                blocks.append(.paragraph(line))
+            }
+        }
+        flushOrderedBuffer()
+
+        let html = blocks.map { block -> String in
+            switch block {
+            case .paragraph(let text):
+                return "<p class=\"activity-line\">\(escapeHTML(text))</p>"
+            case .ordered(let values):
+                let itemsHTML = values.map { "<li>\(escapeHTML($0))</li>" }.joined()
+                return "<ol class=\"activity-ordered\">\(itemsHTML)</ol>"
+            }
+        }.joined()
+
+        return "<div class=\"activity-content\">\(html)</div>"
+    }
+
+    private static func orderedLineContent(from rawLine: String) -> String? {
+        let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty else { return nil }
+
+        var index = line.startIndex
+        while index < line.endIndex, line[index].isNumber {
+            index = line.index(after: index)
+        }
+
+        guard index > line.startIndex else { return nil }
+
+        while index < line.endIndex {
+            let character = line[index]
+            if character == "." || character == "、" || character == ")" || character == "）" ||
+                character == ":" || character == "：" || character == "-" || character.isWhitespace {
+                index = line.index(after: index)
+            } else {
+                break
+            }
+        }
+
+        guard index < line.endIndex else { return nil }
+        let content = String(line[index...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return content.isEmpty ? nil : content
+    }
+
+    private static func levelChipHTML(from subtitle: String) -> String {
+        let normalizedSubtitle = subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedSubtitle.isEmpty else { return "" }
+
+        let lowercased = normalizedSubtitle.lowercased()
+        if lowercased.hasPrefix("level") {
+            return "<p class=\"level-chip\">\(escapeHTML(normalizedSubtitle))</p>"
+        }
+
+        var index = normalizedSubtitle.startIndex
+        while index < normalizedSubtitle.endIndex, normalizedSubtitle[index].isNumber {
+            index = normalizedSubtitle.index(after: index)
+        }
+
+        guard index > normalizedSubtitle.startIndex else { return "" }
+
+        let levelNumber = String(normalizedSubtitle[..<index])
+        while index < normalizedSubtitle.endIndex {
+            let character = normalizedSubtitle[index]
+            if character == "." || character == "、" || character == ")" || character == "）" || character.isWhitespace {
+                index = normalizedSubtitle.index(after: index)
+            } else {
+                break
+            }
+        }
+
+        let remainder = index < normalizedSubtitle.endIndex
+            ? String(normalizedSubtitle[index...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
+
+        let label = remainder.isEmpty
+            ? "Level\(levelNumber)"
+            : "Level\(levelNumber). \(remainder)"
+        return "<p class=\"level-chip\">\(escapeHTML(label))</p>"
+    }
+
+    private static func activityDensityClass(for items: [String]) -> String {
+        let lines = items
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !lines.isEmpty else { return "" }
+
+        let weight = lines.reduce(into: 0) { partialResult, line in
+            partialResult += max(1, Int(ceil(Double(line.count) / 44.0)))
+        }
+
+        switch weight {
+        case 20...:
+            return "ultra"
+        case 14...:
+            return "tight"
+        case 9...:
+            return "compact"
+        default:
+            return ""
+        }
+    }
+
+    private static func toolkitIconHTML() -> String {
+        if let dataURI = toolkitSymbolDataURI {
+            return "<span class=\"toolkit-icon\" aria-label=\"Toolkit\" title=\"Toolkit\"><img src=\"\(dataURI)\" alt=\"Toolkit\"></span>"
+        }
+        return "<span class=\"toolkit-icon\" aria-label=\"Toolkit\" title=\"Toolkit\">🛠︎</span>"
+    }
+
+    private static let toolkitSymbolDataURI: String? = {
+        #if canImport(UIKit)
+        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold, scale: .medium)
+        guard let baseSymbol = UIImage(systemName: "wrench.adjustable", withConfiguration: symbolConfig) else {
+            return nil
+        }
+
+        let symbol = baseSymbol.withTintColor(
+            UIColor(red: 0.11, green: 0.23, blue: 0.51, alpha: 1),
+            renderingMode: .alwaysOriginal
+        )
+
+        let imageSize = CGSize(width: 20, height: 20)
+        let rendererFormat = UIGraphicsImageRendererFormat.default()
+        rendererFormat.scale = 2
+        rendererFormat.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: imageSize, format: rendererFormat)
+        let rendered = renderer.image { _ in
+            symbol.draw(in: CGRect(x: 1.6, y: 1.6, width: 16.8, height: 16.8))
+        }
+
+        guard let pngData = rendered.pngData() else {
+            return nil
+        }
+        return "data:image/png;base64,\(pngData.base64EncodedString())"
+        #else
+        return nil
+        #endif
+    }()
 
     private static func escapeHTML(_ text: String) -> String {
         text

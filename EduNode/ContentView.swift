@@ -31,6 +31,7 @@ struct ContentView: View {
     @State private var showingPresentationEmptyAlert = false
     @State private var activePresentationModeFileID: UUID?
     @State private var presentationBreaksByFile: [UUID: Set<Int>] = [:]
+    @State private var presentationExcludedNodeIDsByFile: [UUID: Set<UUID>] = [:]
     @State private var selectedPresentationGroupIDByFile: [UUID: UUID] = [:]
     @State private var cameraRequest: NodeEditorCameraRequest?
     @State private var pendingFlowStepConfirmation: EduFlowStep?
@@ -82,6 +83,8 @@ struct ContentView: View {
                 self.activePresentationModeFileID = nil
             }
             let existingIDs = Set(workspaceFiles.map(\.id))
+            presentationBreaksByFile = presentationBreaksByFile.filter { existingIDs.contains($0.key) }
+            presentationExcludedNodeIDsByFile = presentationExcludedNodeIDsByFile.filter { existingIDs.contains($0.key) }
             selectedPresentationGroupIDByFile = selectedPresentationGroupIDByFile.filter { existingIDs.contains($0.key) }
         }
         .onChange(of: selectedFileID) { _, _ in
@@ -208,7 +211,8 @@ struct ContentView: View {
     @ViewBuilder
     private func detailView(toolbarTopPadding: CGFloat, bottomSafeInset: CGFloat) -> some View {
         if let file = selectedWorkspaceFile {
-            let deck = EduPresentationPlanner.makeDeck(graphData: file.data)
+            let rawDeck = EduPresentationPlanner.makeDeck(graphData: file.data)
+            let deck = filteredPresentationDeck(for: file.id, from: rawDeck)
             let slideGroups = presentationGroups(for: file.id, deck: deck)
             let composedSlides = EduPresentationPlanner.composeSlides(
                 from: slideGroups,
@@ -251,6 +255,7 @@ struct ContentView: View {
                 if isPresentationModeActive && !slideGroups.isEmpty {
                     presentationFilmstrip(
                         fileID: file.id,
+                        courseName: file.name,
                         deck: deck,
                         groups: slideGroups,
                         slides: composedSlides
@@ -896,7 +901,8 @@ Extend learning with monthly photo bird identification
             return
         }
 
-        let deck = EduPresentationPlanner.makeDeck(graphData: file.data)
+        let rawDeck = EduPresentationPlanner.makeDeck(graphData: file.data)
+        let deck = filteredPresentationDeck(for: file.id, from: rawDeck)
         guard !deck.orderedSlides.isEmpty else {
             showingPresentationEmptyAlert = true
             return
@@ -904,14 +910,14 @@ Extend learning with monthly photo bird identification
 
         activePresentationModeFileID = file.id
         if let firstGroup = presentationGroups(for: file.id, deck: deck).first {
-            selectedPresentationGroupIDByFile[file.id] = firstGroup.id
-            focusOnSlideGroup(firstGroup)
+            selectPresentationGroup(fileID: file.id, group: firstGroup)
         }
     }
 
     private func openPresentationPreview(for file: GNodeWorkspaceFile, graphData: Data? = nil) {
         let sourceData = graphData ?? file.data
-        let deck = EduPresentationPlanner.makeDeck(graphData: sourceData)
+        let rawDeck = EduPresentationPlanner.makeDeck(graphData: sourceData)
+        let deck = filteredPresentationDeck(for: file.id, from: rawDeck)
         guard !deck.orderedSlides.isEmpty else {
             showingPresentationEmptyAlert = true
             return
@@ -942,6 +948,13 @@ Extend learning with monthly photo bird identification
         )
     }
 
+    private func filteredPresentationDeck(for fileID: UUID, from rawDeck: EduPresentationDeck) -> EduPresentationDeck {
+        let excludedNodeIDs = presentationExcludedNodeIDsByFile[fileID] ?? []
+        guard !excludedNodeIDs.isEmpty else { return rawDeck }
+        let visibleSlides = rawDeck.orderedSlides.filter { !excludedNodeIDs.contains($0.id) }
+        return EduPresentationDeck(orderedSlides: visibleSlides)
+    }
+
     private func mergeSlideGroupBackward(fileID: UUID, group: EduPresentationSlideGroup, slideCount: Int) {
         guard group.startIndex > 0 else { return }
         var breaks = effectivePresentationBreaks(fileID: fileID, slideCount: slideCount)
@@ -956,13 +969,46 @@ Extend learning with monthly photo bird identification
         presentationBreaksByFile[fileID] = breaks
     }
 
+    private func removeSlideGroupFromPresentation(fileID: UUID, group: EduPresentationSlideGroup) {
+        guard !group.sourceSlides.isEmpty else { return }
+
+        var excludedNodeIDs = presentationExcludedNodeIDsByFile[fileID] ?? Set<UUID>()
+        for sourceSlide in group.sourceSlides {
+            excludedNodeIDs.insert(sourceSlide.id)
+        }
+        presentationExcludedNodeIDsByFile[fileID] = excludedNodeIDs
+
+        // Clear selection; the groups will be recomputed after this mutation.
+        selectedPresentationGroupIDByFile[fileID] = nil
+
+        guard activePresentationModeFileID == fileID,
+              let file = workspaceFiles.first(where: { $0.id == fileID }) else { return }
+
+        let rawDeck = EduPresentationPlanner.makeDeck(graphData: file.data)
+        let filteredDeck = filteredPresentationDeck(for: fileID, from: rawDeck)
+        if filteredDeck.orderedSlides.isEmpty {
+            activePresentationModeFileID = nil
+        } else if let firstGroup = presentationGroups(for: fileID, deck: filteredDeck).first {
+            selectPresentationGroup(fileID: fileID, group: firstGroup)
+        }
+    }
+
     private func focusOnSlideGroup(_ group: EduPresentationSlideGroup) {
         cameraRequest = NodeEditorCameraRequest(canvasPosition: group.anchorPosition)
+    }
+
+    private func selectPresentationGroup(fileID: UUID, group: EduPresentationSlideGroup) {
+        selectedPresentationGroupIDByFile[fileID] = group.id
+        // Push camera update to next runloop so selection state settles first.
+        DispatchQueue.main.async {
+            focusOnSlideGroup(group)
+        }
     }
 
     @ViewBuilder
     private func presentationFilmstrip(
         fileID: UUID,
+        courseName: String,
         deck: EduPresentationDeck,
         groups: [EduPresentationSlideGroup],
         slides: [EduPresentationComposedSlide]
@@ -978,49 +1024,53 @@ Extend learning with monthly photo bird identification
                     ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
                         let isSelected = group.id == selectedGroupID
                         ZStack(alignment: .topTrailing) {
-                            presentationSlideThumbnail(
-                                slide: slides.indices.contains(index) ? slides[index] : nil,
-                                fallbackGroup: group,
-                                displayIndex: index + 1,
-                                isSelected: isSelected
-                            )
-                            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .onTapGesture {
-                                selectedPresentationGroupIDByFile[fileID] = group.id
-                                focusOnSlideGroup(group)
+                            Button {
+                                selectPresentationGroup(fileID: fileID, group: group)
+                            } label: {
+                                presentationSlideThumbnail(
+                                    courseName: courseName,
+                                    slide: slides.indices.contains(index) ? slides[index] : nil,
+                                    fallbackGroup: group,
+                                    displayIndex: index + 1,
+                                    isSelected: isSelected
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    removeSlideGroupFromPresentation(fileID: fileID, group: group)
+                                } label: {
+                                    Label(
+                                        "Remove",
+                                        systemImage: "trash"
+                                    )
+                                }
                             }
 
                             HStack(spacing: 4) {
-                                Button {
+                                presentationMergeBadgeButton(
+                                    systemName: "arrow.left",
+                                    isEnabled: group.startIndex > 0
+                                ) {
                                     mergeSlideGroupBackward(
                                         fileID: fileID,
                                         group: group,
                                         slideCount: deck.orderedSlides.count
                                     )
-                                } label: {
-                                    Image(systemName: "arrow.left.circle.fill")
-                                        .font(.caption)
-                                        .foregroundStyle(group.startIndex > 0 ? Color.primary : Color.secondary.opacity(0.35))
                                 }
-                                .buttonStyle(.plain)
-                                .disabled(group.startIndex == 0)
 
-                                Button {
+                                presentationMergeBadgeButton(
+                                    systemName: "arrow.right",
+                                    isEnabled: group.endIndex < deck.orderedSlides.count - 1
+                                ) {
                                     mergeSlideGroupForward(
                                         fileID: fileID,
                                         group: group,
                                         slideCount: deck.orderedSlides.count
                                     )
-                                } label: {
-                                    Image(systemName: "arrow.right.circle.fill")
-                                        .font(.caption)
-                                        .foregroundStyle(group.endIndex < deck.orderedSlides.count - 1 ? Color.primary : Color.secondary.opacity(0.35))
                                 }
-                                .buttonStyle(.plain)
-                                .disabled(group.endIndex >= deck.orderedSlides.count - 1)
                             }
-                            .padding(.top, 6)
-                            .padding(.trailing, 6)
+                            .padding(7)
                         }
                     }
                 }
@@ -1040,6 +1090,7 @@ Extend learning with monthly photo bird identification
 
     @ViewBuilder
     private func presentationSlideThumbnail(
+        courseName: String,
         slide: EduPresentationComposedSlide?,
         fallbackGroup: EduPresentationSlideGroup,
         displayIndex: Int,
@@ -1053,7 +1104,7 @@ Extend learning with monthly photo bird identification
             if let slide {
                 PresentationSlideThumbnailHTMLView(
                     html: EduPresentationHTMLExporter.singleSlideHTML(
-                        courseName: title,
+                        courseName: courseName,
                         slide: slide,
                         isChinese: isChineseUI()
                     )
@@ -1075,16 +1126,17 @@ Extend learning with monthly photo bird identification
                 .background(Color.white)
             }
 
-            Text("P\(displayIndex)")
-                .font(.system(size: 8, weight: .semibold))
+            Text("\(displayIndex)")
+                .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.white)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
                 .background(
                     Capsule()
                         .fill(Color.black.opacity(0.75))
                 )
-                .padding(6)
+                .padding(7)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(width: thumbnailWidth, height: thumbnailHeight, alignment: .leading)
         .background(Color.white)
@@ -1094,6 +1146,27 @@ Extend learning with monthly photo bird identification
                 .stroke(isSelected ? Color.cyan : Color.black.opacity(0.1), lineWidth: isSelected ? 2.6 : 1)
         )
         .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+    }
+
+    @ViewBuilder
+    private func presentationMergeBadgeButton(
+        systemName: String,
+        isEnabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white.opacity(isEnabled ? 1 : 0.55))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule()
+                        .fill(Color.black.opacity(isEnabled ? 0.75 : 0.45))
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
     }
 
     private func editorExportActions(for file: GNodeWorkspaceFile) -> [NodeEditorExportAction] {

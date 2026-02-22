@@ -669,7 +669,7 @@ enum EduPlanning {
             "鸟巢搭建三步策略",
             "Three-step Nest Building Strategy",
             "第一步基础结构；第二步材料填充；第三步创意装饰。三步都需要在任务卡上记录。",
-            "Step 1 structure, Step 2 material filling, Step 3 creative decoration; each step is recorded on task cards.",
+            "Step 1 structure,\n Step 2 material filling,\n Step 3 creative decoration; each step is recorded on task cards.",
             level: levelApply
         )
         let kTaskCard = makeKnowledge(
