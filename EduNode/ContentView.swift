@@ -13,6 +13,9 @@ import UniformTypeIdentifiers
 import UIKit
 import WebKit
 #endif
+#if canImport(ImageIO)
+import ImageIO
+#endif
 
 @MainActor
 struct ContentView: View {
@@ -807,6 +810,21 @@ struct ContentView: View {
                     groupSignature: groupSignatureByID[groupID],
                     selectedOverlayID: state.selectedOverlayID,
                     vectorization: state.vectorization,
+                    nativeTextOverrides: Dictionary(
+                        uniqueKeysWithValues: state.nativeTextOverrides.map { key, value in
+                            (key.rawValue, value)
+                        }
+                    ),
+                    nativeContentOverrides: Dictionary(
+                        uniqueKeysWithValues: state.nativeContentOverrides.map { key, value in
+                            (key.rawValue, value)
+                        }
+                    ),
+                    nativeLayoutOverrides: Dictionary(
+                        uniqueKeysWithValues: state.nativeLayoutOverrides.map { key, value in
+                            (key.rawValue, value)
+                        }
+                    ),
                     overlays: state.overlays.map(presentationOverlayRecord(from:))
                 )
             )
@@ -823,6 +841,21 @@ struct ContentView: View {
                     groupSignature: groupSignatureByID[groupID],
                     selectedOverlayID: state.selectedOverlayID,
                     vectorization: state.vectorization,
+                    nativeTextOverrides: Dictionary(
+                        uniqueKeysWithValues: state.nativeTextOverrides.map { key, value in
+                            (key.rawValue, value)
+                        }
+                    ),
+                    nativeContentOverrides: Dictionary(
+                        uniqueKeysWithValues: state.nativeContentOverrides.map { key, value in
+                            (key.rawValue, value)
+                        }
+                    ),
+                    nativeLayoutOverrides: Dictionary(
+                        uniqueKeysWithValues: state.nativeLayoutOverrides.map { key, value in
+                            (key.rawValue, value)
+                        }
+                    ),
                     overlays: state.overlays.map(presentationOverlayRecord(from:))
                 )
             )
@@ -912,11 +945,18 @@ struct ContentView: View {
     private func presentationOverlayRecord(from overlay: PresentationSlideOverlay) -> PresentationPersistedOverlay {
         let persistedImageData = normalizedPersistentImageData(overlay.imageData)
         let persistedExtractedData = overlay.extractedImageData.map { normalizedPersistentImageData($0) }
+        let persistedCropSourceData = overlay.cropSourceImageData.map { normalizedPersistentImageData($0) }
+        let normalizedCrop = normalizedUnitCropRect(overlay.cumulativeCropRect)
         return PresentationPersistedOverlay(
             id: overlay.id,
             kindRaw: overlay.kind.rawValue,
             imageData: persistedImageData,
             extractedImageData: persistedExtractedData,
+            cropSourceImageData: persistedCropSourceData,
+            cropOriginX: clampedFiniteDouble(Double(normalizedCrop.origin.x), range: 0...1, fallback: 0),
+            cropOriginY: clampedFiniteDouble(Double(normalizedCrop.origin.y), range: 0...1, fallback: 0),
+            cropWidth: clampedFiniteDouble(Double(normalizedCrop.width), range: 0.02...1, fallback: 1),
+            cropHeight: clampedFiniteDouble(Double(normalizedCrop.height), range: 0.02...1, fallback: 1),
             vectorDocument: overlay.vectorDocument.map {
                 PresentationPersistedSVGDocument(
                     width: $0.width,
@@ -947,6 +987,7 @@ struct ContentView: View {
             iconColorHex: overlay.iconColorHex,
             iconHasBackground: overlay.iconHasBackground,
             iconBackgroundColorHex: overlay.iconBackgroundColorHex,
+            imageCornerRadiusRatio: clampedFiniteDouble(overlay.imageCornerRadiusRatio, range: 0...0.5, fallback: 0),
             vectorStrokeColorHex: overlay.vectorStrokeColorHex,
             vectorBackgroundColorHex: overlay.vectorBackgroundColorHex,
             vectorBackgroundVisible: overlay.vectorBackgroundVisible
@@ -1037,6 +1078,18 @@ struct ContentView: View {
         state.vectorization = group.vectorization
         state.pageStyle = pageStyle
         state.textTheme = textTheme
+        state.nativeTextOverrides = group.nativeTextOverrides.reduce(into: [:]) { partial, entry in
+            guard let element = PresentationNativeElement(rawValue: entry.key) else { return }
+            partial[element] = entry.value
+        }
+        state.nativeContentOverrides = group.nativeContentOverrides.reduce(into: [:]) { partial, entry in
+            guard let element = PresentationNativeElement(rawValue: entry.key) else { return }
+            partial[element] = entry.value
+        }
+        state.nativeLayoutOverrides = group.nativeLayoutOverrides.reduce(into: [:]) { partial, entry in
+            guard let element = PresentationNativeElement(rawValue: entry.key) else { return }
+            partial[element] = entry.value
+        }
         state.overlays = group.overlays.map { overlay in
             presentationOverlay(from: overlay)
         }
@@ -1296,6 +1349,13 @@ struct ContentView: View {
             kind: kind,
             imageData: record.imageData,
             extractedImageData: record.extractedImageData,
+            cropSourceImageData: record.cropSourceImageData,
+            cumulativeCropRect: CGRect(
+                x: record.cropOriginX,
+                y: record.cropOriginY,
+                width: record.cropWidth,
+                height: record.cropHeight
+            ),
             vectorDocument: record.vectorDocument.map {
                 SVGDocument(width: $0.width, height: $0.height, body: $0.body)
             },
@@ -1323,6 +1383,7 @@ struct ContentView: View {
             iconColorHex: record.iconColorHex,
             iconHasBackground: record.iconHasBackground,
             iconBackgroundColorHex: record.iconBackgroundColorHex,
+            imageCornerRadiusRatio: record.imageCornerRadiusRatio,
             vectorStrokeColorHex: record.vectorStrokeColorHex,
             vectorBackgroundColorHex: record.vectorBackgroundColorHex,
             vectorBackgroundVisible: record.vectorBackgroundVisible
@@ -1889,13 +1950,19 @@ Extend learning with monthly photo bird identification
             isChinese: isChineseUI()
         )
         let overlayHTMLBySlideID = presentationOverlayHTMLBySlideID(fileID: file.id, groups: groups)
+        let nativeTextOverridesBySlideID = presentationNativeTextOverridesBySlideID(fileID: file.id, groups: groups)
+        let nativeContentOverridesBySlideID = presentationNativeContentOverridesBySlideID(fileID: file.id, groups: groups)
+        let nativeLayoutOverridesBySlideID = presentationNativeLayoutOverridesBySlideID(fileID: file.id, groups: groups)
         presentationPreviewPayload = EduPresentationPreviewPayload(
             courseName: file.name,
             baseFileName: sanitizedExportBaseName(file.name),
             slides: slides,
             pageStyle: resolvedPresentationPageStyle(fileID: file.id),
             textTheme: resolvedPresentationTextTheme(fileID: file.id),
-            overlayHTMLBySlideID: overlayHTMLBySlideID
+            overlayHTMLBySlideID: overlayHTMLBySlideID,
+            nativeTextOverridesBySlideID: nativeTextOverridesBySlideID,
+            nativeContentOverridesBySlideID: nativeContentOverridesBySlideID,
+            nativeLayoutOverridesBySlideID: nativeLayoutOverridesBySlideID
         )
     }
 
@@ -1939,6 +2006,42 @@ Extend learning with monthly photo bird identification
             }
         }
         return result
+    }
+
+    private func presentationNativeTextOverridesBySlideID(
+        fileID: UUID,
+        groups: [EduPresentationSlideGroup]
+    ) -> [UUID: [PresentationNativeElement: PresentationTextStyleConfig]] {
+        groups.reduce(into: [:]) { partial, group in
+            let map = presentationStylingState(fileID: fileID, groupID: group.id).nativeTextOverrides
+            if !map.isEmpty {
+                partial[group.id] = map
+            }
+        }
+    }
+
+    private func presentationNativeContentOverridesBySlideID(
+        fileID: UUID,
+        groups: [EduPresentationSlideGroup]
+    ) -> [UUID: [PresentationNativeElement: String]] {
+        groups.reduce(into: [:]) { partial, group in
+            let map = presentationStylingState(fileID: fileID, groupID: group.id).nativeContentOverrides
+            if !map.isEmpty {
+                partial[group.id] = map
+            }
+        }
+    }
+
+    private func presentationNativeLayoutOverridesBySlideID(
+        fileID: UUID,
+        groups: [EduPresentationSlideGroup]
+    ) -> [UUID: [PresentationNativeElement: PresentationNativeLayoutOverride]] {
+        groups.reduce(into: [:]) { partial, group in
+            let map = presentationStylingState(fileID: fileID, groupID: group.id).nativeLayoutOverrides
+            if !map.isEmpty {
+                partial[group.id] = map
+            }
+        }
     }
 
     private func presentationOverlayLayerHTML(
@@ -2048,6 +2151,8 @@ Extend learning with monthly photo bird identification
         }
 
         let aspect = max(0.15, overlay.aspectRatio)
+        let imageCornerRatio = cssNumber(max(0.0, min(0.5, overlay.imageCornerRadiusRatio)))
+        let imageCornerRadiusExpr = "calc(min(\(cssNumber(widthPercent))%, \(cssNumber(heightPercent))%) * \(imageCornerRatio))"
         let imageStyle = [
             basePositionStyle,
             "width:\(cssNumber(widthPercent))%;",
@@ -2062,9 +2167,11 @@ Extend learning with monthly photo bird identification
             let backgroundDisplay = overlay.vectorBackgroundVisible ? "block" : "none"
             return """
             <div class="edunode-overlay vector" style="\(imageStyle)">
-              <div class="edunode-svg-bg" style="background:\(backgroundHex);display:\(backgroundDisplay);"></div>
-              <div class="edunode-svg-ink" style="filter:\(filter);">
-                <div class="edunode-svg-wrap">\(svg)</div>
+              <div class="edunode-image-frame" style="border-radius:\(imageCornerRadiusExpr);">
+                <div class="edunode-svg-bg" style="background:\(backgroundHex);display:\(backgroundDisplay);"></div>
+                <div class="edunode-svg-ink" style="filter:\(filter);">
+                  <div class="edunode-svg-wrap">\(svg)</div>
+                </div>
               </div>
             </div>
             """
@@ -2074,7 +2181,7 @@ Extend learning with monthly photo bird identification
         guard !imageData.isEmpty else { return nil }
         let dataURI = presentationImageDataURI(imageData)
         let pixelatedClass = overlay.selectedFilter == .pixelPainter ? " pixelated" : ""
-        return "<div class=\"edunode-overlay image\(pixelatedClass)\" style=\"\(imageStyle)\"><img style=\"filter:\(filter);\" src=\"\(dataURI)\" alt=\"Overlay Image\"/></div>"
+        return "<div class=\"edunode-overlay image\(pixelatedClass)\" style=\"\(imageStyle)\"><div class=\"edunode-image-frame\" style=\"border-radius:\(imageCornerRadiusExpr);\"><img style=\"filter:\(filter);\" src=\"\(dataURI)\" alt=\"Overlay Image\"/></div></div>"
     }
 
     private func cssNumber(_ value: CGFloat) -> String {
@@ -2295,12 +2402,13 @@ Extend learning with monthly photo bird identification
                     scale: scale
                 )
             },
-            onCropOverlay: { overlayID, cropRect in
+            onCropOverlay: { overlayID, cropRect, handle in
                 cropPresentationOverlay(
                     fileID: file.id,
                     groupID: selectedGroup.id,
                     overlayID: overlayID,
-                    normalizedRect: cropRect
+                    normalizedRect: cropRect,
+                    handleType: handle
                 )
             },
             onDeleteOverlay: { overlayID in
@@ -2342,6 +2450,14 @@ Extend learning with monthly photo bird identification
                     backgroundVisible: backgroundVisible
                 )
             },
+            onUpdateImageCornerRadius: { overlayID, cornerRadiusRatio in
+                updatePresentationImageCornerRadius(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    overlayID: overlayID,
+                    cornerRadiusRatio: cornerRadiusRatio
+                )
+            },
             onApplyImageStyleToAll: { overlayID in
                 applyPresentationImageStyleToAll(
                     fileID: file.id,
@@ -2378,6 +2494,36 @@ Extend learning with monthly photo bird identification
                     fileID: file.id,
                     groupID: selectedGroup.id,
                     textTheme: textTheme
+                )
+            },
+            onUpdateNativeTextOverride: { element, style in
+                updatePresentationNativeTextOverride(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    element: element,
+                    style: style
+                )
+            },
+            onUpdateNativeContentOverride: { element, content in
+                updatePresentationNativeContentOverride(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    element: element,
+                    content: content
+                )
+            },
+            onUpdateNativeLayoutOverride: { element, layout in
+                updatePresentationNativeLayoutOverride(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    element: element,
+                    layout: layout
+                )
+            },
+            onClearNativeTextOverrides: {
+                clearPresentationNativeTextOverrides(
+                    fileID: file.id,
+                    groupID: selectedGroup.id
                 )
             },
             onApplyTemplate: { template in
@@ -2435,6 +2581,9 @@ Extend learning with monthly photo bird identification
             state.redoStack.isEmpty &&
             state.selectedOverlayID == nil &&
             state.vectorization == .default &&
+            state.nativeTextOverrides.isEmpty &&
+            state.nativeContentOverrides.isEmpty &&
+            state.nativeLayoutOverrides.isEmpty &&
             state.pageStyle == .default &&
             state.textTheme == .default {
             byGroup.removeValue(forKey: groupID)
@@ -2453,8 +2602,21 @@ Extend learning with monthly photo bird identification
     }
 
     private func pushPresentationStylingUndo(fileID: UUID, groupID: UUID) {
+        let currentPageStyle = resolvedPresentationPageStyle(fileID: fileID)
+        let currentTextTheme = resolvedPresentationTextTheme(fileID: fileID)
         mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
-            state.undoStack.append(state.overlays)
+            state.undoStack.append(
+                PresentationStylingSnapshot(
+                    overlays: state.overlays,
+                    selectedOverlayID: state.selectedOverlayID,
+                    vectorization: state.vectorization,
+                    nativeTextOverrides: state.nativeTextOverrides,
+                    nativeContentOverrides: state.nativeContentOverrides,
+                    nativeLayoutOverrides: state.nativeLayoutOverrides,
+                    pageStyle: currentPageStyle,
+                    textTheme: currentTextTheme
+                )
+            )
             if state.undoStack.count > 40 {
                 state.undoStack.removeFirst(state.undoStack.count - 40)
             }
@@ -2466,6 +2628,9 @@ Extend learning with monthly photo bird identification
         let state = presentationStylingState(fileID: fileID, groupID: groupID)
         guard !state.overlays.isEmpty ||
                 state.vectorization != .default ||
+                !state.nativeTextOverrides.isEmpty ||
+                !state.nativeContentOverrides.isEmpty ||
+                !state.nativeLayoutOverrides.isEmpty ||
                 state.pageStyle != .default ||
                 state.textTheme != .default else { return }
         pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
@@ -2473,6 +2638,9 @@ Extend learning with monthly photo bird identification
             editableState.overlays.removeAll()
             editableState.selectedOverlayID = nil
             editableState.vectorization = .default
+            editableState.nativeTextOverrides.removeAll()
+            editableState.nativeContentOverrides.removeAll()
+            editableState.nativeLayoutOverrides.removeAll()
             editableState.pageStyle = .default
             editableState.textTheme = .default
         }
@@ -2482,33 +2650,81 @@ Extend learning with monthly photo bird identification
     }
 
     private func undoPresentationStyling(fileID: UUID, groupID: UUID) {
+        let currentPageStyle = resolvedPresentationPageStyle(fileID: fileID)
+        let currentTextTheme = resolvedPresentationTextTheme(fileID: fileID)
+        var restoredSnapshot: PresentationStylingSnapshot?
         mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
             guard let previous = state.undoStack.popLast() else { return }
-            state.redoStack.append(state.overlays)
+            state.redoStack.append(
+                PresentationStylingSnapshot(
+                    overlays: state.overlays,
+                    selectedOverlayID: state.selectedOverlayID,
+                    vectorization: state.vectorization,
+                    nativeTextOverrides: state.nativeTextOverrides,
+                    nativeContentOverrides: state.nativeContentOverrides,
+                    nativeLayoutOverrides: state.nativeLayoutOverrides,
+                    pageStyle: currentPageStyle,
+                    textTheme: currentTextTheme
+                )
+            )
             if state.redoStack.count > 40 {
                 state.redoStack.removeFirst(state.redoStack.count - 40)
             }
-            state.overlays = previous
+            state.overlays = previous.overlays
+            state.selectedOverlayID = previous.selectedOverlayID
+            state.vectorization = previous.vectorization
+            state.nativeTextOverrides = previous.nativeTextOverrides
+            state.nativeContentOverrides = previous.nativeContentOverrides
+            state.nativeLayoutOverrides = previous.nativeLayoutOverrides
             if let selectedID = state.selectedOverlayID,
                !state.overlays.contains(where: { $0.id == selectedID }) {
                 state.selectedOverlayID = state.overlays.last?.id
             }
+            restoredSnapshot = previous
+        }
+        if let restoredSnapshot {
+            presentationPageStyleByFile[fileID] = restoredSnapshot.pageStyle
+            presentationTextThemeByFile[fileID] = restoredSnapshot.textTheme
         }
         persistPresentationState(fileID: fileID)
     }
 
     private func redoPresentationStyling(fileID: UUID, groupID: UUID) {
+        let currentPageStyle = resolvedPresentationPageStyle(fileID: fileID)
+        let currentTextTheme = resolvedPresentationTextTheme(fileID: fileID)
+        var restoredSnapshot: PresentationStylingSnapshot?
         mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
             guard let next = state.redoStack.popLast() else { return }
-            state.undoStack.append(state.overlays)
+            state.undoStack.append(
+                PresentationStylingSnapshot(
+                    overlays: state.overlays,
+                    selectedOverlayID: state.selectedOverlayID,
+                    vectorization: state.vectorization,
+                    nativeTextOverrides: state.nativeTextOverrides,
+                    nativeContentOverrides: state.nativeContentOverrides,
+                    nativeLayoutOverrides: state.nativeLayoutOverrides,
+                    pageStyle: currentPageStyle,
+                    textTheme: currentTextTheme
+                )
+            )
             if state.undoStack.count > 40 {
                 state.undoStack.removeFirst(state.undoStack.count - 40)
             }
-            state.overlays = next
+            state.overlays = next.overlays
+            state.selectedOverlayID = next.selectedOverlayID
+            state.vectorization = next.vectorization
+            state.nativeTextOverrides = next.nativeTextOverrides
+            state.nativeContentOverrides = next.nativeContentOverrides
+            state.nativeLayoutOverrides = next.nativeLayoutOverrides
             if let selectedID = state.selectedOverlayID,
                !state.overlays.contains(where: { $0.id == selectedID }) {
                 state.selectedOverlayID = state.overlays.last?.id
             }
+            restoredSnapshot = next
+        }
+        if let restoredSnapshot {
+            presentationPageStyleByFile[fileID] = restoredSnapshot.pageStyle
+            presentationTextThemeByFile[fileID] = restoredSnapshot.textTheme
         }
         persistPresentationState(fileID: fileID)
     }
@@ -2693,7 +2909,8 @@ Extend learning with monthly photo bird identification
         fileID: UUID,
         groupID: UUID,
         overlayID: UUID,
-        normalizedRect: CGRect
+        normalizedRect: CGRect,
+        handleType: String? = nil
     ) {
         let state = presentationStylingState(fileID: fileID, groupID: groupID)
         guard let overlay = state.overlays.first(where: { $0.id == overlayID }),
@@ -2701,15 +2918,102 @@ Extend learning with monthly photo bird identification
             return
         }
 
-        let rect = normalizedCropRect(normalizedRect)
-        guard rect.width > 0.02, rect.height > 0.02 else { return }
+        let relativeRect = normalizedRect
+        let currentCropRect = normalizedUnitCropRect(overlay.cumulativeCropRect)
+        let nextCropRect = composedCropRect(current: currentCropRect, relative: relativeRect)
+        guard nextCropRect.width > 0.02, nextCropRect.height > 0.02 else { return }
 
-        let sourceData = overlay.displayImageData
-        guard let croppedData = cropImageData(sourceData, normalizedRect: rect) else { return }
+        let cropSourceData = overlay.cropSourceImageData ?? overlay.displayImageData
+        guard let croppedData = cropImageData(cropSourceData, normalizedRect: nextCropRect) else { return }
         let persistedCroppedData = normalizedPersistentImageData(croppedData)
+        let persistedCropSourceData = normalizedPersistentImageData(cropSourceData)
         let wasVectorized = overlay.vectorDocument != nil
         let preservedFilter = overlay.selectedFilter
         let vectorizationOptions = state.vectorization.svgOptions
+        let currentWidth = max(0.08, min(0.92, overlay.normalizedWidth))
+        let currentHeight = max(0.08, min(0.92, overlay.normalizedHeight))
+        let slideAspect = max(0.75, resolvedPresentationPageStyle(fileID: fileID).aspectPreset.ratio)
+        let oldLeft = overlay.center.x - currentWidth * 0.5
+        let oldRight = overlay.center.x + currentWidth * 0.5
+        let oldTop = overlay.center.y - currentHeight * 0.5
+        let oldBottom = overlay.center.y + currentHeight * 0.5
+
+        let nextAspect = presentationOverlayAspectRatio(from: persistedCroppedData)
+        var nextWidth = currentWidth
+        var nextHeight = currentHeight
+        var anchoredCenter = overlay.center
+        let normalizedHandle = handleType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let analysisRect = normalizedCropRect(relativeRect)
+        let epsilon = 0.0001
+        let nearFullWidth = analysisRect.origin.x <= epsilon && abs(analysisRect.width - 1) <= 0.002
+        let nearFullHeight = analysisRect.origin.y <= epsilon && abs(analysisRect.height - 1) <= 0.002
+        let resolvedHandle: String = {
+            guard !normalizedHandle.isEmpty else {
+                // Backward compatibility with legacy crop payloads that do not include handle info.
+                if analysisRect.origin.x > epsilon && nearFullHeight {
+                    return "crop-left"
+                }
+                if analysisRect.width < 0.999 && analysisRect.origin.x <= epsilon && nearFullHeight {
+                    return "crop-right"
+                }
+                if analysisRect.origin.y > epsilon && nearFullWidth {
+                    return "crop-top"
+                }
+                if analysisRect.height < 0.999 && analysisRect.origin.y <= epsilon && nearFullWidth {
+                    return "crop-bottom"
+                }
+                return ""
+            }
+            return normalizedHandle
+        }()
+
+        if resolvedHandle == "crop-left" || resolvedHandle == "crop-right" {
+            let estimatedWidth = currentHeight * nextAspect / max(0.75, slideAspect)
+            nextWidth = max(0.08, min(0.92, estimatedWidth))
+            nextHeight = currentHeight
+
+            if resolvedHandle == "crop-left" {
+                anchoredCenter.x = oldRight - nextWidth * 0.5
+            } else {
+                anchoredCenter.x = oldLeft + nextWidth * 0.5
+            }
+        } else if resolvedHandle == "crop-top" || resolvedHandle == "crop-bottom" {
+            nextWidth = currentWidth
+            nextHeight = presentationImageNormalizedHeight(
+                fileID: fileID,
+                normalizedWidth: nextWidth,
+                aspectRatio: nextAspect
+            )
+
+            if resolvedHandle == "crop-bottom" {
+                anchoredCenter.y = oldTop + nextHeight * 0.5
+            } else {
+                anchoredCenter.y = oldBottom - nextHeight * 0.5
+            }
+        } else {
+            // Generic crop (e.g. panel input) keeps width stable and recomputes height.
+            nextWidth = currentWidth
+            nextHeight = presentationImageNormalizedHeight(
+                fileID: fileID,
+                normalizedWidth: nextWidth,
+                aspectRatio: nextAspect
+            )
+        }
+
+        let minCenterX = max(0.04, nextWidth * 0.5)
+        let maxCenterX = min(0.96, 1.0 - nextWidth * 0.5)
+        if minCenterX <= maxCenterX {
+            anchoredCenter.x = max(minCenterX, min(maxCenterX, anchoredCenter.x))
+        } else {
+            anchoredCenter.x = max(0.04, min(0.96, anchoredCenter.x))
+        }
+        let minCenterY = max(0.08, nextHeight * 0.5)
+        let maxCenterY = min(0.92, 1.0 - nextHeight * 0.5)
+        if minCenterY <= maxCenterY {
+            anchoredCenter.y = max(minCenterY, min(maxCenterY, anchoredCenter.y))
+        } else {
+            anchoredCenter.y = max(0.08, min(0.92, anchoredCenter.y))
+        }
 
         pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
         updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
@@ -2718,12 +3022,12 @@ Extend learning with monthly photo bird identification
             } else {
                 editable.imageData = persistedCroppedData
             }
-            editable.aspectRatio = presentationOverlayAspectRatio(from: persistedCroppedData)
-            editable.normalizedHeight = presentationImageNormalizedHeight(
-                fileID: fileID,
-                normalizedWidth: editable.normalizedWidth,
-                aspectRatio: editable.aspectRatio
-            )
+            editable.cropSourceImageData = persistedCropSourceData
+            editable.cumulativeCropRect = nextCropRect
+            editable.center = anchoredCenter
+            editable.normalizedWidth = nextWidth
+            editable.aspectRatio = nextAspect
+            editable.normalizedHeight = nextHeight
             if wasVectorized {
                 editable.selectedFilter = preservedFilter
             } else {
@@ -2827,6 +3131,27 @@ Extend learning with monthly photo bird identification
         persistPresentationState(fileID: fileID)
     }
 
+    private func updatePresentationImageCornerRadius(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID,
+        cornerRadiusRatio: Double
+    ) {
+        let clamped = max(0, min(0.5, cornerRadiusRatio))
+        let state = presentationStylingState(fileID: fileID, groupID: groupID)
+        guard let overlay = state.overlays.first(where: { $0.id == overlayID }),
+              overlay.isImage else {
+            return
+        }
+        guard abs(overlay.imageCornerRadiusRatio - clamped) > 0.0005 else { return }
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+            guard editable.isImage else { return }
+            editable.imageCornerRadiusRatio = clamped
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
     private func applyPresentationImageStyleToAll(
         fileID: UUID,
         sourceGroupID: UUID,
@@ -2844,6 +3169,7 @@ Extend learning with monthly photo bird identification
         let sourceStroke = sourceOverlay.vectorStrokeColorHex
         let sourceBackground = sourceOverlay.vectorBackgroundColorHex
         let sourceBackgroundVisible = sourceOverlay.vectorBackgroundVisible
+        let sourceCornerRadius = sourceOverlay.imageCornerRadiusRatio
         let sourceVectorization = sourceState.vectorization
 
         var pendingRevectorization: [(groupID: UUID, overlayID: UUID, sourceData: Data)] = []
@@ -2861,6 +3187,7 @@ Extend learning with monthly photo bird identification
                 state.overlays[index].vectorStrokeColorHex = sourceStroke
                 state.overlays[index].vectorBackgroundColorHex = sourceBackground
                 state.overlays[index].vectorBackgroundVisible = sourceBackgroundVisible
+                state.overlays[index].imageCornerRadiusRatio = sourceCornerRadius
 
                 if state.overlays[index].vectorDocument == nil {
                     pendingRevectorization.append((
@@ -2933,7 +3260,9 @@ Extend learning with monthly photo bird identification
         groupID: UUID,
         pageStyle: PresentationPageStyle
     ) {
-        _ = groupID
+        let current = resolvedPresentationPageStyle(fileID: fileID)
+        guard current != pageStyle else { return }
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
         presentationPageStyleByFile[fileID] = pageStyle
         presentationStylingTouchedFileIDs.insert(fileID)
         persistPresentationState(fileID: fileID)
@@ -2944,9 +3273,92 @@ Extend learning with monthly photo bird identification
         groupID: UUID,
         textTheme: PresentationTextTheme
     ) {
-        _ = groupID
+        let current = resolvedPresentationTextTheme(fileID: fileID)
+        guard current != textTheme else { return }
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
         presentationTextThemeByFile[fileID] = textTheme
         presentationStylingTouchedFileIDs.insert(fileID)
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func updatePresentationNativeTextOverride(
+        fileID: UUID,
+        groupID: UUID,
+        element: PresentationNativeElement,
+        style: PresentationTextStyleConfig?
+    ) {
+        let currentState = presentationStylingState(fileID: fileID, groupID: groupID)
+        let currentValue = currentState.nativeTextOverrides[element]
+        if currentValue == style { return }
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
+            if let style {
+                state.nativeTextOverrides[element] = style
+            } else {
+                state.nativeTextOverrides.removeValue(forKey: element)
+            }
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func updatePresentationNativeContentOverride(
+        fileID: UUID,
+        groupID: UUID,
+        element: PresentationNativeElement,
+        content: String?
+    ) {
+        let normalized: String? = content?.replacingOccurrences(of: "\r\n", with: "\n")
+        let currentState = presentationStylingState(fileID: fileID, groupID: groupID)
+        let currentValue = currentState.nativeContentOverrides[element]
+        if currentValue == normalized { return }
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
+            if let normalized {
+                state.nativeContentOverrides[element] = normalized
+            } else {
+                state.nativeContentOverrides.removeValue(forKey: element)
+            }
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func updatePresentationNativeLayoutOverride(
+        fileID: UUID,
+        groupID: UUID,
+        element: PresentationNativeElement,
+        layout: PresentationNativeLayoutOverride?
+    ) {
+        let clampedLayout = layout?.clamped()
+        let nextValue: PresentationNativeLayoutOverride? = {
+            if let clampedLayout, !clampedLayout.isZero {
+                return clampedLayout
+            }
+            return nil
+        }()
+        let currentState = presentationStylingState(fileID: fileID, groupID: groupID)
+        let currentValue = currentState.nativeLayoutOverrides[element]
+        if currentValue == nextValue { return }
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
+            if let nextValue {
+                state.nativeLayoutOverrides[element] = nextValue
+            } else {
+                state.nativeLayoutOverrides.removeValue(forKey: element)
+            }
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func clearPresentationNativeTextOverrides(
+        fileID: UUID,
+        groupID: UUID
+    ) {
+        let currentState = presentationStylingState(fileID: fileID, groupID: groupID)
+        guard !currentState.nativeTextOverrides.isEmpty else { return }
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
+            state.nativeTextOverrides.removeAll()
+        }
         persistPresentationState(fileID: fileID)
     }
 
@@ -2955,12 +3367,16 @@ Extend learning with monthly photo bird identification
         groupID: UUID,
         template: PresentationThemeTemplate
     ) {
-        _ = groupID
         let aspect = resolvedPresentationPageStyle(fileID: fileID).aspectPreset
         var nextStyle = template.pageStyle
         nextStyle.aspectPreset = aspect
+        let nextTextTheme = template.textTheme
+        let currentStyle = resolvedPresentationPageStyle(fileID: fileID)
+        let currentTextTheme = resolvedPresentationTextTheme(fileID: fileID)
+        guard currentStyle != nextStyle || currentTextTheme != nextTextTheme else { return }
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
         presentationPageStyleByFile[fileID] = nextStyle
-        presentationTextThemeByFile[fileID] = template.textTheme
+        presentationTextThemeByFile[fileID] = nextTextTheme
         presentationStylingTouchedFileIDs.insert(fileID)
         persistPresentationState(fileID: fileID)
     }
@@ -3025,6 +3441,8 @@ Extend learning with monthly photo bird identification
                     if let extractedImageData {
                         let persistedExtractedData = normalizedPersistentImageData(extractedImageData)
                         editable.extractedImageData = persistedExtractedData
+                        editable.cropSourceImageData = nil
+                        editable.cumulativeCropRect = CGRect(x: 0, y: 0, width: 1, height: 1)
                         editable.aspectRatio = presentationOverlayAspectRatio(from: persistedExtractedData)
                         editable.normalizedHeight = presentationImageNormalizedHeight(
                             fileID: fileID,
@@ -3104,6 +3522,9 @@ Extend learning with monthly photo bird identification
     }
 
     private func presentationOverlayAspectRatio(from imageData: Data) -> CGFloat {
+        if let preciseAspect = presentationDisplayAspectRatio(from: imageData) {
+            return preciseAspect
+        }
         #if canImport(UIKit)
         if let image = UIImage(data: imageData),
            image.size.height > 0 {
@@ -3111,6 +3532,36 @@ Extend learning with monthly photo bird identification
         }
         #endif
         return 1
+    }
+
+    private func presentationDisplayAspectRatio(from imageData: Data) -> CGFloat? {
+        #if canImport(ImageIO)
+        guard let source = CGImageSourceCreateWithData(imageData as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
+            return nil
+        }
+        let rawWidth = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue
+            ?? (properties[kCGImagePropertyPixelWidth] as? Double)
+        let rawHeight = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue
+            ?? (properties[kCGImagePropertyPixelHeight] as? Double)
+        guard let rawWidth, let rawHeight, rawWidth > 0, rawHeight > 0 else {
+            return nil
+        }
+
+        var width = CGFloat(rawWidth)
+        var height = CGFloat(rawHeight)
+        let orientationValue = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue
+            ?? (properties[kCGImagePropertyOrientation] as? Int)
+            ?? 1
+        if orientationValue == 5 || orientationValue == 6 || orientationValue == 7 || orientationValue == 8 {
+            swap(&width, &height)
+        }
+        guard height > 0 else { return nil }
+        return max(0.15, width / height)
+        #else
+        _ = imageData
+        return nil
+        #endif
     }
 
     private func presentationImageNormalizedHeight(
@@ -3131,13 +3582,47 @@ Extend learning with monthly photo bird identification
     }
 
     private func normalizedCropRect(_ rect: CGRect) -> CGRect {
-        let x = max(0, min(0.98, rect.origin.x))
-        let y = max(0, min(0.98, rect.origin.y))
-        let maxW = max(0.02, 1 - x)
-        let maxH = max(0.02, 1 - y)
-        let w = max(0.02, min(maxW, rect.width))
-        let h = max(0.02, min(maxH, rect.height))
-        return CGRect(x: x, y: y, width: w, height: h)
+        normalizedUnitCropRect(rect)
+    }
+
+    private func normalizedUnitCropRect(_ rect: CGRect) -> CGRect {
+        let minSize: CGFloat = 0.02
+        var x = rect.origin.x
+        var y = rect.origin.y
+        var width = rect.size.width
+        var height = rect.size.height
+
+        if x < 0 {
+            width += x
+            x = 0
+        }
+        if y < 0 {
+            height += y
+            y = 0
+        }
+        if x + width > 1 {
+            width = 1 - x
+        }
+        if y + height > 1 {
+            height = 1 - y
+        }
+
+        width = max(minSize, min(1, width))
+        height = max(minSize, min(1, height))
+        x = min(max(0, x), 1 - width)
+        y = min(max(0, y), 1 - height)
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    private func composedCropRect(current: CGRect, relative: CGRect) -> CGRect {
+        let currentRect = normalizedUnitCropRect(current)
+        let composed = CGRect(
+            x: currentRect.origin.x + relative.origin.x * currentRect.width,
+            y: currentRect.origin.y + relative.origin.y * currentRect.height,
+            width: currentRect.width * relative.width,
+            height: currentRect.height * relative.height
+        )
+        return normalizedUnitCropRect(composed)
     }
 
     private func cropImageData(_ imageData: Data, normalizedRect: CGRect) -> Data? {
@@ -3281,6 +3766,9 @@ Extend learning with monthly photo bird identification
                                     courseName: courseName,
                                     slide: slides.indices.contains(index) ? slides[index] : nil,
                                     overlays: overlays,
+                                    nativeTextOverrides: styleState.nativeTextOverrides,
+                                    nativeContentOverrides: styleState.nativeContentOverrides,
+                                    nativeLayoutOverrides: styleState.nativeLayoutOverrides,
                                     pageStyle: pageStyle,
                                     textTheme: textTheme,
                                     fallbackGroup: group,
@@ -3387,6 +3875,9 @@ Extend learning with monthly photo bird identification
         courseName: String,
         slide: EduPresentationComposedSlide?,
         overlays: [PresentationSlideOverlay],
+        nativeTextOverrides: [PresentationNativeElement: PresentationTextStyleConfig],
+        nativeContentOverrides: [PresentationNativeElement: String],
+        nativeLayoutOverrides: [PresentationNativeElement: PresentationNativeLayoutOverride],
         pageStyle: PresentationPageStyle,
         textTheme: PresentationTextTheme,
         fallbackGroup: EduPresentationSlideGroup,
@@ -3405,6 +3896,9 @@ Extend learning with monthly photo bird identification
                         courseName: courseName,
                         slide: slide,
                         overlays: overlays,
+                        nativeTextOverrides: nativeTextOverrides,
+                        nativeContentOverrides: nativeContentOverrides,
+                        nativeLayoutOverrides: nativeLayoutOverrides,
                         pageStyle: pageStyle,
                         textTheme: textTheme
                     ),
@@ -3456,6 +3950,9 @@ Extend learning with monthly photo bird identification
         courseName: String,
         slide: EduPresentationComposedSlide,
         overlays: [PresentationSlideOverlay],
+        nativeTextOverrides: [PresentationNativeElement: PresentationTextStyleConfig],
+        nativeContentOverrides: [PresentationNativeElement: String],
+        nativeLayoutOverrides: [PresentationNativeElement: PresentationNativeLayoutOverride],
         pageStyle: PresentationPageStyle,
         textTheme: PresentationTextTheme
     ) -> String {
@@ -3464,7 +3961,10 @@ Extend learning with monthly photo bird identification
             slide: slide,
             isChinese: isChineseUI(),
             pageStyle: pageStyle,
-            textTheme: textTheme
+            textTheme: textTheme,
+            nativeTextOverrides: nativeTextOverrides,
+            nativeContentOverrides: nativeContentOverrides,
+            nativeLayoutOverrides: nativeLayoutOverrides
         )
         let slideAspect = max(0.75, pageStyle.aspectPreset.ratio)
         let overlayNodesHTML = presentationOverlayLayerHTML(
@@ -3669,7 +4169,53 @@ private struct PresentationPersistedGroupState: Codable {
     var groupSignature: String?
     var selectedOverlayID: UUID?
     var vectorization: PresentationVectorizationSettings
+    var nativeTextOverrides: [String: PresentationTextStyleConfig]
+    var nativeContentOverrides: [String: String]
+    var nativeLayoutOverrides: [String: PresentationNativeLayoutOverride]
     var overlays: [PresentationPersistedOverlay]
+
+    init(
+        groupID: UUID,
+        groupSignature: String?,
+        selectedOverlayID: UUID?,
+        vectorization: PresentationVectorizationSettings,
+        nativeTextOverrides: [String: PresentationTextStyleConfig] = [:],
+        nativeContentOverrides: [String: String] = [:],
+        nativeLayoutOverrides: [String: PresentationNativeLayoutOverride] = [:],
+        overlays: [PresentationPersistedOverlay]
+    ) {
+        self.groupID = groupID
+        self.groupSignature = groupSignature
+        self.selectedOverlayID = selectedOverlayID
+        self.vectorization = vectorization
+        self.nativeTextOverrides = nativeTextOverrides
+        self.nativeContentOverrides = nativeContentOverrides
+        self.nativeLayoutOverrides = nativeLayoutOverrides
+        self.overlays = overlays
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case groupID
+        case groupSignature
+        case selectedOverlayID
+        case vectorization
+        case nativeTextOverrides
+        case nativeContentOverrides
+        case nativeLayoutOverrides
+        case overlays
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        groupID = try container.decode(UUID.self, forKey: .groupID)
+        groupSignature = try? container.decode(String.self, forKey: .groupSignature)
+        selectedOverlayID = try? container.decode(UUID.self, forKey: .selectedOverlayID)
+        vectorization = (try? container.decode(PresentationVectorizationSettings.self, forKey: .vectorization)) ?? .default
+        nativeTextOverrides = (try? container.decode([String: PresentationTextStyleConfig].self, forKey: .nativeTextOverrides)) ?? [:]
+        nativeContentOverrides = (try? container.decode([String: String].self, forKey: .nativeContentOverrides)) ?? [:]
+        nativeLayoutOverrides = (try? container.decode([String: PresentationNativeLayoutOverride].self, forKey: .nativeLayoutOverrides)) ?? [:]
+        overlays = (try? container.decode([PresentationPersistedOverlay].self, forKey: .overlays)) ?? []
+    }
 }
 
 private struct PresentationPersistedOverlay: Codable {
@@ -3677,6 +4223,11 @@ private struct PresentationPersistedOverlay: Codable {
     var kindRaw: String
     var imageData: Data
     var extractedImageData: Data?
+    var cropSourceImageData: Data?
+    var cropOriginX: Double
+    var cropOriginY: Double
+    var cropWidth: Double
+    var cropHeight: Double
     var vectorDocument: PresentationPersistedSVGDocument?
     var selectedFilterRaw: String
     var stylization: PresentationPersistedStylization
@@ -3701,6 +4252,7 @@ private struct PresentationPersistedOverlay: Codable {
     var iconColorHex: String
     var iconHasBackground: Bool
     var iconBackgroundColorHex: String
+    var imageCornerRadiusRatio: Double
     var vectorStrokeColorHex: String
     var vectorBackgroundColorHex: String
     var vectorBackgroundVisible: Bool
@@ -3710,6 +4262,11 @@ private struct PresentationPersistedOverlay: Codable {
         kindRaw: String,
         imageData: Data,
         extractedImageData: Data?,
+        cropSourceImageData: Data?,
+        cropOriginX: Double,
+        cropOriginY: Double,
+        cropWidth: Double,
+        cropHeight: Double,
         vectorDocument: PresentationPersistedSVGDocument?,
         selectedFilterRaw: String,
         stylization: PresentationPersistedStylization,
@@ -3734,6 +4291,7 @@ private struct PresentationPersistedOverlay: Codable {
         iconColorHex: String,
         iconHasBackground: Bool,
         iconBackgroundColorHex: String,
+        imageCornerRadiusRatio: Double,
         vectorStrokeColorHex: String,
         vectorBackgroundColorHex: String,
         vectorBackgroundVisible: Bool
@@ -3742,6 +4300,11 @@ private struct PresentationPersistedOverlay: Codable {
         self.kindRaw = kindRaw
         self.imageData = imageData
         self.extractedImageData = extractedImageData
+        self.cropSourceImageData = cropSourceImageData
+        self.cropOriginX = cropOriginX
+        self.cropOriginY = cropOriginY
+        self.cropWidth = cropWidth
+        self.cropHeight = cropHeight
         self.vectorDocument = vectorDocument
         self.selectedFilterRaw = selectedFilterRaw
         self.stylization = stylization
@@ -3766,17 +4329,19 @@ private struct PresentationPersistedOverlay: Codable {
         self.iconColorHex = iconColorHex
         self.iconHasBackground = iconHasBackground
         self.iconBackgroundColorHex = iconBackgroundColorHex
+        self.imageCornerRadiusRatio = imageCornerRadiusRatio
         self.vectorStrokeColorHex = vectorStrokeColorHex
         self.vectorBackgroundColorHex = vectorBackgroundColorHex
         self.vectorBackgroundVisible = vectorBackgroundVisible
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kindRaw, imageData, extractedImageData, vectorDocument, selectedFilterRaw, stylization
+        case id, kindRaw, imageData, extractedImageData, cropSourceImageData, cropOriginX, cropOriginY, cropWidth, cropHeight, vectorDocument, selectedFilterRaw, stylization
         case centerX, centerY, normalizedWidth, normalizedHeight, aspectRatio, rotationDegrees
         case textContent, textStylePreset, textColorHex, textAlignment, textFontSize, textWeightValue
         case shapeFillColorHex, shapeBorderColorHex, shapeBorderWidth, shapeCornerRadiusRatio, shapeStyleRaw
         case iconSystemName, iconColorHex, iconHasBackground, iconBackgroundColorHex
+        case imageCornerRadiusRatio
         case vectorStrokeColorHex, vectorBackgroundColorHex, vectorBackgroundVisible
     }
 
@@ -3786,6 +4351,11 @@ private struct PresentationPersistedOverlay: Codable {
         kindRaw = try container.decode(String.self, forKey: .kindRaw)
         imageData = (try? container.decode(Data.self, forKey: .imageData)) ?? Data()
         extractedImageData = try? container.decode(Data.self, forKey: .extractedImageData)
+        cropSourceImageData = try? container.decode(Data.self, forKey: .cropSourceImageData)
+        cropOriginX = (try? container.decode(Double.self, forKey: .cropOriginX)) ?? 0
+        cropOriginY = (try? container.decode(Double.self, forKey: .cropOriginY)) ?? 0
+        cropWidth = (try? container.decode(Double.self, forKey: .cropWidth)) ?? 1
+        cropHeight = (try? container.decode(Double.self, forKey: .cropHeight)) ?? 1
         vectorDocument = try? container.decode(PresentationPersistedSVGDocument.self, forKey: .vectorDocument)
         selectedFilterRaw = (try? container.decode(String.self, forKey: .selectedFilterRaw)) ?? SVGFilterStyle.original.rawValue
         stylization = (try? container.decode(PresentationPersistedStylization.self, forKey: .stylization))
@@ -3811,6 +4381,7 @@ private struct PresentationPersistedOverlay: Codable {
         iconColorHex = (try? container.decode(String.self, forKey: .iconColorHex)) ?? "#111111"
         iconHasBackground = (try? container.decode(Bool.self, forKey: .iconHasBackground)) ?? true
         iconBackgroundColorHex = (try? container.decode(String.self, forKey: .iconBackgroundColorHex)) ?? "#FFFFFF"
+        imageCornerRadiusRatio = (try? container.decode(Double.self, forKey: .imageCornerRadiusRatio)) ?? 0
         vectorStrokeColorHex = (try? container.decode(String.self, forKey: .vectorStrokeColorHex)) ?? "#0F172A"
         vectorBackgroundColorHex = (try? container.decode(String.self, forKey: .vectorBackgroundColorHex)) ?? "#FFFFFF"
         vectorBackgroundVisible = (try? container.decode(Bool.self, forKey: .vectorBackgroundVisible)) ?? false

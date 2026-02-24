@@ -16,6 +16,9 @@ struct EduPresentationPreviewPayload: Identifiable {
     let pageStyle: PresentationPageStyle
     let textTheme: PresentationTextTheme
     let overlayHTMLBySlideID: [UUID: String]
+    let nativeTextOverridesBySlideID: [UUID: [PresentationNativeElement: PresentationTextStyleConfig]]
+    let nativeContentOverridesBySlideID: [UUID: [PresentationNativeElement: String]]
+    let nativeLayoutOverridesBySlideID: [UUID: [PresentationNativeElement: PresentationNativeLayoutOverride]]
 }
 
 struct EduPresentationPreviewSheet: View {
@@ -42,7 +45,10 @@ struct EduPresentationPreviewSheet: View {
             isChinese: isChinese,
             pageStyle: payload.pageStyle,
             textTheme: payload.textTheme,
-            overlayHTMLBySlideID: payload.overlayHTMLBySlideID
+            overlayHTMLBySlideID: payload.overlayHTMLBySlideID,
+            nativeTextOverridesBySlideID: payload.nativeTextOverridesBySlideID,
+            nativeContentOverridesBySlideID: payload.nativeContentOverridesBySlideID,
+            nativeLayoutOverridesBySlideID: payload.nativeLayoutOverridesBySlideID
         )
     }
 
@@ -178,13 +184,34 @@ struct EduPresentationPreviewSheet: View {
             } else {
                 overlayHTML = [:]
             }
+            let nativeTextOverrides: [UUID: [PresentationNativeElement: PresentationTextStyleConfig]] = {
+                if let map = payload.nativeTextOverridesBySlideID[slide.id], !map.isEmpty {
+                    return [slide.id: map]
+                }
+                return [:]
+            }()
+            let nativeContentOverrides: [UUID: [PresentationNativeElement: String]] = {
+                if let map = payload.nativeContentOverridesBySlideID[slide.id], !map.isEmpty {
+                    return [slide.id: map]
+                }
+                return [:]
+            }()
+            let nativeLayoutOverrides: [UUID: [PresentationNativeElement: PresentationNativeLayoutOverride]] = {
+                if let map = payload.nativeLayoutOverridesBySlideID[slide.id], !map.isEmpty {
+                    return [slide.id: map]
+                }
+                return [:]
+            }()
             let singleSlideHTML = themedPresentationDeckHTML(
                 courseName: payload.courseName,
                 slides: [slide],
                 isChinese: isChinese,
                 pageStyle: payload.pageStyle,
                 textTheme: payload.textTheme,
-                overlayHTMLBySlideID: overlayHTML
+                overlayHTMLBySlideID: overlayHTML,
+                nativeTextOverridesBySlideID: nativeTextOverrides,
+                nativeContentOverridesBySlideID: nativeContentOverrides,
+                nativeLayoutOverridesBySlideID: nativeLayoutOverrides
             )
             let pdfHTML = singleSlidePDFHTML(from: singleSlideHTML)
             guard let pagePDF = await EduPresentationHTMLExporter.pdfDataAsync(

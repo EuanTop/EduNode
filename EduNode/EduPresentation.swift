@@ -767,7 +767,7 @@ enum EduPresentationHTMLExporter {
                     ?? ""
 
                 return """
-                <section class="slide\(interactive && index == 0 ? " active" : "")">
+                <section class="slide\(interactive && index == 0 ? " active" : "")" data-slide-id="\(slide.id.uuidString)">
                   <article class="slide-sheet">
                     <header class="hero">
                       <div class="hero-row">
@@ -937,15 +937,20 @@ enum EduPresentationHTMLExporter {
               display: flex;
               align-items: center;
               justify-content: center;
-              overflow: hidden;
+              overflow: visible;
               pointer-events: none;
             }
+            .edunode-image-frame,
             .edunode-overlay.image img,
             .edunode-overlay.vector .edunode-svg-wrap,
             .edunode-overlay.vector .edunode-svg-bg,
             .edunode-overlay.vector .edunode-svg-ink {
               width: 100%;
               height: 100%;
+            }
+            .edunode-image-frame {
+              position: relative;
+              overflow: hidden;
             }
             .edunode-overlay.image img {
               object-fit: contain;
@@ -969,8 +974,6 @@ enum EduPresentationHTMLExporter {
             }
             .edunode-overlay.vector .edunode-svg-bg {
               z-index: 0;
-              border-radius: 0.62cqw;
-              overflow: hidden;
             }
             .edunode-overlay.vector .edunode-svg-ink {
               z-index: 1;

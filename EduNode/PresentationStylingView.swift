@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import Combine
 #if canImport(UIKit) && canImport(WebKit)
 import UIKit
 import WebKit
@@ -15,6 +16,54 @@ import CoreImage
 #endif
 #if canImport(ImageIO)
 import ImageIO
+#endif
+
+private struct PresentationKeyboardAdaptive: ViewModifier {
+    @State private var keyboardHeight: CGFloat = 0
+    private var keyboardLift: CGFloat {
+        let raw = max(0, keyboardHeight * 0.45)
+        return min(200, raw)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .offset(y: -keyboardLift)
+            .animation(.easeOut(duration: 0.22), value: keyboardLift)
+            .onReceive(Publishers.edunodeKeyboardHeight) { height in
+                keyboardHeight = max(0, height)
+            }
+    }
+}
+
+#if canImport(UIKit)
+private extension Publishers {
+    static var edunodeKeyboardHeight: AnyPublisher<CGFloat, Never> {
+        let willShow = NotificationCenter.default.publisher(
+            for: UIResponder.keyboardWillShowNotification
+        )
+        .map { $0.edunodeKeyboardHeight }
+
+        let willHide = NotificationCenter.default.publisher(
+            for: UIResponder.keyboardWillHideNotification
+        )
+        .map { _ in CGFloat(0) }
+
+        return MergeMany(willShow, willHide)
+            .eraseToAnyPublisher()
+    }
+}
+
+private extension Notification {
+    var edunodeKeyboardHeight: CGFloat {
+        (userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect)?.height ?? 0
+    }
+}
+#else
+private extension Publishers {
+    static var edunodeKeyboardHeight: AnyPublisher<CGFloat, Never> {
+        Just(0).eraseToAnyPublisher()
+    }
+}
 #endif
 
 // MARK: - HTML-first image styling model (local, no SVGKit package dependency)
@@ -764,15 +813,35 @@ enum PresentationInspectorPanel: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-enum PresentationNativeElement: String, Identifiable {
+enum PresentationNativeElement: String, Identifiable, CaseIterable {
     case title
     case subtitle
     case levelChip
     case toolkitIcon
+    case mainContent
+    case toolkitContent
     case mainCard
     case activityCard
 
     var id: String { rawValue }
+}
+
+struct PresentationNativeLayoutOverride: Equatable, Codable {
+    var offsetX: Double
+    var offsetY: Double
+
+    static let zero = PresentationNativeLayoutOverride(offsetX: 0, offsetY: 0)
+
+    var isZero: Bool {
+        abs(offsetX) < 0.000_1 && abs(offsetY) < 0.000_1
+    }
+
+    func clamped() -> PresentationNativeLayoutOverride {
+        PresentationNativeLayoutOverride(
+            offsetX: max(-0.7, min(0.7, offsetX)),
+            offsetY: max(-0.7, min(0.7, offsetY))
+        )
+    }
 }
 
 enum PresentationAspectPreset: String, CaseIterable, Identifiable, Codable {
@@ -814,13 +883,13 @@ enum PresentationLayoutPreset: String, CaseIterable, Identifiable, Sendable, Cod
         case .balanced:
             return (1.0, 0.62)
         case .structured:
-            return (1.08, 0.58)
+            return (1.24, 0.46)
         case .spacious:
             return (0.94, 0.70)
         case .compact:
             return (1.16, 0.54)
         case .showcase:
-            return (0.9, 0.74)
+            return (0.86, 0.82)
         }
     }
 
@@ -829,13 +898,13 @@ enum PresentationLayoutPreset: String, CaseIterable, Identifiable, Sendable, Cod
         case .balanced:
             return 4.8
         case .structured:
-            return 4.4
+            return 4.1
         case .spacious:
             return 5.2
         case .compact:
             return 4.1
         case .showcase:
-            return 5.5
+            return 5.9
         }
     }
 
@@ -844,13 +913,13 @@ enum PresentationLayoutPreset: String, CaseIterable, Identifiable, Sendable, Cod
         case .balanced:
             return 1.8
         case .structured:
-            return 1.55
+            return 1.35
         case .spacious:
             return 2.1
         case .compact:
             return 1.3
         case .showcase:
-            return 2.25
+            return 2.5
         }
     }
 
@@ -859,13 +928,13 @@ enum PresentationLayoutPreset: String, CaseIterable, Identifiable, Sendable, Cod
         case .balanced:
             return 1.25
         case .structured:
-            return 1.12
+            return 0.96
         case .spacious:
             return 1.42
         case .compact:
             return 0.96
         case .showcase:
-            return 1.58
+            return 1.7
         }
     }
 
@@ -874,13 +943,13 @@ enum PresentationLayoutPreset: String, CaseIterable, Identifiable, Sendable, Cod
         case .balanced:
             return 1.05
         case .structured:
-            return 0.92
+            return 0.66
         case .spacious:
             return 1.22
         case .compact:
             return 0.82
         case .showcase:
-            return 1.35
+            return 1.62
         }
     }
 
@@ -889,13 +958,13 @@ enum PresentationLayoutPreset: String, CaseIterable, Identifiable, Sendable, Cod
         case .balanced:
             return 1.1
         case .structured:
-            return 1.02
+            return 0.88
         case .spacious:
             return 1.22
         case .compact:
             return 0.9
         case .showcase:
-            return 1.28
+            return 1.4
         }
     }
 
@@ -904,13 +973,13 @@ enum PresentationLayoutPreset: String, CaseIterable, Identifiable, Sendable, Cod
         case .balanced:
             return 1.35
         case .structured:
-            return 1.25
+            return 1.08
         case .spacious:
             return 1.44
         case .compact:
             return 1.05
         case .showcase:
-            return 1.52
+            return 1.74
         }
     }
 }
@@ -1186,13 +1255,13 @@ extension PresentationThemeTemplate {
                 aspectPreset: .ratio16x9,
                 templateID: rawValue,
                 layoutPreset: .structured,
-                backgroundColorHex: "#EEF4FF",
-                cardBackgroundColorHex: "#F8FBFF",
-                cardBorderColorHex: "#BFD3F7",
-                chipBackgroundColorHex: "#1D4ED8",
+                backgroundColorHex: "#E3ECF9",
+                cardBackgroundColorHex: "#F7FAFF",
+                cardBorderColorHex: "#9FB8E2",
+                chipBackgroundColorHex: "#0B4DB7",
                 chipTextColorHex: "#FFFFFF",
-                toolkitBadgeBackgroundHex: "#DFEAFF",
-                toolkitBadgeBorderHex: "#AFC6F2"
+                toolkitBadgeBackgroundHex: "#D7E6FF",
+                toolkitBadgeBorderHex: "#95B5EA"
             )
         case .warm:
             return PresentationPageStyle(
@@ -1212,13 +1281,13 @@ extension PresentationThemeTemplate {
                 aspectPreset: .ratio16x9,
                 templateID: rawValue,
                 layoutPreset: .showcase,
-                backgroundColorHex: "#FFF2D9",
-                cardBackgroundColorHex: "#FFEAFE",
-                cardBorderColorHex: "#F6B7FF",
-                chipBackgroundColorHex: "#FF3E95",
-                chipTextColorHex: "#FFF8CC",
-                toolkitBadgeBackgroundHex: "#FFE27A",
-                toolkitBadgeBorderHex: "#FFB24E"
+                backgroundColorHex: "#FFF3C5",
+                cardBackgroundColorHex: "#FFE8F6",
+                cardBorderColorHex: "#F0A6D8",
+                chipBackgroundColorHex: "#B230B8",
+                chipTextColorHex: "#FFF7D8",
+                toolkitBadgeBackgroundHex: "#FFE16B",
+                toolkitBadgeBorderHex: "#FF9D3D"
             )
         }
     }
@@ -1243,11 +1312,11 @@ extension PresentationThemeTemplate {
             )
         case .business:
             return PresentationTextTheme(
-                h1: .init(sizeCqw: 4.8, weightValue: 0.92, colorHex: "#0A2A67"),
-                h2: .init(sizeCqw: 1.42, weightValue: 0.82, colorHex: "#1D4ED8"),
-                h3: .init(sizeCqw: 1.64, weightValue: 0.62, colorHex: "#274B87"),
-                h4: .init(sizeCqw: 1.18, weightValue: 0.56, colorHex: "#4A6FAE"),
-                paragraph: .init(sizeCqw: 1.38, weightValue: 0.5, colorHex: "#102A5A")
+                h1: .init(sizeCqw: 4.75, weightValue: 0.92, colorHex: "#0E2A57"),
+                h2: .init(sizeCqw: 1.34, weightValue: 0.84, colorHex: "#113F8A"),
+                h3: .init(sizeCqw: 1.5, weightValue: 0.64, colorHex: "#2A558E"),
+                h4: .init(sizeCqw: 1.08, weightValue: 0.56, colorHex: "#3E679F"),
+                paragraph: .init(sizeCqw: 1.3, weightValue: 0.52, colorHex: "#16335F")
             )
         case .warm:
             return PresentationTextTheme(
@@ -1259,14 +1328,25 @@ extension PresentationThemeTemplate {
             )
         case .artistic:
             return PresentationTextTheme(
-                h1: .init(sizeCqw: 5.35, weightValue: 0.94, colorHex: "#7A00D9"),
-                h2: .init(sizeCqw: 1.56, weightValue: 0.84, colorHex: "#FF4FA3"),
-                h3: .init(sizeCqw: 1.78, weightValue: 0.66, colorHex: "#C6367A"),
-                h4: .init(sizeCqw: 1.32, weightValue: 0.58, colorHex: "#B06A00"),
-                paragraph: .init(sizeCqw: 1.48, weightValue: 0.52, colorHex: "#5A1D89")
+                h1: .init(sizeCqw: 5.6, weightValue: 0.94, colorHex: "#5C1DB5"),
+                h2: .init(sizeCqw: 1.72, weightValue: 0.84, colorHex: "#C72D83"),
+                h3: .init(sizeCqw: 1.94, weightValue: 0.68, colorHex: "#A13A6E"),
+                h4: .init(sizeCqw: 1.38, weightValue: 0.6, colorHex: "#A66A12"),
+                paragraph: .init(sizeCqw: 1.58, weightValue: 0.54, colorHex: "#5F2A88")
             )
         }
     }
+}
+
+struct PresentationStylingSnapshot {
+    var overlays: [PresentationSlideOverlay]
+    var selectedOverlayID: UUID?
+    var vectorization: PresentationVectorizationSettings
+    var nativeTextOverrides: [PresentationNativeElement: PresentationTextStyleConfig]
+    var nativeContentOverrides: [PresentationNativeElement: String]
+    var nativeLayoutOverrides: [PresentationNativeElement: PresentationNativeLayoutOverride]
+    var pageStyle: PresentationPageStyle
+    var textTheme: PresentationTextTheme
 }
 
 struct PresentationSlideOverlay: Identifiable {
@@ -1274,6 +1354,8 @@ struct PresentationSlideOverlay: Identifiable {
     var kind: PresentationOverlayKind
     var imageData: Data
     var extractedImageData: Data?
+    var cropSourceImageData: Data?
+    var cumulativeCropRect: CGRect
     var vectorDocument: SVGDocument?
     var selectedFilter: SVGFilterStyle
     var stylization: SVGStylizationParameters
@@ -1299,6 +1381,7 @@ struct PresentationSlideOverlay: Identifiable {
     var iconColorHex: String
     var iconHasBackground: Bool
     var iconBackgroundColorHex: String
+    var imageCornerRadiusRatio: Double
     var vectorStrokeColorHex: String
     var vectorBackgroundColorHex: String
     var vectorBackgroundVisible: Bool
@@ -1308,6 +1391,8 @@ struct PresentationSlideOverlay: Identifiable {
         kind: PresentationOverlayKind = .image,
         imageData: Data,
         extractedImageData: Data? = nil,
+        cropSourceImageData: Data? = nil,
+        cumulativeCropRect: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1),
         vectorDocument: SVGDocument? = nil,
         selectedFilter: SVGFilterStyle = .original,
         stylization: SVGStylizationParameters = .default,
@@ -1333,6 +1418,7 @@ struct PresentationSlideOverlay: Identifiable {
         iconColorHex: String = "#111111",
         iconHasBackground: Bool = true,
         iconBackgroundColorHex: String = "#FFFFFF",
+        imageCornerRadiusRatio: Double = 0,
         vectorStrokeColorHex: String = "#0F172A",
         vectorBackgroundColorHex: String = "#FFFFFF",
         vectorBackgroundVisible: Bool = false
@@ -1341,6 +1427,8 @@ struct PresentationSlideOverlay: Identifiable {
         self.kind = kind
         self.imageData = imageData
         self.extractedImageData = extractedImageData
+        self.cropSourceImageData = cropSourceImageData
+        self.cumulativeCropRect = normalizedUnitCropRect(cumulativeCropRect)
         self.vectorDocument = vectorDocument
         self.selectedFilter = selectedFilter
         self.stylization = stylization
@@ -1368,6 +1456,7 @@ struct PresentationSlideOverlay: Identifiable {
         self.iconColorHex = iconColorHex
         self.iconHasBackground = iconHasBackground
         self.iconBackgroundColorHex = iconBackgroundColorHex
+        self.imageCornerRadiusRatio = max(0, min(0.5, imageCornerRadiusRatio))
         self.vectorStrokeColorHex = vectorStrokeColorHex
         self.vectorBackgroundColorHex = vectorBackgroundColorHex
         self.vectorBackgroundVisible = vectorBackgroundVisible
@@ -1590,9 +1679,12 @@ struct PresentationVectorizationSettings: Equatable, Codable {
 struct PresentationSlideStylingState {
     var overlays: [PresentationSlideOverlay] = []
     var selectedOverlayID: UUID?
-    var undoStack: [[PresentationSlideOverlay]] = []
-    var redoStack: [[PresentationSlideOverlay]] = []
+    var undoStack: [PresentationStylingSnapshot] = []
+    var redoStack: [PresentationStylingSnapshot] = []
     var vectorization = PresentationVectorizationSettings.default
+    var nativeTextOverrides: [PresentationNativeElement: PresentationTextStyleConfig] = [:]
+    var nativeContentOverrides: [PresentationNativeElement: String] = [:]
+    var nativeLayoutOverrides: [PresentationNativeElement: PresentationNativeLayoutOverride] = [:]
     var pageStyle = PresentationPageStyle.default
     var textTheme = PresentationTextTheme.default
 
@@ -1604,18 +1696,46 @@ func themedPresentationSlideHTML(
     slide: EduPresentationComposedSlide,
     isChinese: Bool,
     pageStyle: PresentationPageStyle,
-    textTheme: PresentationTextTheme
+    textTheme: PresentationTextTheme,
+    nativeTextOverrides: [PresentationNativeElement: PresentationTextStyleConfig] = [:],
+    nativeContentOverrides: [PresentationNativeElement: String] = [:],
+    nativeLayoutOverrides: [PresentationNativeElement: PresentationNativeLayoutOverride] = [:]
 ) -> String {
     let base = EduPresentationHTMLExporter.singleSlideHTML(
         courseName: courseName,
         slide: slide,
         isChinese: isChinese
     )
-    return applyPresentationTheme(
+    let themed = applyPresentationTheme(
         to: base,
         pageStyle: pageStyle,
         textTheme: textTheme
     )
+    let stylePatched = applyNativeTextOverrides(
+        to: themed,
+        overridesBySlideID: [slide.id: nativeTextOverrides]
+    )
+    let contentPatched = applyNativeContentOverrides(
+        to: stylePatched,
+        overridesBySlideID: [slide.id: nativeContentOverrides]
+    )
+    return applyNativeLayoutOverrides(
+        to: contentPatched,
+        overridesBySlideID: [slide.id: nativeLayoutOverrides]
+    )
+}
+
+private func editorSlideHTMLRemovingInnerMask(_ html: String) -> String {
+    let css = """
+    /* Editor canvas already has a SwiftUI rounded mask. */
+    .slide-sheet {
+      border-radius: 0 !important;
+    }
+    """
+    guard let styleEnd = html.range(of: "</style>") else {
+        return html
+    }
+    return html.replacingCharacters(in: styleEnd.lowerBound..<styleEnd.lowerBound, with: css + "\n")
 }
 
 func themedPresentationDeckHTML(
@@ -1624,7 +1744,10 @@ func themedPresentationDeckHTML(
     isChinese: Bool,
     pageStyle: PresentationPageStyle,
     textTheme: PresentationTextTheme,
-    overlayHTMLBySlideID: [UUID: String] = [:]
+    overlayHTMLBySlideID: [UUID: String] = [:],
+    nativeTextOverridesBySlideID: [UUID: [PresentationNativeElement: PresentationTextStyleConfig]] = [:],
+    nativeContentOverridesBySlideID: [UUID: [PresentationNativeElement: String]] = [:],
+    nativeLayoutOverridesBySlideID: [UUID: [PresentationNativeElement: PresentationNativeLayoutOverride]] = [:]
 ) -> String {
     let base = EduPresentationHTMLExporter.printHTML(
         courseName: courseName,
@@ -1632,10 +1755,22 @@ func themedPresentationDeckHTML(
         isChinese: isChinese,
         overlayHTMLBySlideID: overlayHTMLBySlideID
     )
-    return applyPresentationTheme(
+    let themed = applyPresentationTheme(
         to: base,
         pageStyle: pageStyle,
         textTheme: textTheme
+    )
+    let stylePatched = applyNativeTextOverrides(
+        to: themed,
+        overridesBySlideID: nativeTextOverridesBySlideID
+    )
+    let contentPatched = applyNativeContentOverrides(
+        to: stylePatched,
+        overridesBySlideID: nativeContentOverridesBySlideID
+    )
+    return applyNativeLayoutOverrides(
+        to: contentPatched,
+        overridesBySlideID: nativeLayoutOverridesBySlideID
     )
 }
 
@@ -1649,6 +1784,284 @@ private func applyPresentationTheme(
         return html
     }
     return html.replacingCharacters(in: styleEnd.lowerBound..<styleEnd.lowerBound, with: css + "\n")
+}
+
+private func applyNativeTextOverrides(
+    to html: String,
+    overridesBySlideID: [UUID: [PresentationNativeElement: PresentationTextStyleConfig]]
+) -> String {
+    guard !overridesBySlideID.isEmpty else { return html }
+    let css = nativeTextOverrideCSS(overridesBySlideID: overridesBySlideID)
+    guard !css.isEmpty, let styleEnd = html.range(of: "</style>") else {
+        return html
+    }
+    return html.replacingCharacters(in: styleEnd.lowerBound..<styleEnd.lowerBound, with: css + "\n")
+}
+
+private func nativeTextOverrideCSS(
+    overridesBySlideID: [UUID: [PresentationNativeElement: PresentationTextStyleConfig]]
+) -> String {
+    let lines: [String] = overridesBySlideID
+        .sorted(by: { $0.key.uuidString < $1.key.uuidString })
+        .flatMap { (slideID, map) -> [String] in
+            map.compactMap { element, style -> String? in
+                let selectorText = nativeTextSelector(for: element)
+                guard !selectorText.isEmpty else { return nil }
+                let prefixed = prefixedSelectorList(
+                    selectorText,
+                    prefix: ".slide[data-slide-id=\"\(slideID.uuidString)\"]"
+                )
+                guard !prefixed.isEmpty else { return nil }
+                return """
+                \(prefixed) {
+                  font-size: \(f2(style.sizeCqw))cqw !important;
+                  font-weight: \(style.cssWeight) !important;
+                  color: \(normalizedHex(style.colorHex, fallback: "#111111")) !important;
+                }
+                """
+            }
+        }
+    guard !lines.isEmpty else { return "" }
+    return "/* EduNode native text element overrides */\n" + lines.joined(separator: "\n")
+}
+
+private func applyNativeContentOverrides(
+    to html: String,
+    overridesBySlideID: [UUID: [PresentationNativeElement: String]]
+) -> String {
+    let sanitized: [String: [String: String]] = overridesBySlideID.reduce(into: [:]) { partial, entry in
+        let slideID = entry.key.uuidString
+        let map = entry.value.reduce(into: [String: String]()) { mapPartial, value in
+            let cleaned = value.value.replacingOccurrences(of: "\r\n", with: "\n")
+            mapPartial[value.key.rawValue] = cleaned
+        }
+        if !map.isEmpty {
+            partial[slideID] = map
+        }
+    }
+    guard !sanitized.isEmpty else { return html }
+    guard let json = jsonString(sanitized) else { return html }
+
+    let script = """
+    <script id="edunode-native-content-overrides">
+    (function () {
+      const contentBySlide = \(json);
+      const singleSelectorMap = {
+        title: '.hero h1',
+        subtitle: '.hero .lead',
+        levelChip: '.hero .level-chip'
+      };
+
+      function splitLines(value) {
+        return String(value || '')
+          .replace(/\\r\\n/g, '\\n')
+          .split('\\n')
+          .map(line => line.trim())
+          .filter(line => line.length > 0);
+      }
+
+      function replaceCardContent(scope, cardSelector, rawText, mode) {
+        const card = scope.querySelector(cardSelector);
+        if (!card) { return; }
+        card.querySelectorAll('.knowledge-content, .activity-content, .empty').forEach(node => node.remove());
+
+        const lines = splitLines(rawText);
+        if (!lines.length) {
+          const empty = document.createElement('p');
+          empty.className = 'empty';
+          empty.textContent = '';
+          card.appendChild(empty);
+          return;
+        }
+
+        const useActivity = mode === 'toolkit' || card.classList.contains('activity-main');
+        const wrapper = document.createElement('div');
+        wrapper.className = useActivity ? 'activity-content' : 'knowledge-content';
+        if (!useActivity && lines.length === 1 && card.classList.contains('center-brief')) {
+          wrapper.classList.add('centered');
+        }
+
+        lines.forEach(line => {
+          const p = document.createElement('p');
+          p.className = useActivity ? 'activity-line' : 'knowledge-line';
+          p.textContent = line;
+          wrapper.appendChild(p);
+        });
+        card.appendChild(wrapper);
+      }
+
+      function applyScopeOverrides(scope, overrides) {
+        Object.keys(singleSelectorMap).forEach((key) => {
+          if (!(key in overrides)) { return; }
+          const target = scope.querySelector(singleSelectorMap[key]);
+          if (target) {
+            target.textContent = String(overrides[key] || '');
+          }
+        });
+
+        if ('mainContent' in overrides) {
+          replaceCardContent(scope, '.main-card', overrides.mainContent, 'main');
+        }
+        if ('toolkitContent' in overrides) {
+          replaceCardContent(scope, '.activity-card', overrides.toolkitContent, 'toolkit');
+        }
+      }
+
+      function applyAll() {
+        const slides = document.querySelectorAll('.slide[data-slide-id]');
+        if (slides.length === 0) {
+          const first = Object.keys(contentBySlide)[0];
+          if (first) {
+            applyScopeOverrides(document, contentBySlide[first]);
+          }
+          return;
+        }
+        slides.forEach((slide) => {
+          const sid = slide.getAttribute('data-slide-id');
+          if (!sid || !contentBySlide[sid]) { return; }
+          applyScopeOverrides(slide, contentBySlide[sid]);
+        });
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyAll, { once: true });
+      } else {
+        applyAll();
+      }
+    })();
+    </script>
+    """
+    return insertBeforeBodyEnd(html, snippet: script)
+}
+
+private func applyNativeLayoutOverrides(
+    to html: String,
+    overridesBySlideID: [UUID: [PresentationNativeElement: PresentationNativeLayoutOverride]]
+) -> String {
+    let sanitized: [String: [String: PresentationNativeLayoutOverride]] = overridesBySlideID.reduce(into: [:]) { partial, entry in
+        let map = entry.value.reduce(into: [String: PresentationNativeLayoutOverride]()) { mapPartial, item in
+            let clamped = item.value.clamped()
+            guard !clamped.isZero else { return }
+            mapPartial[item.key.rawValue] = clamped
+        }
+        if !map.isEmpty {
+            partial[entry.key.uuidString] = map
+        }
+    }
+    guard !sanitized.isEmpty else { return html }
+    guard let json = jsonString(sanitized) else { return html }
+
+    let script = """
+    <script id="edunode-native-layout-overrides">
+    (function () {
+      const offsetBySlide = \(json);
+      const selectorMap = {
+        title: ['.hero h1'],
+        subtitle: ['.hero .lead'],
+        levelChip: ['.hero .level-chip'],
+        toolkitIcon: ['.hero .toolkit-icon'],
+        mainCard: ['.main-layout .main-card'],
+        activityCard: ['.main-layout .activity-card'],
+        mainContent: ['.main-card .knowledge-content', '.main-card .activity-content', '.main-card .empty'],
+        toolkitContent: ['.activity-card .activity-content', '.activity-card .empty']
+      };
+
+      function applyOffsetsForScope(scope, map) {
+        const sheet = scope.querySelector('.slide-sheet') || scope;
+        const frame = sheet.getBoundingClientRect();
+        if (!frame || frame.width <= 0 || frame.height <= 0) { return; }
+        Object.keys(map).forEach((id) => {
+          const offset = map[id] || {};
+          const tx = (Number(offset.offsetX) || 0) * frame.width;
+          const ty = (Number(offset.offsetY) || 0) * frame.height;
+          const selectors = selectorMap[id] || [];
+          selectors.forEach((selector) => {
+            scope.querySelectorAll(selector).forEach((node) => {
+              const key = 'edunodeNativeBaseTransform';
+              if (node.dataset[key] === undefined) {
+                node.dataset[key] = node.style.transform || '';
+              }
+              const base = node.dataset[key] || '';
+              node.style.transform = (base ? (base + ' ') : '') + 'translate(' + tx + 'px, ' + ty + 'px)';
+              node.style.willChange = 'transform';
+            });
+          });
+        });
+      }
+
+      function applyAll() {
+        const slides = document.querySelectorAll('.slide[data-slide-id]');
+        if (slides.length === 0) {
+          const first = Object.keys(offsetBySlide)[0];
+          if (first) {
+            applyOffsetsForScope(document, offsetBySlide[first]);
+          }
+          return;
+        }
+        slides.forEach((slide) => {
+          const sid = slide.getAttribute('data-slide-id');
+          if (!sid || !offsetBySlide[sid]) { return; }
+          applyOffsetsForScope(slide, offsetBySlide[sid]);
+        });
+      }
+
+      window.__edunodeNativeOffsets = offsetBySlide;
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', applyAll, { once: true });
+      } else {
+        applyAll();
+      }
+      window.addEventListener('resize', () => {
+        window.requestAnimationFrame(applyAll);
+      });
+    })();
+    </script>
+    """
+    return insertBeforeBodyEnd(html, snippet: script)
+}
+
+private func nativeTextSelector(for element: PresentationNativeElement) -> String {
+    switch element {
+    case .title:
+        return ".hero h1"
+    case .subtitle:
+        return ".hero .lead"
+    case .levelChip:
+        return ".hero .level-chip"
+    case .mainContent:
+        return ".main-card .knowledge-line, .main-card .activity-line, .main-card .activity-ordered li, .main-card .empty"
+    case .toolkitContent:
+        return ".activity-card .activity-line, .activity-card .activity-ordered li, .activity-card .empty"
+    case .toolkitIcon, .mainCard, .activityCard:
+        return ""
+    }
+}
+
+private func prefixedSelectorList(_ selectorList: String, prefix: String) -> String {
+    selectorList
+        .split(separator: ",")
+        .map { selector in
+            let trimmed = selector.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return "" }
+            return "\(prefix) \(trimmed)"
+        }
+        .filter { !$0.isEmpty }
+        .joined(separator: ", ")
+}
+
+private func jsonString<T: Encodable>(_ value: T) -> String? {
+    guard let data = try? JSONEncoder().encode(value),
+          var text = String(data: data, encoding: .utf8) else {
+        return nil
+    }
+    text = text.replacingOccurrences(of: "</", with: "<\\/")
+    return text
+}
+
+private func insertBeforeBodyEnd(_ html: String, snippet: String) -> String {
+    guard let bodyEnd = html.range(of: "</body>") else { return html }
+    return html.replacingCharacters(in: bodyEnd.lowerBound..<bodyEnd.lowerBound, with: snippet + "\n")
 }
 
 private func presentationThemeOverrideCSS(
@@ -1753,6 +2166,36 @@ private func f2(_ value: Double) -> String {
         .replacingOccurrences(of: "\\.?0+$", with: "", options: .regularExpression)
 }
 
+private func normalizedUnitCropRect(_ rect: CGRect) -> CGRect {
+    let minSize: CGFloat = 0.02
+    var x = rect.origin.x
+    var y = rect.origin.y
+    var width = rect.size.width
+    var height = rect.size.height
+
+    if x < 0 {
+        width += x
+        x = 0
+    }
+    if y < 0 {
+        height += y
+        y = 0
+    }
+    if x + width > 1 {
+        width = 1 - x
+    }
+    if y + height > 1 {
+        height = 1 - y
+    }
+
+    width = max(minSize, min(1, width))
+    height = max(minSize, min(1, height))
+    x = min(max(0, x), 1 - width)
+    y = min(max(0, y), 1 - height)
+
+    return CGRect(x: x, y: y, width: width, height: height)
+}
+
 struct PresentationStylingOverlayView: View {
     let courseName: String
     let slide: EduPresentationComposedSlide
@@ -1775,18 +2218,23 @@ struct PresentationStylingOverlayView: View {
     let onRotateOverlay: (UUID, Double) -> Void
     let onUpdateImageOverlayFrame: (UUID, CGPoint, CGFloat, CGFloat) -> Void
     let onScaleOverlay: (UUID, CGFloat) -> Void
-    let onCropOverlay: (UUID, CGRect) -> Void
+    let onCropOverlay: (UUID, CGRect, String?) -> Void
     let onDeleteOverlay: (UUID) -> Void
     let onExtractSubject: (UUID) -> Void
     let onConvertToSVG: (UUID) -> Void
     let onApplyFilter: (UUID, SVGFilterStyle) -> Void
     let onUpdateStylization: (UUID, SVGStylizationParameters) -> Void
     let onUpdateImageVectorStyle: (UUID, String, String, Bool) -> Void
+    let onUpdateImageCornerRadius: (UUID, Double) -> Void
     let onApplyImageStyleToAll: (UUID) -> Void
     let onUpdateTextOverlay: (UUID, PresentationTextEditingState) -> Void
     let onUpdateRoundedRectOverlay: (UUID, PresentationRoundedRectEditingState) -> Void
     let onUpdateIconOverlay: (UUID, PresentationIconEditingState) -> Void
     let onUpdateTextTheme: (PresentationTextTheme) -> Void
+    let onUpdateNativeTextOverride: (PresentationNativeElement, PresentationTextStyleConfig?) -> Void
+    let onUpdateNativeContentOverride: (PresentationNativeElement, String?) -> Void
+    let onUpdateNativeLayoutOverride: (PresentationNativeElement, PresentationNativeLayoutOverride?) -> Void
+    let onClearNativeTextOverrides: () -> Void
     let onApplyTemplate: (PresentationThemeTemplate) -> Void
     let onUpdatePageStyle: (PresentationPageStyle) -> Void
     let onUpdateVectorization: (PresentationVectorizationSettings) -> Void
@@ -1803,8 +2251,12 @@ struct PresentationStylingOverlayView: View {
     @State private var cropWidth: Double = 1
     @State private var cropHeight: Double = 1
     @State private var selectedNativeElement: PresentationNativeElement?
+    @State private var nativeElementRects: [PresentationNativeElement: CGRect] = [:]
     @State private var imageDragActivationByOverlayID: [UUID: Bool] = [:]
     @State private var ignoreCanvasTapUntil: Date = .distantPast
+    @State private var htmlCanvasReady = false
+    @State private var nativeTextDraftElement: PresentationNativeElement?
+    @State private var nativeTextDraft = ""
 
     private enum ImageCropEdge {
         case left
@@ -1861,8 +2313,20 @@ struct PresentationStylingOverlayView: View {
             }
             resetCropInputs()
         }
+        .onChange(of: selectedNativeElement) { _, newElement in
+            syncNativeTextDraft(for: newElement)
+        }
         .onAppear {
             resetCropInputs()
+            htmlCanvasReady = false
+            syncNativeTextDraft(for: selectedNativeElement)
+        }
+        .onChange(of: slide.id) { _, _ in
+            selectedNativeElement = nil
+            nativeElementRects = [:]
+            htmlCanvasReady = false
+            nativeTextDraftElement = nil
+            nativeTextDraft = ""
         }
     }
 
@@ -1927,25 +2391,55 @@ struct PresentationStylingOverlayView: View {
             let canvasWidth = min(availableWidth, availableHeight * aspectRatio)
             let canvasHeight = canvasWidth / aspectRatio
             let canvasCornerRadius: CGFloat = 18
+            let canvasSize = CGSize(width: canvasWidth, height: canvasHeight)
 
             ZStack {
+                if !htmlCanvasReady {
+                    canvasLoadingPlaceholder(canvasSize: canvasSize)
+                        .transition(.opacity)
+                }
+
                 PresentationSlideCanvasHTMLView(
-                    baseHTML: themedPresentationSlideHTML(
-                        courseName: courseName,
-                        slide: slide,
-                        isChinese: isChinese,
-                        pageStyle: pageStyle,
-                        textTheme: textTheme
+                    baseHTML: editorSlideHTMLRemovingInnerMask(
+                        themedPresentationSlideHTML(
+                            courseName: courseName,
+                            slide: slide,
+                            isChinese: isChinese,
+                            pageStyle: pageStyle,
+                            textTheme: textTheme,
+                            nativeTextOverrides: stylingState.nativeTextOverrides,
+                            nativeContentOverrides: stylingState.nativeContentOverrides,
+                            nativeLayoutOverrides: stylingState.nativeLayoutOverrides
+                        )
                     ),
                     textTheme: textTheme,
                     overlays: stylingState.overlays,
                     selectedOverlayID: stylingState.selectedOverlayID,
+                    onLoadStateChange: { isReady in
+                        withAnimation(.easeOut(duration: 0.16)) {
+                            htmlCanvasReady = isReady
+                        }
+                    },
                     onSelectOverlay: { selectedID in
-                        selectedNativeElement = nil
                         if let selectedID {
+                            selectedNativeElement = nil
                             onSelectOverlay(selectedID)
                             activePanel = .edit
                         } else {
+                            onClearSelection()
+                        }
+                    },
+                    onCanvasTap: { normalizedPoint, hitNativeElement in
+                        if let hitNativeElement {
+                            selectedNativeElement = hitNativeElement
+                            onClearSelection()
+                            activePanel = .edit
+                        } else if let hitElement = nativeElement(at: normalizedPoint) {
+                            selectedNativeElement = hitElement
+                            onClearSelection()
+                            activePanel = .edit
+                        } else {
+                            selectedNativeElement = nil
                             onClearSelection()
                         }
                     },
@@ -1960,8 +2454,8 @@ struct PresentationStylingOverlayView: View {
                     onRotateOverlay: { overlayID, deltaDegrees in
                         onRotateOverlay(overlayID, deltaDegrees)
                     },
-                    onCropOverlay: { overlayID, rect in
-                        onCropOverlay(overlayID, rect)
+                    onCropOverlay: { overlayID, rect, handle in
+                        onCropOverlay(overlayID, rect, handle)
                     },
                     onDeleteOverlay: { overlayID in
                         onDeleteOverlay(overlayID)
@@ -1970,9 +2464,20 @@ struct PresentationStylingOverlayView: View {
                         onSelectOverlay(overlayID)
                         activePanel = .edit
                         onExtractSubject(overlayID)
+                    },
+                    onMoveNativeElement: { element, offset in
+                        onUpdateNativeLayoutOverride(element, offset)
+                    },
+                    onNativeRectsUpdate: { rects in
+                        if rects != nativeElementRects {
+                            nativeElementRects = rects
+                        }
                     }
                 )
+                .opacity(htmlCanvasReady ? 1 : 0.001)
                 .allowsHitTesting(true)
+
+                nativeElementHighlightOverlay(canvasSize: canvasSize)
             }
             .background(Color(hex: pageStyle.backgroundColorHex))
             .clipShape(RoundedRectangle(cornerRadius: canvasCornerRadius, style: .continuous))
@@ -1984,6 +2489,39 @@ struct PresentationStylingOverlayView: View {
             .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    @ViewBuilder
+    private func canvasLoadingPlaceholder(canvasSize: CGSize) -> some View {
+        ZStack {
+            Color(hex: pageStyle.backgroundColorHex)
+
+            VStack(alignment: .leading, spacing: 10) {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.white.opacity(0.24))
+                    .frame(width: canvasSize.width * 0.42, height: canvasSize.height * 0.06)
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color.white.opacity(0.18))
+                    .frame(width: canvasSize.width * 0.28, height: canvasSize.height * 0.04)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.16))
+                    .frame(height: canvasSize.height * 0.34)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.14))
+                    .frame(height: canvasSize.height * 0.24)
+            }
+            .padding(canvasSize.width * 0.06)
+
+            ProgressView()
+                .progressViewStyle(.circular)
+                .tint(.white.opacity(0.9))
+        }
+    }
+
+    private func nativeElement(at normalizedPoint: CGPoint) -> PresentationNativeElement? {
+        nativeElementRegions().first { _, normalizedRect in
+            normalizedRect.contains(normalizedPoint)
+        }?.0
     }
 
     private func commitOverlayFrameFromHTML(
@@ -2435,10 +2973,23 @@ struct PresentationStylingOverlayView: View {
                         let dx = value.translation.width / max(overlayWidth, 1)
                         let dy = value.translation.height / max(overlayHeight, 1)
                         if let cropRect = cropRectForEdge(edge, dx: dx, dy: dy) {
-                            onCropOverlay(overlayID, cropRect)
+                            onCropOverlay(overlayID, cropRect, cropHandleName(for: edge))
                         }
                     }
             )
+    }
+
+    private func cropHandleName(for edge: ImageCropEdge) -> String {
+        switch edge {
+        case .left:
+            return "crop-left"
+        case .right:
+            return "crop-right"
+        case .top:
+            return "crop-top"
+        case .bottom:
+            return "crop-bottom"
+        }
     }
 
     private func cropRectForEdge(_ edge: ImageCropEdge, dx: CGFloat, dy: CGFloat) -> CGRect? {
@@ -2519,43 +3070,9 @@ struct PresentationStylingOverlayView: View {
     }
 
     @ViewBuilder
-    private func nativeElementInteractionLayer(canvasSize: CGSize) -> some View {
-        Color.clear
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                    .onEnded { value in
-                        // Treat as tap only; real drags are handled by overlay gestures.
-                        let dragDistance = hypot(value.translation.width, value.translation.height)
-                        guard dragDistance <= 6 else { return }
-
-                        let hitElement = nativeElementRegions().first { pair in
-                            let normalized = pair.1
-                            let rect = CGRect(
-                                x: normalized.origin.x * canvasSize.width,
-                                y: normalized.origin.y * canvasSize.height,
-                                width: normalized.width * canvasSize.width,
-                                height: normalized.height * canvasSize.height
-                            )
-                            return rect.contains(value.location)
-                        }?.0
-
-                        if let hitElement {
-                            selectedNativeElement = hitElement
-                            onClearSelection()
-                            activePanel = .edit
-                        } else {
-                            selectedNativeElement = nil
-                            onClearSelection()
-                        }
-                    }
-            )
-    }
-
-    @ViewBuilder
     private func nativeElementHighlightOverlay(canvasSize: CGSize) -> some View {
         if let selectedNativeElement,
-           let normalizedRect = nativeElementRegions().first(where: { $0.0 == selectedNativeElement })?.1 {
+           let normalizedRect = normalizedRect(for: selectedNativeElement) {
             let rect = CGRect(
                 x: normalizedRect.origin.x * canvasSize.width,
                 y: normalizedRect.origin.y * canvasSize.height,
@@ -2574,15 +3091,56 @@ struct PresentationStylingOverlayView: View {
     }
 
     private func nativeElementRegions() -> [(PresentationNativeElement, CGRect)] {
+        if !nativeElementRects.isEmpty {
+            return nativeElementRects
+                .map { ($0.key, $0.value) }
+                .sorted { lhs, rhs in
+                    nativeElementPriority(lhs.0) < nativeElementPriority(rhs.0)
+                }
+        }
+        return fallbackNativeElementRegions()
+    }
+
+    private func normalizedRect(for element: PresentationNativeElement) -> CGRect? {
+        if let precise = nativeElementRects[element] {
+            return precise
+        }
+        return fallbackNativeElementRegions().first(where: { $0.0 == element })?.1
+    }
+
+    private func nativeElementPriority(_ element: PresentationNativeElement) -> Int {
+        switch element {
+        case .toolkitIcon:
+            return 0
+        case .levelChip:
+            return 1
+        case .title:
+            return 2
+        case .subtitle:
+            return 3
+        case .toolkitContent:
+            return 4
+        case .mainContent:
+            return 5
+        case .activityCard:
+            return 6
+        case .mainCard:
+            return 7
+        }
+    }
+
+    private func fallbackNativeElementRegions() -> [(PresentationNativeElement, CGRect)] {
         var regions: [(PresentationNativeElement, CGRect)] = [
             (.title, CGRect(x: 0.05, y: 0.05, width: 0.70, height: 0.13)),
             (.subtitle, CGRect(x: 0.05, y: 0.16, width: 0.66, height: 0.1)),
             (.levelChip, CGRect(x: 0.05, y: 0.2, width: 0.24, height: 0.07)),
+            (.mainContent, CGRect(x: 0.07, y: 0.38, width: 0.56, height: 0.45)),
             (.mainCard, CGRect(x: 0.05, y: 0.3, width: 0.60, height: 0.58))
         ]
 
         if !slide.toolkitItems.isEmpty {
             regions.append((.toolkitIcon, CGRect(x: 0.84, y: 0.06, width: 0.11, height: 0.11)))
+            regions.append((.toolkitContent, CGRect(x: 0.69, y: 0.38, width: 0.24, height: 0.45)))
             regions.append((.activityCard, CGRect(x: 0.67, y: 0.3, width: 0.28, height: 0.58)))
         }
         return regions
@@ -2604,6 +3162,7 @@ struct PresentationStylingOverlayView: View {
                         pagePanel
                     case .edit:
                         editPanel
+                            .modifier(PresentationKeyboardAdaptive())
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2790,6 +3349,12 @@ struct PresentationStylingOverlayView: View {
 
     @ViewBuilder
     private func nativeElementPanel(for element: PresentationNativeElement) -> some View {
+        let linkedPreset = nativeElementTextPreset(for: element)
+        let selectedStyle = selectedNativeStyle(for: element)
+        let isOverridden = stylingState.nativeTextOverrides[element] != nil
+        let textEditable = nativeElementSupportsTextEditing(element)
+        let hasTextContentOverride = stylingState.nativeContentOverrides[element] != nil
+        let layoutOverride = stylingState.nativeLayoutOverrides[element]
         VStack(alignment: .leading, spacing: 10) {
             Text(isChinese ? "已选中原生课件元素" : "Selected Native Element")
                 .font(.caption.weight(.semibold))
@@ -2801,36 +3366,132 @@ struct PresentationStylingOverlayView: View {
 
             Text(
                 isChinese
-                    ? "该元素由节点内容自动生成，可在 Page 里修改对应的全局样式。"
-                    : "This element is generated from node content. Use Page to adjust global style."
+                    ? "该元素来自节点自动生成内容，可在这里直接调对应文本样式。"
+                    : "This element is generated from node content. You can adjust its linked text style here."
             )
             .font(.caption)
             .foregroundStyle(.white.opacity(0.76))
 
-            Button {
-                switch element {
-                case .title:
-                    selectedPageTextPreset = .h1
-                case .subtitle:
-                    selectedPageTextPreset = .h3
-                case .levelChip:
-                    selectedPageTextPreset = .h4
-                case .toolkitIcon, .mainCard, .activityCard:
-                    break
+            if let linkedPreset, let selectedStyle {
+                nativeElementTextStyleEditor(
+                    for: linkedPreset,
+                    style: selectedStyle
+                ) { nextStyle in
+                    onUpdateNativeTextOverride(element, nextStyle)
                 }
-                activePanel = .page
-            } label: {
-                Label(isChinese ? "跳转到 Page 样式" : "Go to Page Style", systemImage: "slider.horizontal.3")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(
-                        Capsule()
-                            .fill(Color.white)
-                    )
             }
-            .buttonStyle(.plain)
+
+            if textEditable {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(isChinese ? "文本内容" : "Content")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+
+                    TextEditor(text: Binding(
+                        get: { nativeTextDraftValue(for: element) },
+                        set: { next in
+                            nativeTextDraftElement = element
+                            nativeTextDraft = next
+                            commitNativeTextDraft(for: element)
+                        }
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                    .frame(minHeight: 88, maxHeight: 150)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                    )
+
+                    HStack(spacing: 8) {
+                        Button {
+                            onUpdateNativeContentOverride(element, nil)
+                            syncNativeTextDraft(for: element)
+                        } label: {
+                            Label(isChinese ? "重置文本" : "Reset Text", systemImage: "eraser")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.92))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(Capsule().fill(Color.white.opacity(0.16)))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!hasTextContentOverride)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(
+                    isChinese
+                        ? "在画布中直接拖动该元素可调整位置。"
+                        : "Drag this native element directly on canvas to move it."
+                )
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.72))
+
+                if let layoutOverride, !layoutOverride.isZero {
+                    Text(
+                        String(
+                            format: isChinese ? "偏移 x: %.3f, y: %.3f" : "Offset x: %.3f, y: %.3f",
+                            layoutOverride.offsetX,
+                            layoutOverride.offsetY
+                        )
+                    )
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.7))
+
+                    Button {
+                        onUpdateNativeLayoutOverride(element, nil)
+                    } label: {
+                        Label(isChinese ? "重置位置" : "Reset Position", systemImage: "arrow.uturn.backward")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.92))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(Color.white.opacity(0.16)))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    onUpdateNativeTextOverride(element, nil)
+                } label: {
+                    Label(isChinese ? "重置当前元素" : "Reset Element", systemImage: "arrow.uturn.backward")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule()
+                                .fill(Color.white.opacity(0.16))
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(!isOverridden)
+
+                if let linkedPreset {
+                    Button {
+                        selectedPageTextPreset = linkedPreset
+                        activePanel = .page
+                    } label: {
+                        Label(isChinese ? "前往 Page 样式" : "Go to Page", systemImage: "slider.horizontal.3")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule()
+                                    .fill(Color.white)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -2841,8 +3502,197 @@ struct PresentationStylingOverlayView: View {
     }
 
     @ViewBuilder
+    private func nativeElementTextStyleEditor(
+        for preset: PresentationTextStylePreset,
+        style: PresentationTextStyleConfig,
+        onUpdate: @escaping (PresentationTextStyleConfig) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text((isChinese ? "关联样式：" : "Linked Style: ") + preset.label(isChinese: isChinese))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.9))
+
+            vectorSlider(
+                title: isChinese ? "字号（cqw）" : "Size (cqw)",
+                value: style.sizeCqw,
+                range: sizeRange(for: preset),
+                step: 0.02
+            ) { newValue in
+                var next = style
+                next.sizeCqw = newValue
+                onUpdate(next)
+            }
+
+            vectorSlider(
+                title: isChinese ? "字重" : "Weight",
+                value: style.weightValue,
+                range: 0...1,
+                step: 0.01
+            ) { newValue in
+                var next = style
+                next.weightValue = newValue
+                onUpdate(next)
+            }
+
+            colorPaletteButtons(selectedHex: style.colorHex) { hex in
+                var next = style
+                next.colorHex = hex
+                onUpdate(next)
+            }
+
+            ColorPicker(
+                isChinese ? "自定义颜色" : "Custom Color",
+                selection: colorPickerHexBinding(style.colorHex) { hex in
+                    var next = style
+                    next.colorHex = hex
+                    onUpdate(next)
+                },
+                supportsOpacity: false
+            )
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.84))
+        }
+    }
+
+    private func selectedNativeStyle(for element: PresentationNativeElement) -> PresentationTextStyleConfig? {
+        if let override = stylingState.nativeTextOverrides[element] {
+            return override
+        }
+        guard let preset = nativeElementTextPreset(for: element) else {
+            return nil
+        }
+        return textTheme.style(for: preset)
+    }
+
+    private func nativeElementSupportsTextEditing(_ element: PresentationNativeElement) -> Bool {
+        switch element {
+        case .title, .subtitle, .levelChip, .mainContent, .toolkitContent:
+            return true
+        case .toolkitIcon, .mainCard, .activityCard:
+            return false
+        }
+    }
+
+    private func nativeDefaultText(for element: PresentationNativeElement) -> String {
+        switch element {
+        case .title:
+            return slide.title
+        case .subtitle:
+            return slide.subtitle
+        case .levelChip:
+            return levelChipDisplayText(from: slide.subtitle)
+        case .mainContent:
+            if !slide.knowledgeItems.isEmpty {
+                return slide.knowledgeItems.joined(separator: "\n")
+            }
+            if !slide.keyPoints.isEmpty {
+                return slide.keyPoints.joined(separator: "\n")
+            }
+            return ""
+        case .toolkitContent:
+            return slide.toolkitItems.joined(separator: "\n")
+        case .toolkitIcon, .mainCard, .activityCard:
+            return ""
+        }
+    }
+
+    private func nativeEffectiveText(for element: PresentationNativeElement) -> String {
+        stylingState.nativeContentOverrides[element] ?? nativeDefaultText(for: element)
+    }
+
+    private func levelChipDisplayText(from subtitle: String) -> String {
+        let normalized = subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return "" }
+        let lower = normalized.lowercased()
+        if lower.hasPrefix("level") {
+            return normalized
+        }
+
+        var index = normalized.startIndex
+        while index < normalized.endIndex, normalized[index].isNumber {
+            index = normalized.index(after: index)
+        }
+        guard index > normalized.startIndex else { return normalized }
+        let levelNumber = String(normalized[..<index])
+        while index < normalized.endIndex {
+            let c = normalized[index]
+            if c == "." || c == "、" || c == ")" || c == "）" || c.isWhitespace {
+                index = normalized.index(after: index)
+            } else {
+                break
+            }
+        }
+        let remainder = index < normalized.endIndex
+            ? String(normalized[index...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
+        return remainder.isEmpty ? "Level\(levelNumber)" : "Level\(levelNumber). \(remainder)"
+    }
+
+    private func syncNativeTextDraft(for element: PresentationNativeElement?) {
+        guard let element else {
+            nativeTextDraftElement = nil
+            nativeTextDraft = ""
+            return
+        }
+        guard nativeElementSupportsTextEditing(element) else {
+            nativeTextDraftElement = element
+            nativeTextDraft = ""
+            return
+        }
+        nativeTextDraftElement = element
+        nativeTextDraft = nativeEffectiveText(for: element)
+    }
+
+    private func nativeTextDraftValue(for element: PresentationNativeElement) -> String {
+        if nativeTextDraftElement == element {
+            return nativeTextDraft
+        }
+        return nativeEffectiveText(for: element)
+    }
+
+    private func commitNativeTextDraft(for element: PresentationNativeElement) {
+        guard nativeElementSupportsTextEditing(element) else { return }
+        let draft = nativeTextDraft.replacingOccurrences(of: "\r\n", with: "\n")
+        let defaultValue = nativeDefaultText(for: element).replacingOccurrences(of: "\r\n", with: "\n")
+        if draft == defaultValue {
+            onUpdateNativeContentOverride(element, nil)
+        } else {
+            onUpdateNativeContentOverride(element, draft)
+        }
+    }
+
+    @ViewBuilder
     private func imagePanel(for selectedOverlay: PresentationSlideOverlay) -> some View {
         if selectedOverlay.isImage {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(isChinese ? "图片圆角" : "Image Corner Radius")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+
+                deferredVectorSlider(
+                    title: isChinese ? "圆角" : "Corner",
+                    value: selectedOverlay.imageCornerRadiusRatio,
+                    range: 0...0.5,
+                    step: 0.01
+                ) { newValue in
+                    onUpdateImageCornerRadius(selectedOverlay.id, newValue)
+                }
+
+                Text(
+                    isChinese
+                        ? "缩放/切图控制点已放到图片外层。图片默认无圆角，可在这里单独设置。"
+                        : "Resize/crop handles are outside the image now. Image defaults to no corner radius."
+                )
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.72))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+
             if selectedOverlay.vectorDocument == nil {
                 VStack(alignment: .leading, spacing: 10) {
                     Button {
@@ -3072,7 +3922,7 @@ struct PresentationStylingOverlayView: View {
 
             HStack(spacing: 8) {
                 Button {
-                    onCropOverlay(overlay.id, currentCropRect())
+                    onCropOverlay(overlay.id, currentCropRect(), nil)
                 } label: {
                     Text(isChinese ? "应用切图" : "Apply Crop")
                         .font(.caption.weight(.semibold))
@@ -3513,10 +4363,17 @@ struct PresentationStylingOverlayView: View {
     }
 
     private func updateTextThemeStyle(_ update: (inout PresentationTextStyleConfig) -> Void) {
+        updateTextThemeStyle(for: selectedPageTextPreset, update)
+    }
+
+    private func updateTextThemeStyle(
+        for preset: PresentationTextStylePreset,
+        _ update: (inout PresentationTextStyleConfig) -> Void
+    ) {
         var nextTheme = textTheme
-        var style = nextTheme.style(for: selectedPageTextPreset)
+        var style = nextTheme.style(for: preset)
         update(&style)
-        nextTheme.setStyle(style, for: selectedPageTextPreset)
+        nextTheme.setStyle(style, for: preset)
         onUpdateTextTheme(nextTheme)
     }
 
@@ -3615,6 +4472,26 @@ struct PresentationStylingOverlayView: View {
                 .foregroundStyle(.white.opacity(0.88))
 
             textPanel
+
+            Button {
+                onClearNativeTextOverrides()
+            } label: {
+                Label(
+                    isChinese ? "统一所有文本到全局样式" : "Unify All Text to Global Theme",
+                    systemImage: "arrow.triangle.2.circlepath"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.95))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    Capsule()
+                        .fill(Color.white.opacity(0.14))
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(stylingState.nativeTextOverrides.isEmpty)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -3631,6 +4508,9 @@ struct PresentationStylingOverlayView: View {
     ) -> some View {
         let titleColor = Color(hex: textTheme.h1.colorHex)
         let paragraphColor = Color(hex: textTheme.paragraph.colorHex)
+        let leftWeight = pageStyle.layoutPreset.columnRatio.0
+        let rightWeight = pageStyle.layoutPreset.columnRatio.1
+        let rightRatio = max(0.2, min(0.6, rightWeight / max(0.01, leftWeight + rightWeight)))
 
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -3657,6 +4537,7 @@ struct PresentationStylingOverlayView: View {
                         }
                         .padding(6)
                     }
+                    .frame(maxWidth: .infinity)
 
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color(hex: pageStyle.cardBackgroundColorHex))
@@ -3664,9 +4545,27 @@ struct PresentationStylingOverlayView: View {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .stroke(Color(hex: pageStyle.cardBorderColorHex), lineWidth: 1)
                     )
-                    .frame(width: 28)
+                    .frame(width: 14 + rightRatio * 72)
             }
             .padding(6)
+
+            if pageStyle.layoutPreset == .structured {
+                VStack {
+                    Spacer(minLength: 0)
+                    Rectangle()
+                        .fill(Color(hex: textTheme.h2.colorHex).opacity(0.22))
+                        .frame(height: 5)
+                }
+                .padding(.horizontal, 6)
+                .padding(.bottom, 6)
+            }
+
+            if pageStyle.layoutPreset == .showcase {
+                Circle()
+                    .fill(Color(hex: pageStyle.toolkitBadgeBackgroundHex).opacity(0.55))
+                    .frame(width: 16, height: 16)
+                    .offset(x: -27, y: 16)
+            }
 
             HStack {
                 Spacer()
@@ -4051,10 +4950,29 @@ struct PresentationStylingOverlayView: View {
             return isChinese ? "层级标签（H4）" : "Level Chip (H4)"
         case .toolkitIcon:
             return isChinese ? "工具图标" : "Toolkit Icon"
+        case .mainContent:
+            return isChinese ? "主内容正文（P）" : "Main Content (P)"
+        case .toolkitContent:
+            return isChinese ? "Toolkit 内容（P）" : "Toolkit Content (P)"
         case .mainCard:
             return isChinese ? "主内容卡片" : "Main Content Card"
         case .activityCard:
             return isChinese ? "活动卡片" : "Activity Card"
+        }
+    }
+
+    private func nativeElementTextPreset(for element: PresentationNativeElement) -> PresentationTextStylePreset? {
+        switch element {
+        case .title:
+            return .h1
+        case .subtitle:
+            return .h3
+        case .levelChip:
+            return .h4
+        case .mainContent, .toolkitContent:
+            return .paragraph
+        case .toolkitIcon, .mainCard, .activityCard:
+            return nil
         }
     }
 
@@ -4225,18 +5143,23 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
     let textTheme: PresentationTextTheme
     let overlays: [PresentationSlideOverlay]
     let selectedOverlayID: UUID?
+    let onLoadStateChange: (Bool) -> Void
     let onSelectOverlay: (UUID?) -> Void
+    let onCanvasTap: (CGPoint, PresentationNativeElement?) -> Void
     let onCommitOverlayFrame: (UUID, CGPoint, CGFloat, CGFloat) -> Void
     let onRotateOverlay: (UUID, Double) -> Void
-    let onCropOverlay: (UUID, CGRect) -> Void
+    let onCropOverlay: (UUID, CGRect, String?) -> Void
     let onDeleteOverlay: (UUID) -> Void
     let onExtractOverlaySubject: (UUID) -> Void
+    let onMoveNativeElement: (PresentationNativeElement, PresentationNativeLayoutOverride?) -> Void
+    let onNativeRectsUpdate: ([PresentationNativeElement: CGRect]) -> Void
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         var parent: PresentationSlideCanvasHTMLView
-        var lastBaseHTML = ""
         var pendingPayloadBase64 = ""
         var pendingSelectedID = ""
+        var pendingBaseHTMLBase64 = ""
+        var lastAppliedBaseHTMLBase64 = ""
         var isPageReady = false
 
         init(parent: PresentationSlideCanvasHTMLView) {
@@ -4246,11 +5169,28 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isPageReady = true
             pushPendingStateIfReady(webView)
+            DispatchQueue.main.async {
+                self.parent.onLoadStateChange(true)
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            isPageReady = true
+            DispatchQueue.main.async {
+                self.parent.onLoadStateChange(true)
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            isPageReady = true
+            DispatchQueue.main.async {
+                self.parent.onLoadStateChange(true)
+            }
         }
 
         func pushPendingStateIfReady(_ webView: WKWebView) {
             guard isPageReady else { return }
-            let script = "window.__edunodeUpdate && window.__edunodeUpdate('\(pendingPayloadBase64)','\(pendingSelectedID)');"
+            let script = "window.__edunodeUpdate && window.__edunodeUpdate('\(pendingPayloadBase64)','\(pendingSelectedID)','\(pendingBaseHTMLBase64)');"
             webView.evaluateJavaScript(script, completionHandler: nil)
         }
 
@@ -4270,6 +5210,17 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                     }
                 case "clear":
                     self.parent.onSelectOverlay(nil)
+                case "canvasTap":
+                    guard let x = body["x"] as? Double,
+                          let y = body["y"] as? Double else { return }
+                    let nativeElement: PresentationNativeElement?
+                    if let nativeID = body["nativeID"] as? String,
+                       !nativeID.isEmpty {
+                        nativeElement = PresentationNativeElement(rawValue: nativeID)
+                    } else {
+                        nativeElement = nil
+                    }
+                    self.parent.onCanvasTap(CGPoint(x: x, y: y), nativeElement)
                 case "frame":
                     guard let idString = body["id"] as? String,
                           let id = UUID(uuidString: idString),
@@ -4297,10 +5248,29 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                           let y = body["y"] as? Double,
                           let width = body["width"] as? Double,
                           let height = body["height"] as? Double else { return }
+                    let handle = body["handle"] as? String
                     self.parent.onCropOverlay(
                         id,
-                        CGRect(x: x, y: y, width: width, height: height)
+                        CGRect(x: x, y: y, width: width, height: height),
+                        handle
                     )
+                case "nativeRects":
+                    guard let items = body["items"] as? [[String: Any]] else { return }
+                    var rects: [PresentationNativeElement: CGRect] = [:]
+                    for item in items {
+                        guard let id = item["id"] as? String,
+                              let element = PresentationNativeElement(rawValue: id),
+                              let x = item["x"] as? Double,
+                              let y = item["y"] as? Double,
+                              let width = item["width"] as? Double,
+                              let height = item["height"] as? Double else {
+                            continue
+                        }
+                        rects[element] = CGRect(x: x, y: y, width: width, height: height)
+                    }
+                    self.parent.onNativeRectsUpdate(rects)
+                case "baseLoaded":
+                    self.parent.onLoadStateChange(true)
                 case "delete":
                     guard let idString = body["id"] as? String,
                           let id = UUID(uuidString: idString) else { return }
@@ -4309,6 +5279,13 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                     guard let idString = body["id"] as? String,
                           let id = UUID(uuidString: idString) else { return }
                     self.parent.onExtractOverlaySubject(id)
+                case "nativeMove":
+                    guard let rawID = body["id"] as? String,
+                          let element = PresentationNativeElement(rawValue: rawID) else { return }
+                    let offsetX = (body["offsetX"] as? Double) ?? 0
+                    let offsetY = (body["offsetY"] as? Double) ?? 0
+                    let next = PresentationNativeLayoutOverride(offsetX: offsetX, offsetY: offsetY).clamped()
+                    self.parent.onMoveNativeElement(element, next.isZero ? nil : next)
                 default:
                     break
                 }
@@ -4333,11 +5310,14 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
         webView.isUserInteractionEnabled = true
         let payloadBase64 = overlayPayloadBase64()
         let selectedID = selectedOverlayID?.uuidString ?? ""
-        context.coordinator.lastBaseHTML = baseHTML
+        let baseHTMLBase64 = Data(baseHTML.utf8).base64EncodedString()
         context.coordinator.pendingPayloadBase64 = payloadBase64
         context.coordinator.pendingSelectedID = selectedID
+        context.coordinator.pendingBaseHTMLBase64 = baseHTMLBase64
+        context.coordinator.lastAppliedBaseHTMLBase64 = baseHTMLBase64
         context.coordinator.isPageReady = false
-        let html = editorHTML(payloadBase64: payloadBase64, selectedID: selectedID)
+        onLoadStateChange(false)
+        let html = editorHTML(payloadBase64: payloadBase64, selectedID: selectedID, baseHTMLBase64: baseHTMLBase64)
         webView.loadHTMLString(html, baseURL: nil)
         return webView
     }
@@ -4346,16 +5326,14 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
         context.coordinator.parent = self
         let payloadBase64 = overlayPayloadBase64()
         let selectedID = selectedOverlayID?.uuidString ?? ""
+        let baseHTMLBase64 = Data(baseHTML.utf8).base64EncodedString()
         context.coordinator.pendingPayloadBase64 = payloadBase64
         context.coordinator.pendingSelectedID = selectedID
-
-        if context.coordinator.lastBaseHTML != baseHTML {
-            context.coordinator.lastBaseHTML = baseHTML
-            context.coordinator.isPageReady = false
-            let html = editorHTML(payloadBase64: payloadBase64, selectedID: selectedID)
-            uiView.loadHTMLString(html, baseURL: nil)
-            return
+        if context.coordinator.lastAppliedBaseHTMLBase64 != baseHTMLBase64 {
+            context.coordinator.lastAppliedBaseHTMLBase64 = baseHTMLBase64
+            onLoadStateChange(false)
         }
+        context.coordinator.pendingBaseHTMLBase64 = baseHTMLBase64
 
         context.coordinator.pushPendingStateIfReady(uiView)
     }
@@ -4378,6 +5356,7 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
         var textColor: String
         var textAlign: String
         var textSize: Double
+        var textSizeCqw: Double
         var textWeight: Double
         var rectFill: String
         var rectBorder: String
@@ -4388,6 +5367,7 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
         var iconColor: String
         var iconHasBackground: Bool
         var iconBackground: String
+        var imageCornerRadius: Double
         var imageDataURI: String
         var imageFilter: String
         var pixelated: Bool
@@ -4413,6 +5393,7 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                 textColor: themedText.colorHex,
                 textAlign: overlay.textAlignment.rawValue,
                 textSize: themedTextSize,
+                textSizeCqw: themedText.sizeCqw,
                 textWeight: themedText.weightValue,
                 rectFill: overlay.shapeFillColorHex,
                 rectBorder: overlay.shapeBorderColorHex,
@@ -4423,6 +5404,7 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                 iconColor: overlay.iconColorHex,
                 iconHasBackground: overlay.iconHasBackground,
                 iconBackground: overlay.iconBackgroundColorHex,
+                imageCornerRadius: overlay.imageCornerRadiusRatio,
                 imageDataURI: presentationImageDataURI(overlay.displayImageData),
                 imageFilter: presentationImageCSSFilter(style: overlay.selectedFilter, params: overlay.stylization),
                 pixelated: overlay.selectedFilter == .pixelPainter,
@@ -4435,9 +5417,7 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
         return payloadData.base64EncodedString()
     }
 
-    private func editorHTML(payloadBase64: String, selectedID: String) -> String {
-        let baseHTMLBase64 = Data(baseHTML.utf8).base64EncodedString()
-
+    private func editorHTML(payloadBase64: String, selectedID: String, baseHTMLBase64: String) -> String {
         return """
         <!doctype html>
         <html>
@@ -4458,8 +5438,8 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
               height: 100%;
               position: relative;
               overflow: hidden;
-              border-radius: 18px;
-              background: #000;
+              border-radius: 0;
+              background: transparent;
             }
             #baseFrame {
               position: absolute;
@@ -4483,13 +5463,16 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
               justify-content: center;
               user-select: none;
               touch-action: none;
-              overflow: hidden;
+              overflow: visible;
               border-radius: 10px;
-              border: 1px solid rgba(255,255,255,0.14);
+              border: 0;
+              box-shadow: none;
               will-change: left, top, width, height, transform;
             }
             .ov.selected {
-              border: 2px solid #22d3ee;
+              box-shadow:
+                0 0 0 2px #22d3ee,
+                0 0 0 4px rgba(34, 211, 238, 0.25);
             }
             .ov .control-handle {
               position: absolute;
@@ -4546,6 +5529,24 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
             .ov .control-handle.rotate:active {
               cursor: grabbing;
             }
+            .ov .control-handle.delete {
+              right: 10px;
+              top: -14px;
+              width: 20px;
+              height: 20px;
+              border-radius: 999px;
+              background: rgba(17,24,39,0.9);
+              color: rgba(255,255,255,0.96);
+              border: 1.6px solid rgba(255,255,255,0.9);
+              box-shadow: 0 2px 7px rgba(0,0,0,0.28);
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 12px;
+              font-weight: 700;
+              line-height: 1;
+              cursor: pointer;
+            }
             .ov .control-handle.crop {
               background: rgba(255,255,255,0.98);
               border: 1px solid rgba(17,24,39,0.55);
@@ -4586,12 +5587,38 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
               padding: 6px 8px;
               white-space: pre-wrap;
               word-break: break-word;
+              border: 0;
+              background: transparent;
+              overflow: visible;
             }
-            .ov.rect { }
+            .ov.text.selected {
+              border: 2px dashed rgba(34, 211, 238, 0.95);
+              border-radius: 8px;
+              background: rgba(34, 211, 238, 0.08);
+              box-shadow: none;
+            }
+            .ov.rect {
+              border-style: solid;
+            }
+            .ov.rect.selected {
+              border: 2.6px solid #22d3ee !important;
+              box-shadow:
+                0 0 0 2px rgba(8, 145, 178, 0.38),
+                0 0 18px rgba(34, 211, 238, 0.28);
+            }
             .ov.icon {
               border-radius: 999px;
               font-size: 1.9cqw;
               line-height: 1;
+            }
+            .ov.image {
+              border-radius: 0;
+              overflow: visible;
+            }
+            .ov.image .image-media {
+              position: absolute;
+              inset: 0;
+              overflow: hidden;
             }
             .ov.image img {
               width: 100%;
@@ -4603,9 +5630,15 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
               image-rendering: pixelated;
             }
             .ov.image.vectorized .svg-bg,
-            .ov.image.vectorized .svg-host {
+            .ov.image.vectorized .svg-host,
+            .ov.image.vectorized .svg-ink {
               width: 100%;
               height: 100%;
+            }
+            .ov.image.vectorized .svg-bg,
+            .ov.image.vectorized .svg-ink {
+              position: absolute;
+              inset: 0;
             }
             .ov.image.vectorized svg {
               width: 100%;
@@ -4630,11 +5663,14 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                 return decodeURIComponent(arr.join(''));
               }
               const baseFrame = document.getElementById('baseFrame');
-              baseFrame.srcdoc = b64ToUtf8('\(baseHTMLBase64)');
+              var currentBaseHTMLBase64 = '\(baseHTMLBase64)';
+              baseFrame.srcdoc = b64ToUtf8(currentBaseHTMLBase64);
 
               let overlays = JSON.parse(b64ToUtf8('\(payloadBase64)'));
               let selectedID = '\(selectedID)';
               const layer = document.getElementById('overlayLayer');
+              let nativeRects = [];
+              let nativeOffsetMap = {};
 
               const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
               const post = (payload) => {
@@ -4647,7 +5683,8 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
               const dragRuntime = {
                 active: false,
                 pendingPayloadBase64: null,
-                pendingSelectedID: null
+                pendingSelectedID: null,
+                pendingBaseHTMLBase64: null
               };
               const pointInRect = (x, y, rect, padding = 0) => (
                 x >= rect.x - padding &&
@@ -4688,6 +5725,191 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                 const localY = event.clientY - frame.top;
                 const content = imageContentRect(ov, ovEl);
                 return pointInRect(localX, localY, content, tolerance);
+              }
+
+              function rectUnion(rects) {
+                if (!rects.length) { return null; }
+                let minX = Number.POSITIVE_INFINITY;
+                let minY = Number.POSITIVE_INFINITY;
+                let maxX = Number.NEGATIVE_INFINITY;
+                let maxY = Number.NEGATIVE_INFINITY;
+                for (const rect of rects) {
+                  if (!rect || rect.width <= 0 || rect.height <= 0) { continue; }
+                  minX = Math.min(minX, rect.left);
+                  minY = Math.min(minY, rect.top);
+                  maxX = Math.max(maxX, rect.right);
+                  maxY = Math.max(maxY, rect.bottom);
+                }
+                if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+                  return null;
+                }
+                return {
+                  left: minX,
+                  top: minY,
+                  width: Math.max(0, maxX - minX),
+                  height: Math.max(0, maxY - minY)
+                };
+              }
+
+              function normalizedRectFromDOMRect(domRect) {
+                const stage = stageRect();
+                if (!domRect || stage.width <= 0 || stage.height <= 0) { return null; }
+                const x = clamp((domRect.left - stage.left) / stage.width, 0, 1);
+                const y = clamp((domRect.top - stage.top) / stage.height, 0, 1);
+                const maxW = 1 - x;
+                const maxH = 1 - y;
+                const width = clamp(domRect.width / stage.width, 0, maxW);
+                const height = clamp(domRect.height / stage.height, 0, maxH);
+                if (width <= 0.001 || height <= 0.001) { return null; }
+                return { x, y, width, height };
+              }
+
+              function nativeSelectorMap() {
+                return {
+                  title: ['.hero h1'],
+                  subtitle: ['.hero .lead'],
+                  levelChip: ['.hero .level-chip'],
+                  toolkitIcon: ['.hero .toolkit-icon'],
+                  mainCard: ['.main-layout .main-card'],
+                  activityCard: ['.main-layout .activity-card'],
+                  mainContent: [
+                    '.main-card .knowledge-line',
+                    '.main-card .activity-line',
+                    '.main-card .activity-ordered',
+                    '.main-card .empty'
+                  ],
+                  toolkitContent: [
+                    '.activity-card .activity-line',
+                    '.activity-card .activity-ordered',
+                    '.activity-card .empty'
+                  ]
+                };
+              }
+
+              function nativeLayoutSelectorMap() {
+                return {
+                  title: ['.hero h1'],
+                  subtitle: ['.hero .lead'],
+                  levelChip: ['.hero .level-chip'],
+                  toolkitIcon: ['.hero .toolkit-icon'],
+                  mainCard: ['.main-layout .main-card'],
+                  activityCard: ['.main-layout .activity-card'],
+                  mainContent: ['.main-card .knowledge-content', '.main-card .activity-content', '.main-card .empty'],
+                  toolkitContent: ['.activity-card .activity-content', '.activity-card .empty']
+                };
+              }
+
+              function loadNativeOffsetsFromFrame() {
+                const frameWindow = baseFrame.contentWindow;
+                const value = frameWindow ? frameWindow.__edunodeNativeOffsets : null;
+                if (!value || typeof value !== 'object') {
+                  Object.keys(nativeOffsetMap).forEach((key) => delete nativeOffsetMap[key]);
+                  return;
+                }
+                const firstSlideKey = Object.keys(value)[0];
+                const scoped = firstSlideKey ? value[firstSlideKey] : {};
+                Object.keys(nativeOffsetMap).forEach((key) => delete nativeOffsetMap[key]);
+                if (scoped && typeof scoped === 'object') {
+                  Object.keys(scoped).forEach((key) => {
+                    nativeOffsetMap[key] = scoped[key];
+                  });
+                }
+              }
+
+              function applySingleNativeOffsetInFrame(nativeID, offset) {
+                const doc = baseFrame.contentDocument;
+                if (!doc) { return; }
+                const selectors = nativeLayoutSelectorMap()[nativeID] || [];
+                if (!selectors.length) { return; }
+                const stage = stageRect();
+                const tx = (Number(offset && offset.offsetX) || 0) * Math.max(1, stage.width);
+                const ty = (Number(offset && offset.offsetY) || 0) * Math.max(1, stage.height);
+                selectors.forEach((selector) => {
+                  doc.querySelectorAll(selector).forEach((node) => {
+                    const key = 'edunodeNativeBaseTransform';
+                    if (node.dataset[key] === undefined) {
+                      node.dataset[key] = node.style.transform || '';
+                    }
+                    const base = node.dataset[key] || '';
+                    node.style.transform = (base ? (base + ' ') : '') + 'translate(' + tx + 'px, ' + ty + 'px)';
+                    node.style.willChange = 'transform';
+                  });
+                });
+              }
+
+              function applyAllNativeOffsetsInFrame() {
+                Object.keys(nativeOffsetMap).forEach((key) => {
+                  applySingleNativeOffsetInFrame(key, nativeOffsetMap[key]);
+                });
+              }
+
+              function collectNativeRects() {
+                const doc = baseFrame.contentDocument;
+                if (!doc) {
+                  nativeRects = [];
+                  post({ type: 'nativeRects', items: [] });
+                  return;
+                }
+                const selectors = nativeSelectorMap();
+                const items = [];
+                Object.keys(selectors).forEach((id) => {
+                  const rects = [];
+                  selectors[id].forEach((selector) => {
+                    doc.querySelectorAll(selector).forEach((node) => {
+                      const rect = node.getBoundingClientRect();
+                      if (rect.width > 0 && rect.height > 0) {
+                        rects.push(rect);
+                      }
+                    });
+                  });
+                  const union = rectUnion(rects);
+                  const normalized = normalizedRectFromDOMRect(union);
+                  if (normalized) {
+                    items.push({
+                      id,
+                      x: normalized.x,
+                      y: normalized.y,
+                      width: normalized.width,
+                      height: normalized.height
+                    });
+                  }
+                });
+                nativeRects = items;
+                post({ type: 'nativeRects', items });
+              }
+
+              function scheduleNativeRectCollection() {
+                window.requestAnimationFrame(() => {
+                  collectNativeRects();
+                });
+              }
+
+              function hitNativeElementID(nx, ny) {
+                if (!nativeRects.length) { return null; }
+                const sorted = nativeRects
+                  .slice()
+                  .sort((a, b) => (a.width * a.height) - (b.width * b.height));
+                for (const item of sorted) {
+                  if (pointInRect(nx, ny, item, 0)) {
+                    return item.id || null;
+                  }
+                }
+                return null;
+              }
+
+              function updateBaseHTMLIfNeeded(nextBaseHTMLBase64) {
+                if (!nextBaseHTMLBase64 || nextBaseHTMLBase64 === currentBaseHTMLBase64) { return; }
+                currentBaseHTMLBase64 = nextBaseHTMLBase64;
+                baseFrame.srcdoc = b64ToUtf8(nextBaseHTMLBase64);
+              }
+
+              function applyImageCornerRadius(ov, ovEl) {
+                const media = ovEl.querySelector('.image-media');
+                if (!media) { return; }
+                const rect = ovEl.getBoundingClientRect();
+                const minDim = Math.max(1, Math.min(rect.width, rect.height));
+                const ratio = clamp(Number(ov.imageCornerRadius || 0), 0, 0.5);
+                media.style.borderRadius = (minDim * ratio) + 'px';
               }
 
               function alignToStyle(el, ov) {
@@ -4732,6 +5954,9 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                 const handle = document.createElement('div');
                 handle.className = 'control-handle ' + classes;
                 handle.dataset.handle = handleType;
+                if (handleType === 'delete') {
+                  handle.textContent = '×';
+                }
                 el.appendChild(handle);
               }
 
@@ -4760,28 +5985,29 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
 
               function cropRectForHandle(handleType, dx, dy) {
                 const maxCut = 0.82;
+                const maxExpand = 0.82;
                 const minSize = 0.18;
                 const rect = { x: 0, y: 0, width: 1, height: 1 };
                 switch (handleType) {
                   case 'crop-left': {
-                    const cut = clamp(dx, 0, maxCut);
+                    const cut = clamp(dx, -maxExpand, maxCut);
                     rect.x = cut;
                     rect.width = Math.max(minSize, 1 - cut);
                     break;
                   }
                   case 'crop-right': {
-                    const cut = clamp(-dx, 0, maxCut);
+                    const cut = clamp(-dx, -maxExpand, maxCut);
                     rect.width = Math.max(minSize, 1 - cut);
                     break;
                   }
                   case 'crop-top': {
-                    const cut = clamp(dy, 0, maxCut);
+                    const cut = clamp(dy, -maxExpand, maxCut);
                     rect.y = cut;
                     rect.height = Math.max(minSize, 1 - cut);
                     break;
                   }
                   case 'crop-bottom': {
-                    const cut = clamp(-dy, 0, maxCut);
+                    const cut = clamp(-dy, -maxExpand, maxCut);
                     rect.height = Math.max(minSize, 1 - cut);
                     break;
                   }
@@ -4820,7 +6046,12 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                   if (ov.kind === 'text') {
                     el.classList.add('text');
                     el.style.color = ov.textColor || '#111111';
-                    el.style.fontSize = Math.max(12, Math.min(96, ov.textSize)) + 'px';
+                    const textSizeCqw = Number(ov.textSizeCqw || 0);
+                    if (Number.isFinite(textSizeCqw) && textSizeCqw > 0) {
+                      el.style.fontSize = clamp(textSizeCqw, 0.6, 9.8) + 'cqw';
+                    } else {
+                      el.style.fontSize = Math.max(12, Math.min(96, ov.textSize)) + 'px';
+                    }
                     el.style.fontWeight = textWeight(ov.textWeight);
                     el.style.textAlign = ov.textAlign === 'center' ? 'center' : (ov.textAlign === 'trailing' ? 'right' : 'left');
                     el.textContent = ov.text || 'Text';
@@ -4836,6 +6067,8 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                     el.textContent = ov.iconGlyph || '✦';
                   } else {
                     el.classList.add('image');
+                    const mediaHost = document.createElement('div');
+                    mediaHost.className = 'image-media';
                     if (ov.svgMarkup && ov.svgMarkup.trim().length > 0) {
                       el.classList.add('vectorized');
                       const svgBG = document.createElement('div');
@@ -4843,13 +6076,17 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                       svgBG.style.background = ov.vectorBackgroundVisible
                         ? (ov.vectorBackgroundColor || '#FFFFFF')
                         : 'transparent';
-                      svgBG.style.filter = ov.imageFilter || 'none';
+
+                      const svgInk = document.createElement('div');
+                      svgInk.className = 'svg-ink';
+                      svgInk.style.filter = ov.imageFilter || 'none';
 
                       const svgHost = document.createElement('div');
                       svgHost.className = 'svg-host';
                       svgHost.innerHTML = ov.svgMarkup;
-                      svgBG.appendChild(svgHost);
-                      el.appendChild(svgBG);
+                      svgInk.appendChild(svgHost);
+                      mediaHost.appendChild(svgBG);
+                      mediaHost.appendChild(svgInk);
                     } else {
                       if (ov.pixelated) {
                         el.classList.add('pixelated');
@@ -4858,11 +6095,13 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                       img.src = ov.imageDataURI || '';
                       img.alt = 'Overlay Image';
                       img.style.filter = ov.imageFilter || 'none';
-                      el.appendChild(img);
+                      mediaHost.appendChild(img);
                     }
+                    el.appendChild(mediaHost);
                   }
 
                   if (ov.id === selectedID) {
+                    appendHandle(el, 'delete', 'delete');
                     appendHandle(el, 'resize-nw', 'resize');
                     appendHandle(el, 'resize-ne', 'resize');
                     appendHandle(el, 'resize-sw', 'resize');
@@ -4883,8 +6122,11 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                   layer.appendChild(el);
                   if (ov.kind === 'roundedRect') {
                     applyRectShapeStyle(el, ov);
+                  } else if (ov.kind === 'image') {
+                    applyImageCornerRadius(ov, el);
                   }
                 });
+                scheduleNativeRectCollection();
               }
 
               function select(id, notify = true) {
@@ -4903,10 +6145,88 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                 }
               }
 
+              function beginNativeInteraction(event, nativeID, nx, ny) {
+                if (!nativeID) {
+                  post({ type: 'canvasTap', x: nx, y: ny, nativeID: '' });
+                  return;
+                }
+                dragRuntime.active = true;
+                dragRuntime.pendingPayloadBase64 = null;
+                dragRuntime.pendingSelectedID = null;
+                dragRuntime.pendingBaseHTMLBase64 = null;
+                post({ type: 'canvasTap', x: nx, y: ny, nativeID: nativeID });
+                const rect = stageRect();
+                const startX = event.clientX;
+                const startY = event.clientY;
+                const current = nativeOffsetMap[nativeID] || { offsetX: 0, offsetY: 0 };
+                const startOffsetX = Number(current.offsetX) || 0;
+                const startOffsetY = Number(current.offsetY) || 0;
+                let moved = false;
+                let ended = false;
+                let latestOffset = { offsetX: startOffsetX, offsetY: startOffsetY };
+
+                function onMove(e) {
+                  if (ended) { return; }
+                  e.preventDefault();
+                  const dx = (e.clientX - startX) / Math.max(1, rect.width);
+                  const dy = (e.clientY - startY) / Math.max(1, rect.height);
+                  const travel = Math.hypot(e.clientX - startX, e.clientY - startY);
+                  if (travel > 2.5) {
+                    moved = true;
+                  }
+                  latestOffset = {
+                    offsetX: clamp(startOffsetX + dx, -0.7, 0.7),
+                    offsetY: clamp(startOffsetY + dy, -0.7, 0.7)
+                  };
+                  nativeOffsetMap[nativeID] = latestOffset;
+                  applySingleNativeOffsetInFrame(nativeID, latestOffset);
+                  scheduleNativeRectCollection();
+                }
+
+                function onEnd() {
+                  if (ended) { return; }
+                  ended = true;
+                  window.removeEventListener('pointermove', onMove);
+                  window.removeEventListener('pointercancel', onEnd);
+                  if (moved) {
+                    post({
+                      type: 'nativeMove',
+                      id: nativeID,
+                      offsetX: latestOffset.offsetX,
+                      offsetY: latestOffset.offsetY
+                    });
+                  }
+                  dragRuntime.active = false;
+                  if (dragRuntime.pendingPayloadBase64 !== null) {
+                    try {
+                      overlays = JSON.parse(b64ToUtf8(dragRuntime.pendingPayloadBase64));
+                    } catch (_) {
+                      overlays = [];
+                    }
+                    selectedID = (dragRuntime.pendingSelectedID || '');
+                    updateBaseHTMLIfNeeded(dragRuntime.pendingBaseHTMLBase64);
+                    dragRuntime.pendingPayloadBase64 = null;
+                    dragRuntime.pendingSelectedID = null;
+                    dragRuntime.pendingBaseHTMLBase64 = null;
+                  }
+                  render();
+                }
+
+                window.addEventListener('pointermove', onMove);
+                window.addEventListener('pointerup', onEnd, { once: true });
+                window.addEventListener('pointercancel', onEnd, { once: true });
+                event.preventDefault();
+              }
+
               layer.addEventListener('pointerdown', (event) => {
                 const ovEl = event.target.closest('.ov');
                 if (!ovEl) {
-                  select('');
+                  const rect = stageRect();
+                  const nx = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+                  const ny = clamp((event.clientY - rect.top) / Math.max(1, rect.height), 0, 1);
+                  const nativeID = hitNativeElementID(nx, ny);
+                  select('', false);
+                  beginNativeInteraction(event, nativeID, nx, ny);
                   return;
                 }
                 const id = ovEl.dataset.id;
@@ -4917,9 +6237,23 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                 const isResize = handleType.startsWith('resize-');
                 const isRotate = handleType === 'rotate';
                 const isCrop = handleType.startsWith('crop-');
+                const isDelete = handleType === 'delete';
 
-                if (ov.kind === 'image' && !isResize && !isRotate && !isCrop && !pointerHitsImageContent(event, ov, ovEl)) {
-                  select('');
+                if (isDelete) {
+                  post({ type: 'delete', id: ov.id });
+                  selectedID = '';
+                  render();
+                  event.preventDefault();
+                  return;
+                }
+
+                if (ov.kind === 'image' && !isResize && !isRotate && !isCrop && !isDelete && !pointerHitsImageContent(event, ov, ovEl)) {
+                  const rect = stageRect();
+                  const nx = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+                  const ny = clamp((event.clientY - rect.top) / Math.max(1, rect.height), 0, 1);
+                  const nativeID = hitNativeElementID(nx, ny);
+                  select('', false);
+                  beginNativeInteraction(event, nativeID, nx, ny);
                   return;
                 }
 
@@ -4944,11 +6278,12 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                 let longPressTriggered = false;
                 let active = true;
                 let longPressToken = null;
-                const longPressEligible = ov.kind === 'image' && !isResize && !isRotate && !isCrop;
+                const longPressEligible = ov.kind === 'image' && !isResize && !isRotate && !isCrop && !isDelete;
                 const longPressDuration = 460;
                 dragRuntime.active = true;
                 dragRuntime.pendingPayloadBase64 = null;
                 dragRuntime.pendingSelectedID = null;
+                dragRuntime.pendingBaseHTMLBase64 = null;
 
                 if (longPressEligible) {
                   longPressToken = window.setTimeout(() => {
@@ -5006,6 +6341,9 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                   }
                   const liveEl = layer.querySelector('.ov[data-id="' + ov.id + '"]') || activeEl;
                   alignToStyle(liveEl, ov);
+                  if (ov.kind === 'image') {
+                    applyImageCornerRadius(ov, liveEl);
+                  }
                 }
 
                 function onEnd() {
@@ -5041,7 +6379,8 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                       x: latestCropRect.x,
                       y: latestCropRect.y,
                       width: latestCropRect.width,
-                      height: latestCropRect.height
+                      height: latestCropRect.height,
+                      handle: handleType
                     });
                   }
                   if (isCrop) {
@@ -5060,8 +6399,10 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                       overlays = [];
                     }
                     selectedID = (dragRuntime.pendingSelectedID || '');
+                    updateBaseHTMLIfNeeded(dragRuntime.pendingBaseHTMLBase64);
                     dragRuntime.pendingPayloadBase64 = null;
                     dragRuntime.pendingSelectedID = null;
+                    dragRuntime.pendingBaseHTMLBase64 = null;
                   }
                   render();
                 }
@@ -5072,12 +6413,6 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                 event.preventDefault();
               });
 
-              layer.addEventListener('click', (event) => {
-                if (!event.target.closest('.ov')) {
-                  select('');
-                }
-              });
-
               window.addEventListener('keydown', (event) => {
                 if ((event.key === 'Backspace' || event.key === 'Delete') && selectedID) {
                   post({ type: 'delete', id: selectedID });
@@ -5086,10 +6421,11 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                 }
               });
 
-              window.__edunodeUpdate = function (payloadBase64, nextSelectedID) {
+              window.__edunodeUpdate = function (payloadBase64, nextSelectedID, nextBaseHTMLBase64) {
                 if (dragRuntime.active) {
                   dragRuntime.pendingPayloadBase64 = payloadBase64;
                   dragRuntime.pendingSelectedID = (nextSelectedID || '');
+                  dragRuntime.pendingBaseHTMLBase64 = (nextBaseHTMLBase64 || '');
                   return;
                 }
                 try {
@@ -5098,8 +6434,19 @@ private struct PresentationSlideCanvasHTMLView: UIViewRepresentable {
                   overlays = [];
                 }
                 selectedID = (nextSelectedID || '');
+                updateBaseHTMLIfNeeded(nextBaseHTMLBase64 || '');
                 render();
               };
+
+              baseFrame.addEventListener('load', () => {
+                loadNativeOffsetsFromFrame();
+                applyAllNativeOffsetsInFrame();
+                post({ type: 'baseLoaded' });
+                scheduleNativeRectCollection();
+              });
+              window.addEventListener('resize', () => {
+                scheduleNativeRectCollection();
+              });
 
               render();
             })();
@@ -5234,16 +6581,25 @@ private struct PresentationSVGOverlayView: UIViewRepresentable {
 #else
 private struct PresentationSlideCanvasHTMLView: View {
     let baseHTML: String
+    let textTheme: PresentationTextTheme
     let overlays: [PresentationSlideOverlay]
     let selectedOverlayID: UUID?
+    let onLoadStateChange: (Bool) -> Void
     let onSelectOverlay: (UUID?) -> Void
+    let onCanvasTap: (CGPoint, PresentationNativeElement?) -> Void
     let onCommitOverlayFrame: (UUID, CGPoint, CGFloat, CGFloat) -> Void
+    let onRotateOverlay: (UUID, Double) -> Void
+    let onCropOverlay: (UUID, CGRect, String?) -> Void
     let onDeleteOverlay: (UUID) -> Void
     let onExtractOverlaySubject: (UUID) -> Void
+    let onNativeRectsUpdate: ([PresentationNativeElement: CGRect]) -> Void
 
     var body: some View {
         Text(baseHTML)
             .font(.caption2.monospaced())
+            .onAppear {
+                onLoadStateChange(true)
+            }
     }
 }
 
