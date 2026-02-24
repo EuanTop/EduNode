@@ -33,6 +33,7 @@ final class GNodeWorkspaceFile {
     var knowledgeToolkitMarkedDone: Bool
     var lessonPlanMarkedDone: Bool
     var evaluationMarkedDone: Bool
+    @Attribute(.externalStorage) var presentationStateData: Data
 
     init(
         id: UUID = UUID(),
@@ -63,6 +64,7 @@ final class GNodeWorkspaceFile {
         knowledgeToolkitMarkedDone: Bool = false,
         lessonPlanMarkedDone: Bool = false,
         evaluationMarkedDone: Bool = false,
+        presentationStateData: Data = Data(),
         createdAt: Date = .now,
         updatedAt: Date = .now
     ) {
@@ -94,6 +96,7 @@ final class GNodeWorkspaceFile {
         self.knowledgeToolkitMarkedDone = knowledgeToolkitMarkedDone
         self.lessonPlanMarkedDone = lessonPlanMarkedDone
         self.evaluationMarkedDone = evaluationMarkedDone
+        self.presentationStateData = presentationStateData
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

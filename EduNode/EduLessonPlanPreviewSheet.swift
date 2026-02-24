@@ -22,18 +22,49 @@ struct EduLessonPlanPreviewSheet: View {
     @State private var exportDocument: EduExportDocument?
     @State private var exportContentType: UTType = .plainText
     @State private var exportFilename = "lesson-plan.md"
+    @State private var isExportingPDF = false
+    @State private var cachedPDFHash: Int?
+    @State private var cachedPDFData: Data?
+
+    private var isChinese: Bool {
+        Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
+    }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 Color(white: 0.1).ignoresSafeArea()
-                LessonPlanHTMLView(html: payload.html)
+                Group {
+                    #if canImport(UIKit) && canImport(WebKit)
+                    LessonPlanHTMLView(html: payload.html)
+                    #else
+                    LessonPlanHTMLView(html: payload.html)
+                    #endif
+                }
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .stroke(Color.black.opacity(0.06), lineWidth: 1)
                     )
                     .padding(16)
+                if isExportingPDF {
+                    ZStack {
+                        Color.black.opacity(0.32)
+                            .ignoresSafeArea()
+                        VStack(spacing: 10) {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .tint(.white)
+                            Text(isChinese ? "正在生成 PDF…" : "Generating PDF…")
+                                .font(.callout)
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 16)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                    .transition(.opacity)
+                }
             }
             .navigationTitle(S("app.export.preview.title"))
             .navigationBarTitleDisplayMode(.inline)
@@ -43,13 +74,8 @@ struct EduLessonPlanPreviewSheet: View {
                         dismiss()
                     }
                 }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button(".md") {
-                        exportMarkdown()
-                    }
-                    Button(".pdf") {
-                        exportPDF()
-                    }
+                ToolbarItem(placement: .topBarTrailing) {
+                    exportActions
                 }
             }
         }
@@ -64,11 +90,11 @@ struct EduLessonPlanPreviewSheet: View {
     }
 
     private func exportMarkdown() {
+        guard !isExportingPDF else { return }
         guard let data = EduLessonPlanExporter.markdownData(
             context: payload.context,
             graphData: payload.graphData
         ) else { return }
-        let isChinese = Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
         presentExport(
             data: data,
             contentType: .plainText,
@@ -79,18 +105,41 @@ struct EduLessonPlanPreviewSheet: View {
     }
 
     private func exportPDF() {
-        guard let data = EduLessonPlanExporter.pdfData(
-            context: payload.context,
-            graphData: payload.graphData
-        ) else { return }
-        let isChinese = Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
-        presentExport(
-            data: data,
-            contentType: .pdf,
-            filename: isChinese
-                ? "\(payload.baseFileName)-教案.pdf"
-                : "\(payload.baseFileName)-lesson-plan.pdf"
-        )
+        guard !isExportingPDF else { return }
+        let filename = isChinese
+            ? "\(payload.baseFileName)-教案.pdf"
+            : "\(payload.baseFileName)-lesson-plan.pdf"
+        let context = payload.context
+        let graphData = payload.graphData
+        let exportHash = payload.html.hashValue ^ context.name.hashValue
+        if cachedPDFHash == exportHash, let cachedPDFData {
+            presentExport(
+                data: cachedPDFData,
+                contentType: .pdf,
+                filename: filename
+            )
+            return
+        }
+        isExportingPDF = true
+        Task.detached(priority: .userInitiated) {
+            let data = await MainActor.run {
+                EduLessonPlanExporter.pdfData(
+                    context: context,
+                    graphData: graphData
+                )
+            }
+            await MainActor.run {
+                isExportingPDF = false
+                guard let data else { return }
+                cachedPDFHash = exportHash
+                cachedPDFData = data
+                presentExport(
+                    data: data,
+                    contentType: .pdf,
+                    filename: filename
+                )
+            }
+        }
     }
 
     private func presentExport(data: Data, contentType: UTType, filename: String) {
@@ -102,6 +151,28 @@ struct EduLessonPlanPreviewSheet: View {
 
     private func S(_ key: String) -> String {
         NSLocalizedString(key, comment: "")
+    }
+
+    private var exportActions: some View {
+        HStack(spacing: 0) {
+            exportActionButton(title: ".md", action: exportMarkdown)
+            Rectangle()
+                .fill(Color.white.opacity(0.32))
+                .frame(width: 1, height: 16)
+                .padding(.horizontal, 4)
+            exportActionButton(title: ".pdf", action: exportPDF)
+        }
+        .disabled(isExportingPDF)
+    }
+
+    private func exportActionButton(title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .opacity(isExportingPDF ? 0.6 : 1)
     }
 }
 

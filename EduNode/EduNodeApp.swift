@@ -24,6 +24,9 @@ struct EduNodeApp: App {
     }()
 
     init() {
+        print("EDUNODE_TEST_PRINT_001")
+        NSLog("%@", "EDUNODE_TEST_PRINT_001")
+        bootLog("EduNodeApp.init")
         try? Tips.configure()
         EduNodePluginConfig.configureIfNeeded()
     }
@@ -33,10 +36,43 @@ struct EduNodeApp: App {
             ContentView()
                 .preferredColorScheme(.dark)
                 .onAppear {
+                    bootLog("WindowGroup.onAppear")
                     configureCatalystTitlebarIfNeeded()
                 }
         }
         .modelContainer(sharedModelContainer)
+    }
+
+    private func bootLog(_ message: String) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let tagged = "EDUNODE_BOOT | \(timestamp) | \(message)"
+        print(tagged)
+        NSLog("%@", tagged)
+        UserDefaults.standard.set(tagged, forKey: "edunode.lastBootLog")
+        appendDiagnosticLogLine(tagged)
+    }
+
+    private func appendDiagnosticLogLine(_ line: String) {
+        let fileManager = FileManager.default
+        guard let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return
+        }
+        let url = documents.appendingPathComponent("edunode_debug.log")
+        guard let data = (line + "\n").data(using: .utf8) else { return }
+
+        if fileManager.fileExists(atPath: url.path),
+           let handle = try? FileHandle(forWritingTo: url) {
+            do {
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+                try handle.close()
+                return
+            } catch {
+                try? handle.close()
+            }
+        }
+
+        try? data.write(to: url, options: .atomic)
     }
 
     private static func makeModelContainer(schema: Schema) -> ModelContainer {

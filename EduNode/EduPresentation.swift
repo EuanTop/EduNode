@@ -4,6 +4,9 @@ import GNodeKit
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(UIKit) && canImport(WebKit)
+import WebKit
+#endif
 
 struct EduPresentationDeck {
     let orderedSlides: [EduPresentationBaseSlide]
@@ -579,15 +582,41 @@ enum EduPresentationPlanner {
 
 enum EduPresentationHTMLExporter {
     static func html(courseName: String, slides: [EduPresentationComposedSlide], isChinese: Bool) -> String {
-        renderedHTML(courseName: courseName, slides: slides, isChinese: isChinese, interactive: true, embedded: false)
+        renderedHTML(
+            courseName: courseName,
+            slides: slides,
+            isChinese: isChinese,
+            interactive: true,
+            embedded: false,
+            overlayHTMLBySlideID: [:]
+        )
     }
 
-    static func printHTML(courseName: String, slides: [EduPresentationComposedSlide], isChinese: Bool) -> String {
-        renderedHTML(courseName: courseName, slides: slides, isChinese: isChinese, interactive: false, embedded: false)
+    static func printHTML(
+        courseName: String,
+        slides: [EduPresentationComposedSlide],
+        isChinese: Bool,
+        overlayHTMLBySlideID: [UUID: String] = [:]
+    ) -> String {
+        renderedHTML(
+            courseName: courseName,
+            slides: slides,
+            isChinese: isChinese,
+            interactive: false,
+            embedded: false,
+            overlayHTMLBySlideID: overlayHTMLBySlideID
+        )
     }
 
     static func singleSlideHTML(courseName: String, slide: EduPresentationComposedSlide, isChinese: Bool) -> String {
-        renderedHTML(courseName: courseName, slides: [slide], isChinese: isChinese, interactive: false, embedded: true)
+        renderedHTML(
+            courseName: courseName,
+            slides: [slide],
+            isChinese: isChinese,
+            interactive: false,
+            embedded: true,
+            overlayHTMLBySlideID: [:]
+        )
     }
 
     static func pdfData(courseName: String, slides: [EduPresentationComposedSlide], isChinese: Bool) -> Data? {
@@ -598,12 +627,29 @@ enum EduPresentationHTMLExporter {
         return renderPDF(markupHTML: rendered, title: title)
     }
 
+    static func pdfData(markupHTML: String, title: String) -> Data? {
+        renderPDF(markupHTML: markupHTML, title: title)
+    }
+
+    @MainActor
+    static func pdfDataAsync(markupHTML: String, title: String) async -> Data? {
+        #if canImport(UIKit) && canImport(WebKit)
+        if #available(iOS 14.0, *) {
+            if let fastData = await renderPDFWithWebView(markupHTML: markupHTML) {
+                return fastData
+            }
+        }
+        #endif
+        return renderPDF(markupHTML: markupHTML, title: title)
+    }
+
     private static func renderedHTML(
         courseName: String,
         slides: [EduPresentationComposedSlide],
         isChinese: Bool,
         interactive: Bool,
-        embedded: Bool
+        embedded: Bool,
+        overlayHTMLBySlideID: [UUID: String]
     ) -> String {
         let bodyClass: String = {
             if embedded { return "embedded" }
@@ -716,6 +762,9 @@ enum EduPresentationHTMLExporter {
                     ? "<span class=\"cue-spacer\"></span>"
                     : "<p class=\"cue\">\(escapeHTML(cuePrefix + cueLine))</p>"
                 let indexLabel = String(format: "%02d", slide.index)
+                let overlayHTML = overlayHTMLBySlideID[slide.id]
+                    .map { "<div class=\"edunode-overlay-layer\">\($0)</div>" }
+                    ?? ""
 
                 return """
                 <section class="slide\(interactive && index == 0 ? " active" : "")">
@@ -735,6 +784,7 @@ enum EduPresentationHTMLExporter {
                       </article>
                       \(activityBlock)
                     </section>
+                    \(overlayHTML)
 
                     <footer class="foot">
                       \(cueHTML)
@@ -863,6 +913,7 @@ enum EduPresentationHTMLExporter {
               height: auto;
               aspect-ratio: 16 / 9;
               margin: 0 auto;
+              position: relative;
               background: #ffffff;
               border: 1px solid #dbe1ea;
               border-radius: 14px;
@@ -873,6 +924,69 @@ enum EduPresentationHTMLExporter {
               gap: 1.8cqw;
               overflow: visible;
               container-type: size;
+            }
+            .edunode-overlay-layer {
+              position: absolute;
+              inset: 0;
+              pointer-events: none;
+              z-index: 8;
+            }
+            .edunode-overlay {
+              position: absolute;
+              transform: translate(-50%, -50%);
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              overflow: hidden;
+              pointer-events: none;
+            }
+            .edunode-overlay.image img,
+            .edunode-overlay.vector .edunode-svg-wrap,
+            .edunode-overlay.vector .edunode-svg-bg,
+            .edunode-overlay.vector .edunode-svg-ink {
+              width: 100%;
+              height: 100%;
+            }
+            .edunode-overlay.image img {
+              object-fit: contain;
+              display: block;
+            }
+            .edunode-overlay.image.pixelated img {
+              image-rendering: pixelated;
+            }
+            .edunode-overlay.vector svg {
+              width: 100%;
+              height: 100%;
+              display: block;
+            }
+            .edunode-overlay.vector {
+              isolation: isolate;
+            }
+            .edunode-overlay.vector .edunode-svg-bg,
+            .edunode-overlay.vector .edunode-svg-ink {
+              position: absolute;
+              inset: 0;
+            }
+            .edunode-overlay.vector .edunode-svg-bg {
+              z-index: 0;
+              border-radius: 0.62cqw;
+              overflow: hidden;
+            }
+            .edunode-overlay.vector .edunode-svg-ink {
+              z-index: 1;
+            }
+            .edunode-overlay.text {
+              color: #111111;
+              white-space: pre-wrap;
+              word-break: break-word;
+            }
+            .edunode-overlay.rect {
+              border-radius: 0.68cqw;
+            }
+            .edunode-overlay.icon {
+              border-radius: 999px;
+              font-size: 1.82cqw;
+              line-height: 1;
             }
             body.interactive .slide-sheet {
               width: min(92vw, 1366px);
@@ -909,25 +1023,21 @@ enum EduPresentationHTMLExporter {
               word-break: break-word;
             }
             .toolkit-icon {
-              width: 2.3cqw;
-              height: 2.3cqw;
-              min-width: 22px;
-              min-height: 22px;
+              width: 3.45cqw;
+              height: 3.45cqw;
               border-radius: 999px;
               display: inline-flex;
               align-items: center;
               justify-content: center;
               background: #e8eefb;
               border: 1px solid #cad7f3;
-              font-size: 1.28cqw;
+              font-size: 1.78cqw;
               line-height: 1;
               flex-shrink: 0;
             }
             .toolkit-icon img {
-              width: 1.28cqw;
-              height: 1.28cqw;
-              min-width: 12px;
-              min-height: 12px;
+              width: 2.05cqw;
+              height: 2.05cqw;
               display: block;
             }
             .level-chip {
@@ -1326,7 +1436,7 @@ enum EduPresentationHTMLExporter {
 
     private static let toolkitSymbolDataURI: String? = {
         #if canImport(UIKit)
-        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold, scale: .medium)
+        let symbolConfig = UIImage.SymbolConfiguration(pointSize: 23, weight: .semibold, scale: .large)
         guard let baseSymbol = UIImage(systemName: "wrench.adjustable", withConfiguration: symbolConfig) else {
             return nil
         }
@@ -1336,13 +1446,13 @@ enum EduPresentationHTMLExporter {
             renderingMode: .alwaysOriginal
         )
 
-        let imageSize = CGSize(width: 20, height: 20)
+        let imageSize = CGSize(width: 34, height: 34)
         let rendererFormat = UIGraphicsImageRendererFormat.default()
         rendererFormat.scale = 2
         rendererFormat.opaque = false
         let renderer = UIGraphicsImageRenderer(size: imageSize, format: rendererFormat)
         let rendered = renderer.image { _ in
-            symbol.draw(in: CGRect(x: 1.6, y: 1.6, width: 16.8, height: 16.8))
+            symbol.draw(in: CGRect(x: 3.2, y: 3.2, width: 27.6, height: 27.6))
         }
 
         guard let pngData = rendered.pngData() else {
@@ -1399,7 +1509,106 @@ enum EduPresentationHTMLExporter {
         return nil
     }
     #endif
+
+    #if canImport(UIKit) && canImport(WebKit)
+    @MainActor
+    @available(iOS 14.0, *)
+    private static func renderPDFWithWebView(markupHTML: String) async -> Data? {
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1366, height: 768))
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+
+        let delegate = PDFWebViewLoadDelegate()
+        webView.navigationDelegate = delegate
+        webView.loadHTMLString(markupHTML, baseURL: nil)
+
+        let loaded = await delegate.waitForLoad(timeoutNanoseconds: 18_000_000_000)
+        guard loaded else {
+            webView.navigationDelegate = nil
+            return nil
+        }
+
+        // Give WebKit one layout pass before PDF capture.
+        try? await Task.sleep(nanoseconds: 120_000_000)
+
+        let configuration = WKPDFConfiguration()
+        let contentSize = webView.scrollView.contentSize
+        if contentSize.width > 1, contentSize.height > 1 {
+            configuration.rect = CGRect(origin: .zero, size: contentSize)
+        }
+
+        let pdfData = try? await webView.edunodeCreatePDF(configuration: configuration)
+        webView.navigationDelegate = nil
+        return pdfData
+    }
+    #endif
 }
+
+#if canImport(UIKit) && canImport(WebKit)
+@available(iOS 14.0, *)
+private final class PDFWebViewLoadDelegate: NSObject, WKNavigationDelegate {
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var resolved = false
+    private var didFinishLoad = false
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        didFinishLoad = true
+        resolve(with: true)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        resolve(with: false)
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        resolve(with: false)
+    }
+
+    @MainActor
+    func waitForLoad(timeoutNanoseconds: UInt64) async -> Bool {
+        if didFinishLoad {
+            return true
+        }
+
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            Task { [weak self] in
+                guard let self else { return }
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                await MainActor.run {
+                    self.resolve(with: false)
+                }
+            }
+        }
+    }
+
+    private func resolve(with value: Bool) {
+        guard !resolved else { return }
+        resolved = true
+        continuation?.resume(returning: value)
+        continuation = nil
+    }
+}
+
+@available(iOS 14.0, *)
+private extension WKWebView {
+    @MainActor
+    func edunodeCreatePDF(configuration: WKPDFConfiguration) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            createPDF(configuration: configuration) { result in
+                switch result {
+                case .success(let data):
+                    continuation.resume(returning: data)
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+}
+#endif
 
 private struct ParsedLiveNode {
     let textValue: String

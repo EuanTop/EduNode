@@ -17,8 +17,10 @@ import WebKit
 @MainActor
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \GNodeWorkspaceFile.createdAt, order: .forward) private var workspaceFiles: [GNodeWorkspaceFile]
     @AppStorage("edunode.seeded_default_course.v1") private var didSeedDefaultCourse = false
+    @AppStorage("edunode.lastPersistLog") private var lastPersistLog = ""
 
     @State private var selectedFileID: UUID?
     @State private var splitVisibility: NavigationSplitViewVisibility = .automatic
@@ -30,15 +32,25 @@ struct ContentView: View {
     @State private var presentationPreviewPayload: EduPresentationPreviewPayload?
     @State private var showingPresentationEmptyAlert = false
     @State private var activePresentationModeFileID: UUID?
+    @State private var activePresentationStylingFileID: UUID?
+    @State private var presentationModeLoadingFileID: UUID?
+    @State private var presentationModeActivationToken: UUID?
+    @State private var pendingPresentationThumbnailIDsByFile: [UUID: Set<UUID>] = [:]
     @State private var presentationBreaksByFile: [UUID: Set<Int>] = [:]
     @State private var presentationExcludedNodeIDsByFile: [UUID: Set<UUID>] = [:]
     @State private var selectedPresentationGroupIDByFile: [UUID: UUID] = [:]
+    @State private var presentationStylingByFile: [UUID: [UUID: PresentationSlideStylingState]] = [:]
+    @State private var presentationPageStyleByFile: [UUID: PresentationPageStyle] = [:]
+    @State private var presentationTextThemeByFile: [UUID: PresentationTextTheme] = [:]
+    @State private var hydratedPresentationStateFileIDs: Set<UUID> = []
+    @State private var presentationStylingTouchedFileIDs: Set<UUID> = []
     @State private var cameraRequest: NodeEditorCameraRequest?
     @State private var pendingFlowStepConfirmation: EduFlowStep?
     @State private var pendingFlowStepFileID: UUID?
     @State private var pendingFlowStepIsDone = false
     @State private var isSidebarBasicInfoExpanded = false
     @State private var editorStatsByFileID: [UUID: NodeEditorCanvasStats] = [:]
+    private let presentationPersistenceDebugEnabled = true
 
     private let modelRules = EduPlanning.loadModelRules()
     private var eduNodeMenuSections: [NodeMenuSectionConfig] {
@@ -48,6 +60,12 @@ struct ContentView: View {
     // When sidebar is hidden, reserve space for the system's circular sidebar reveal button.
     private var topToolbarLeadingReservedWidth: CGFloat {
         splitVisibility == .detailOnly ? 52 : 0
+    }
+    private let presentationFilmstripHeight: CGFloat = 186
+
+    private struct ResolvedPresentationSelection {
+        let group: EduPresentationSlideGroup
+        let slide: EduPresentationComposedSlide
     }
 
     var body: some View {
@@ -71,24 +89,50 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
+            persistenceLog("ContentView.onAppear files=\(workspaceFiles.count)", force: true)
             seedDefaultCourseIfNeeded()
             syncSelectedWorkspaceFile()
+            requestCameraFocusOnFirstNodeForSelectedFile()
+            hydratePresentationStateFromStoreIfNeeded()
             migrateWorkspaceFilesIfNeeded()
         }
         .onChange(of: workspaceFiles.map(\.id)) { _, _ in
             syncSelectedWorkspaceFile()
+            hydratePresentationStateFromStoreIfNeeded()
             migrateWorkspaceFilesIfNeeded()
             if let activePresentationModeFileID,
                !workspaceFiles.contains(where: { $0.id == activePresentationModeFileID }) {
                 self.activePresentationModeFileID = nil
             }
             let existingIDs = Set(workspaceFiles.map(\.id))
+            hydratedPresentationStateFileIDs = hydratedPresentationStateFileIDs.intersection(existingIDs)
+            presentationStylingTouchedFileIDs = presentationStylingTouchedFileIDs.intersection(existingIDs)
             presentationBreaksByFile = presentationBreaksByFile.filter { existingIDs.contains($0.key) }
             presentationExcludedNodeIDsByFile = presentationExcludedNodeIDsByFile.filter { existingIDs.contains($0.key) }
             selectedPresentationGroupIDByFile = selectedPresentationGroupIDByFile.filter { existingIDs.contains($0.key) }
+            presentationStylingByFile = presentationStylingByFile.filter { existingIDs.contains($0.key) }
+            presentationPageStyleByFile = presentationPageStyleByFile.filter { existingIDs.contains($0.key) }
+            presentationTextThemeByFile = presentationTextThemeByFile.filter { existingIDs.contains($0.key) }
+            if let activePresentationStylingFileID,
+               !existingIDs.contains(activePresentationStylingFileID) {
+                self.activePresentationStylingFileID = nil
+            }
+            if let presentationModeLoadingFileID,
+               !existingIDs.contains(presentationModeLoadingFileID) {
+                self.presentationModeLoadingFileID = nil
+                self.presentationModeActivationToken = nil
+            }
+            pendingPresentationThumbnailIDsByFile = pendingPresentationThumbnailIDsByFile.filter { existingIDs.contains($0.key) }
         }
         .onChange(of: selectedFileID) { _, _ in
             isSidebarBasicInfoExpanded = false
+            requestCameraFocusOnFirstNodeForSelectedFile()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            persistenceLog("scenePhase -> \(String(describing: newPhase))", force: true)
+            if newPhase == .inactive || newPhase == .background {
+                persistAllPresentationStates()
+            }
         }
         .sheet(isPresented: $showingCreateCourseSheet) {
             CourseCreationSheet(
@@ -118,6 +162,18 @@ struct ContentView: View {
         .fullScreenCover(isPresented: $showingDocs) {
             docsContent
                 .ignoresSafeArea()
+        }
+        .fullScreenCover(
+            isPresented: Binding(
+                get: { activePresentationStylingFileID != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        activePresentationStylingFileID = nil
+                    }
+                }
+            )
+        ) {
+            presentationStylingFullScreenPage
         }
         .sheet(item: $lessonPlanPreviewPayload) { payload in
             EduLessonPlanPreviewSheet(payload: payload)
@@ -219,6 +275,7 @@ struct ContentView: View {
                 isChinese: isChineseUI()
             )
             let isPresentationModeActive = activePresentationModeFileID == file.id
+            let isPreparingPresentationMode = presentationModeLoadingFileID == file.id
             ZStack {
                 NodeEditorView(
                     documentID: file.id,
@@ -253,6 +310,15 @@ struct ContentView: View {
                 .toolbarBackground(.hidden, for: .navigationBar)
 
                 if isPresentationModeActive && !slideGroups.isEmpty {
+                    if activePresentationStylingFileID != file.id {
+                        presentationStylingFloatingEntryButton(
+                            fileID: file.id,
+                            groups: slideGroups,
+                            bottomSafeInset: bottomSafeInset
+                        )
+                        .zIndex(2050)
+                    }
+
                     presentationFilmstrip(
                         fileID: file.id,
                         courseName: file.name,
@@ -261,6 +327,11 @@ struct ContentView: View {
                         slides: composedSlides
                     )
                     .zIndex(2000)
+                }
+
+                if isPreparingPresentationMode {
+                    presentationPreparingOverlay
+                        .zIndex(2100)
                 }
 
                 editorStatsOverlay(
@@ -311,6 +382,67 @@ struct ContentView: View {
         } else {
             Text(S("app.docs.unsupported"))
                 .padding()
+        }
+    }
+
+    @ViewBuilder
+    private var presentationStylingFullScreenPage: some View {
+        if let fileID = activePresentationStylingFileID,
+           let file = workspaceFiles.first(where: { $0.id == fileID }) {
+            GeometryReader { geometry in
+                let rawDeck = EduPresentationPlanner.makeDeck(graphData: file.data)
+                let deck = filteredPresentationDeck(for: file.id, from: rawDeck)
+                let groups = presentationGroups(for: file.id, deck: deck)
+                let slides = EduPresentationPlanner.composeSlides(
+                    from: groups,
+                    isChinese: isChineseUI()
+                )
+                let selectedPresentation = resolvedPresentationSelection(
+                    fileID: file.id,
+                    groups: groups,
+                    slides: slides
+                )
+
+                ZStack {
+                    Color(white: 0.1).ignoresSafeArea()
+
+                    if let selectedPresentation {
+                        presentationStylingOverlay(
+                            file: file,
+                            selectedGroup: selectedPresentation.group,
+                            selectedSlide: selectedPresentation.slide,
+                            toolbarTopPadding: geometry.safeAreaInsets.top,
+                            bottomSafeInset: geometry.safeAreaInsets.bottom
+                        )
+
+                        if !groups.isEmpty {
+                            presentationFilmstrip(
+                                fileID: file.id,
+                                courseName: file.name,
+                                deck: deck,
+                                groups: groups,
+                                slides: slides
+                            )
+                            .zIndex(2000)
+                        }
+                    } else {
+                        VStack(spacing: 12) {
+                            Text(S("app.presentation.emptyMessage"))
+                                .foregroundStyle(.secondary)
+                            Button(S("action.close")) {
+                                activePresentationStylingFileID = nil
+                            }
+                        }
+                    }
+                }
+            }
+            .ignoresSafeArea()
+        } else {
+            Color(white: 0.1)
+                .ignoresSafeArea()
+                .onAppear {
+                    activePresentationStylingFileID = nil
+                }
         }
     }
 
@@ -442,6 +574,84 @@ struct ContentView: View {
         selectedFileID = workspaceFiles.first?.id
     }
 
+    private func requestCameraFocusOnFirstNodeForSelectedFile() {
+        guard let file = selectedWorkspaceFile,
+              let firstNodePosition = firstCanvasNodePosition(from: file.data) else {
+            return
+        }
+        let fileID = file.id
+        cameraRequest = nil
+        DispatchQueue.main.async {
+            guard self.selectedFileID == fileID else { return }
+            self.cameraRequest = NodeEditorCameraRequest(canvasPosition: firstNodePosition)
+        }
+    }
+
+    private func firstCanvasNodePosition(from graphData: Data) -> CGPoint? {
+        guard let document = try? decodeDocument(from: graphData) else { return nil }
+        guard !document.nodes.isEmpty else { return nil }
+
+        struct PositionedNode {
+            let id: UUID
+            let position: CGPoint
+        }
+        struct Column {
+            var anchorX: CGFloat
+            var members: [PositionedNode]
+        }
+
+        let stateByNodeID = Dictionary(uniqueKeysWithValues: document.canvasState.map { ($0.nodeID, $0) })
+        let nodes: [PositionedNode] = document.nodes.map { serialized in
+            let state = stateByNodeID[serialized.id]
+            let x = CGFloat(state?.positionX ?? 200)
+            let y = CGFloat(state?.positionY ?? 200)
+            return PositionedNode(id: serialized.id, position: CGPoint(x: x, y: y))
+        }
+        guard !nodes.isEmpty else { return nil }
+
+        let sortedByX = nodes.sorted { lhs, rhs in
+            if lhs.position.x == rhs.position.x {
+                return lhs.position.y < rhs.position.y
+            }
+            return lhs.position.x < rhs.position.x
+        }
+
+        let columnThreshold: CGFloat = 240
+        var columns: [Column] = []
+
+        for node in sortedByX {
+            var candidateIndex: Int?
+            var candidateDistance: CGFloat = .greatestFiniteMagnitude
+
+            for idx in columns.indices {
+                let distance = abs(node.position.x - columns[idx].anchorX)
+                if distance < candidateDistance {
+                    candidateDistance = distance
+                    candidateIndex = idx
+                }
+            }
+
+            if let candidateIndex, candidateDistance <= columnThreshold {
+                columns[candidateIndex].members.append(node)
+                let xs = columns[candidateIndex].members.map(\.position.x)
+                columns[candidateIndex].anchorX = xs.reduce(0, +) / CGFloat(xs.count)
+            } else {
+                columns.append(Column(anchorX: node.position.x, members: [node]))
+            }
+        }
+
+        columns.sort { $0.anchorX < $1.anchorX }
+        let ordered = columns.flatMap { column in
+            column.members.sorted { lhs, rhs in
+                if lhs.position.y == rhs.position.y {
+                    return lhs.id.uuidString < rhs.id.uuidString
+                }
+                return lhs.position.y < rhs.position.y
+            }
+        }
+        return ordered.first?.position
+    }
+
     private func migrateWorkspaceFilesIfNeeded() {
         var didChange = false
         for file in workspaceFiles {
@@ -470,6 +680,655 @@ struct ContentView: View {
         }
     }
 
+    private func hydratePresentationStateFromStoreIfNeeded() {
+        for file in workspaceFiles {
+            hydratePresentationState(for: file, force: false)
+        }
+    }
+
+    private func hydratePresentationState(for file: GNodeWorkspaceFile, force: Bool) {
+        if !force, hydratedPresentationStateFileIDs.contains(file.id) {
+            return
+        }
+
+        let candidatePayloads = presentationStateDecodeCandidates(for: file)
+        guard !candidatePayloads.isEmpty else {
+            if force {
+                persistenceLog("⚠️ No persisted presentation candidate for file \(file.id)", force: true)
+            }
+            return
+        }
+
+        let decoder = JSONDecoder()
+        var decodedCandidates: [(source: String, data: Data, payload: PresentationPersistedState)] = []
+        var decodeFailures: [String] = []
+        for candidate in candidatePayloads {
+            do {
+                let payload = try decoder.decode(PresentationPersistedState.self, from: candidate.data)
+                decodedCandidates.append((candidate.source, candidate.data, payload))
+            } catch {
+                decodeFailures.append("\(candidate.source): \(error)")
+            }
+        }
+
+        guard let chosen = preferredPresentationPersistedCandidate(decodedCandidates) else {
+            persistenceLog(
+                "⚠️ Failed to decode presentation state for file \(file.id). " +
+                decodeFailures.joined(separator: " | "),
+                force: true
+            )
+            return
+        }
+        let persisted = chosen.payload
+        let decodedSource = chosen.source
+
+        // Sidecar is authoritative; keep inline payload as compact marker.
+        if decodedSource == "sidecar" {
+            let markerData = presentationStateInlineMarkerData(fileID: file.id)
+            if file.presentationStateData != markerData {
+                file.presentationStateData = markerData
+                file.updatedAt = .now
+                do {
+                    try modelContext.save()
+                } catch {
+                    persistenceLog("⚠️ Failed to persist sidecar marker inline for file \(file.id): \(error)", force: true)
+                }
+            }
+        }
+
+        if !persisted.breaks.isEmpty {
+            presentationBreaksByFile[file.id] = Set(persisted.breaks)
+        }
+        if !persisted.excludedNodeIDs.isEmpty {
+            presentationExcludedNodeIDsByFile[file.id] = Set(persisted.excludedNodeIDs)
+        }
+
+        let rawDeck = EduPresentationPlanner.makeDeck(graphData: file.data)
+        let filteredDeck = filteredPresentationDeck(for: file.id, from: rawDeck)
+        let currentGroups = presentationGroups(for: file.id, deck: filteredDeck)
+        let currentGroupIDs = Set(currentGroups.map(\.id))
+        if let selectedGroupID = persisted.selectedGroupID,
+           currentGroupIDs.contains(selectedGroupID) {
+            selectedPresentationGroupIDByFile[file.id] = selectedGroupID
+        } else if let selectedSignature = persisted.selectedGroupSignature,
+                  let matchedGroupID = currentGroups.first(where: { presentationGroupSignature($0) == selectedSignature })?.id {
+            selectedPresentationGroupIDByFile[file.id] = matchedGroupID
+        }
+
+        presentationPageStyleByFile[file.id] = persisted.pageStyle
+        presentationTextThemeByFile[file.id] = persisted.textTheme
+
+        if !persisted.groups.isEmpty {
+            presentationStylingByFile[file.id] = remappedPresentationGroupStates(
+                fileID: file.id,
+                graphData: file.data,
+                persistedGroups: persisted.groups,
+                pageStyle: persisted.pageStyle,
+                textTheme: persisted.textTheme
+            )
+        }
+
+        let hydratedOverlayCount = (presentationStylingByFile[file.id] ?? [:]).values.reduce(0) { partialResult, state in
+            partialResult + state.overlays.count
+        }
+        persistenceLog(
+            "📥 Hydrated presentation state file=\(file.id) source=\(decodedSource) " +
+            "persistedGroups=\(persisted.groups.count) hydratedOverlays=\(hydratedOverlayCount) bytes=\(chosen.data.count)"
+        )
+
+        hydratedPresentationStateFileIDs.insert(file.id)
+    }
+
+    private func persistAllPresentationStates() {
+        for file in workspaceFiles {
+            persistPresentationState(fileID: file.id)
+        }
+    }
+
+    private func persistPresentationState(fileID: UUID) {
+        guard let file = workspaceFiles.first(where: { $0.id == fileID }) else { return }
+        let rawDeck = EduPresentationPlanner.makeDeck(graphData: file.data)
+        let filteredDeck = filteredPresentationDeck(for: fileID, from: rawDeck)
+        let orderedGroups = presentationGroups(for: fileID, deck: filteredDeck)
+        let orderedGroupIDs = orderedGroups.map(\.id)
+        let groupSignatureByID = Dictionary(
+            uniqueKeysWithValues: orderedGroups.map { group in
+                (group.id, presentationGroupSignature(group))
+            }
+        )
+        let stateByGroup = presentationStylingByFile[fileID] ?? [:]
+        var orderedPersistedGroups: [PresentationPersistedGroupState] = []
+
+        for groupID in orderedGroupIDs {
+            guard let state = stateByGroup[groupID] else { continue }
+            orderedPersistedGroups.append(
+                PresentationPersistedGroupState(
+                    groupID: groupID,
+                    groupSignature: groupSignatureByID[groupID],
+                    selectedOverlayID: state.selectedOverlayID,
+                    vectorization: state.vectorization,
+                    overlays: state.overlays.map(presentationOverlayRecord(from:))
+                )
+            )
+        }
+
+        let remainingGroupIDs = stateByGroup.keys
+            .filter { !orderedGroupIDs.contains($0) }
+            .sorted { $0.uuidString < $1.uuidString }
+        for groupID in remainingGroupIDs {
+            guard let state = stateByGroup[groupID] else { continue }
+            orderedPersistedGroups.append(
+                PresentationPersistedGroupState(
+                    groupID: groupID,
+                    groupSignature: groupSignatureByID[groupID],
+                    selectedOverlayID: state.selectedOverlayID,
+                    vectorization: state.vectorization,
+                    overlays: state.overlays.map(presentationOverlayRecord(from:))
+                )
+            )
+        }
+
+        let decoder = JSONDecoder()
+        let decodedExistingCandidates = presentationStateDecodeCandidates(for: file).compactMap { candidate -> (source: String, data: Data, payload: PresentationPersistedState)? in
+            guard let payload = try? decoder.decode(PresentationPersistedState.self, from: candidate.data) else {
+                return nil
+            }
+            return (candidate.source, candidate.data, payload)
+        }
+        let existingPersisted = preferredPresentationPersistedCandidate(decodedExistingCandidates)?.payload
+
+        let hasInMemoryStyling = !(stateByGroup.isEmpty)
+        let hasTouchedStyling = presentationStylingTouchedFileIDs.contains(fileID)
+        if orderedPersistedGroups.isEmpty,
+           !hasInMemoryStyling,
+           !hasTouchedStyling,
+           let existingPersisted,
+           !existingPersisted.groups.isEmpty {
+            orderedPersistedGroups = existingPersisted.groups
+        }
+
+        let selectedGroupID = selectedPresentationGroupIDByFile[fileID] ?? existingPersisted?.selectedGroupID
+        let selectedGroupSignature = selectedGroupID.flatMap { groupSignatureByID[$0] } ?? existingPersisted?.selectedGroupSignature
+        let resolvedBreaks: [Int] = {
+            if let breaks = presentationBreaksByFile[fileID] {
+                return Array(breaks).sorted()
+            }
+            return existingPersisted?.breaks ?? []
+        }()
+        let resolvedExcludedIDs: [UUID] = {
+            if let excluded = presentationExcludedNodeIDsByFile[fileID] {
+                return Array(excluded).sorted { $0.uuidString < $1.uuidString }
+            }
+            return (existingPersisted?.excludedNodeIDs ?? []).sorted { $0.uuidString < $1.uuidString }
+        }()
+        let persisted = PresentationPersistedState(
+            breaks: resolvedBreaks,
+            excludedNodeIDs: resolvedExcludedIDs,
+            selectedGroupID: selectedGroupID,
+            selectedGroupSignature: selectedGroupSignature,
+            pageStyle: presentationPageStyleByFile[fileID] ?? existingPersisted?.pageStyle ?? .default,
+            textTheme: presentationTextThemeByFile[fileID] ?? existingPersisted?.textTheme ?? .default,
+            updatedAt: .now,
+            groups: orderedPersistedGroups
+        )
+
+        let encoder = JSONEncoder()
+        let data: Data
+        do {
+            data = try encoder.encode(persisted)
+        } catch {
+            persistenceLog("❌ Failed to encode presentation state for file \(fileID): \(error)", force: true)
+            return
+        }
+
+        let sidecarWriteSucceeded = writePresentationStateToSidecar(fileID: fileID, data: data)
+        let inlinePayload = sidecarWriteSucceeded
+            ? presentationStateInlineMarkerData(fileID: fileID)
+            : data
+        let shouldSaveModel = file.presentationStateData != inlinePayload
+
+        if shouldSaveModel {
+            file.presentationStateData = inlinePayload
+            file.updatedAt = .now
+            do {
+                try modelContext.save()
+            } catch {
+                persistenceLog("❌ Failed to persist presentation state: \(error)", force: true)
+            }
+        }
+
+        if presentationPersistenceDebugEnabled {
+            let overlayCount = persisted.groups.reduce(0) { partialResult, group in
+                partialResult + group.overlays.count
+            }
+            persistenceLog(
+                "💾 Persisted presentation state file=\(fileID) groups=\(persisted.groups.count) " +
+                "overlays=\(overlayCount) bytes=\(data.count) sidecar=\(sidecarWriteSucceeded) " +
+                "inlineBytes=\(inlinePayload.count) touched=\(hasTouchedStyling)"
+            )
+        }
+    }
+
+    private func presentationOverlayRecord(from overlay: PresentationSlideOverlay) -> PresentationPersistedOverlay {
+        let persistedImageData = normalizedPersistentImageData(overlay.imageData)
+        let persistedExtractedData = overlay.extractedImageData.map { normalizedPersistentImageData($0) }
+        return PresentationPersistedOverlay(
+            id: overlay.id,
+            kindRaw: overlay.kind.rawValue,
+            imageData: persistedImageData,
+            extractedImageData: persistedExtractedData,
+            vectorDocument: overlay.vectorDocument.map {
+                PresentationPersistedSVGDocument(
+                    width: $0.width,
+                    height: $0.height,
+                    body: $0.body
+                )
+            },
+            selectedFilterRaw: overlay.selectedFilter.rawValue,
+            stylization: PresentationPersistedStylization(from: overlay.stylization),
+            centerX: clampedFiniteDouble(Double(overlay.center.x), range: 0...1, fallback: 0.5),
+            centerY: clampedFiniteDouble(Double(overlay.center.y), range: 0...1, fallback: 0.58),
+            normalizedWidth: clampedFiniteDouble(Double(overlay.normalizedWidth), range: 0.08...0.96, fallback: 0.28),
+            normalizedHeight: clampedFiniteDouble(Double(overlay.normalizedHeight), range: 0.08...0.96, fallback: 0.2),
+            aspectRatio: clampedFiniteDouble(Double(overlay.aspectRatio), range: 0.15...10, fallback: 1),
+            rotationDegrees: finiteDouble(overlay.rotationDegrees, fallback: 0),
+            textContent: overlay.textContent,
+            textStylePreset: overlay.textStylePreset,
+            textColorHex: overlay.textColorHex,
+            textAlignment: overlay.textAlignment,
+            textFontSize: clampedFiniteDouble(overlay.textFontSize, range: 8...180, fallback: 24),
+            textWeightValue: clampedFiniteDouble(overlay.textWeightValue, range: 0...1, fallback: 0.5),
+            shapeFillColorHex: overlay.shapeFillColorHex,
+            shapeBorderColorHex: overlay.shapeBorderColorHex,
+            shapeBorderWidth: clampedFiniteDouble(overlay.shapeBorderWidth, range: 0...24, fallback: 1.2),
+            shapeCornerRadiusRatio: clampedFiniteDouble(overlay.shapeCornerRadiusRatio, range: 0...0.5, fallback: 0.18),
+            shapeStyleRaw: overlay.shapeStyle.rawValue,
+            iconSystemName: overlay.iconSystemName,
+            iconColorHex: overlay.iconColorHex,
+            iconHasBackground: overlay.iconHasBackground,
+            iconBackgroundColorHex: overlay.iconBackgroundColorHex,
+            vectorStrokeColorHex: overlay.vectorStrokeColorHex,
+            vectorBackgroundColorHex: overlay.vectorBackgroundColorHex,
+            vectorBackgroundVisible: overlay.vectorBackgroundVisible
+        )
+    }
+
+    private func remappedPresentationGroupStates(
+        fileID: UUID,
+        graphData: Data,
+        persistedGroups: [PresentationPersistedGroupState],
+        pageStyle: PresentationPageStyle,
+        textTheme: PresentationTextTheme
+    ) -> [UUID: PresentationSlideStylingState] {
+        guard !persistedGroups.isEmpty else { return [:] }
+
+        let rawDeck = EduPresentationPlanner.makeDeck(graphData: graphData)
+        let filteredDeck = filteredPresentationDeck(for: fileID, from: rawDeck)
+        let currentGroups = presentationGroups(for: fileID, deck: filteredDeck)
+        guard !currentGroups.isEmpty else {
+            var fallback: [UUID: PresentationSlideStylingState] = [:]
+            for group in persistedGroups {
+                fallback[group.groupID] = hydratedPresentationGroupState(
+                    group,
+                    pageStyle: pageStyle,
+                    textTheme: textTheme
+                )
+            }
+            return fallback
+        }
+
+        let currentIDs = Set(currentGroups.map(\.id))
+        let currentSignatureToID = Dictionary(
+            uniqueKeysWithValues: currentGroups.map { group in
+                (presentationGroupSignature(group), group.id)
+            }
+        )
+
+        var remapped: [UUID: PresentationSlideStylingState] = [:]
+        var usedPersistedIndices = Set<Int>()
+
+        // 1) Exact group ID match.
+        for (index, persistedGroup) in persistedGroups.enumerated() {
+            guard currentIDs.contains(persistedGroup.groupID) else { continue }
+            remapped[persistedGroup.groupID] = hydratedPresentationGroupState(
+                persistedGroup,
+                pageStyle: pageStyle,
+                textTheme: textTheme
+            )
+            usedPersistedIndices.insert(index)
+        }
+
+        // 2) Signature match.
+        for (index, persistedGroup) in persistedGroups.enumerated() where !usedPersistedIndices.contains(index) {
+            guard let signature = persistedGroup.groupSignature,
+                  let matchedID = currentSignatureToID[signature],
+                  remapped[matchedID] == nil else {
+                continue
+            }
+            remapped[matchedID] = hydratedPresentationGroupState(
+                persistedGroup,
+                pageStyle: pageStyle,
+                textTheme: textTheme
+            )
+            usedPersistedIndices.insert(index)
+        }
+
+        // 3) Index fallback for remaining groups.
+        let unmatchedCurrentIDsInOrder = currentGroups.map(\.id).filter { remapped[$0] == nil }
+        let remainingPersistedIndices = persistedGroups.indices.filter { !usedPersistedIndices.contains($0) }
+        for (targetID, persistedIndex) in zip(unmatchedCurrentIDsInOrder, remainingPersistedIndices) {
+            remapped[targetID] = hydratedPresentationGroupState(
+                persistedGroups[persistedIndex],
+                pageStyle: pageStyle,
+                textTheme: textTheme
+            )
+        }
+
+        return remapped
+    }
+
+    private func hydratedPresentationGroupState(
+        _ group: PresentationPersistedGroupState,
+        pageStyle: PresentationPageStyle,
+        textTheme: PresentationTextTheme
+    ) -> PresentationSlideStylingState {
+        var state = PresentationSlideStylingState.empty
+        state.selectedOverlayID = group.selectedOverlayID
+        state.vectorization = group.vectorization
+        state.pageStyle = pageStyle
+        state.textTheme = textTheme
+        state.overlays = group.overlays.map { overlay in
+            presentationOverlay(from: overlay)
+        }
+        return state
+    }
+
+    private func presentationGroupSignature(_ group: EduPresentationSlideGroup) -> String {
+        group.sourceSlides.map { $0.id.uuidString }.joined(separator: "|")
+    }
+
+    private func finiteDouble(_ value: Double, fallback: Double) -> Double {
+        value.isFinite ? value : fallback
+    }
+
+    private func clampedFiniteDouble(_ value: Double, range: ClosedRange<Double>, fallback: Double) -> Double {
+        let finite = finiteDouble(value, fallback: fallback)
+        return min(range.upperBound, max(range.lowerBound, finite))
+    }
+
+    private func normalizedPersistentImageData(_ data: Data) -> Data {
+        let maxPersistedBytes = 900_000
+        guard data.count > maxPersistedBytes else { return data }
+        #if canImport(UIKit)
+        guard let image = UIImage(data: data) else { return data }
+        let width = max(1, image.size.width)
+        let height = max(1, image.size.height)
+        let maxEdge = max(width, height)
+        let targetMaxEdge: CGFloat = 1280
+        let scale = min(1, targetMaxEdge / maxEdge)
+        let targetSize = CGSize(
+            width: max(1, floor(width * scale)),
+            height: max(1, floor(height * scale))
+        )
+
+        let hasAlpha = imageHasAlpha(image)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = !hasAlpha
+        let rendered = UIGraphicsImageRenderer(size: targetSize, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+
+        if hasAlpha {
+            if let png = rendered.pngData(), png.count < data.count {
+                return png
+            }
+            return data
+        }
+
+        if let jpeg = rendered.jpegData(compressionQuality: 0.72), jpeg.count < data.count {
+            return jpeg
+        }
+        return data
+        #else
+        return data
+        #endif
+    }
+
+    #if canImport(UIKit)
+    private func imageHasAlpha(_ image: UIImage) -> Bool {
+        guard let alphaInfo = image.cgImage?.alphaInfo else { return false }
+        switch alphaInfo {
+        case .first, .last, .premultipliedFirst, .premultipliedLast:
+            return true
+        default:
+            return false
+        }
+    }
+    #endif
+
+    private func presentationStateDecodeCandidates(for file: GNodeWorkspaceFile) -> [(source: String, data: Data)] {
+        var candidates: [(source: String, data: Data)] = []
+
+        if let sidecarData = loadPresentationStateFromSidecar(fileID: file.id), !sidecarData.isEmpty {
+            candidates.append((source: "sidecar", data: sidecarData))
+        }
+
+        let inlineData = resolvedInlinePresentationStateData(file.presentationStateData)
+        if !inlineData.isEmpty {
+            candidates.append((source: "inline", data: inlineData))
+        }
+
+        return candidates
+    }
+
+    private func resolvedInlinePresentationStateData(_ raw: Data) -> Data {
+        guard !raw.isEmpty else { return Data() }
+        guard let marker = String(data: raw, encoding: .utf8),
+              marker.hasPrefix(presentationStateMarkerPrefix) else {
+            return raw
+        }
+        return Data()
+    }
+
+    private var presentationStateMarkerPrefix: String {
+        "edunode.presentation.sidecar:"
+    }
+
+    private func presentationStateInlineMarkerData(fileID: UUID) -> Data {
+        Data("\(presentationStateMarkerPrefix)\(fileID.uuidString)".utf8)
+    }
+
+    private func preferredPresentationPersistedCandidate(
+        _ candidates: [(source: String, data: Data, payload: PresentationPersistedState)]
+    ) -> (source: String, data: Data, payload: PresentationPersistedState)? {
+        candidates.max(by: { lhs, rhs in
+            presentationPersistedCandidateSortsAscending(lhs: lhs, rhs: rhs)
+        })
+    }
+
+    private func presentationPersistedCandidateSortsAscending(
+        lhs: (source: String, data: Data, payload: PresentationPersistedState),
+        rhs: (source: String, data: Data, payload: PresentationPersistedState)
+    ) -> Bool {
+        let lhsHasGroups = !lhs.payload.groups.isEmpty
+        let rhsHasGroups = !rhs.payload.groups.isEmpty
+        if lhsHasGroups != rhsHasGroups {
+            return !lhsHasGroups && rhsHasGroups
+        }
+
+        let lhsIsSidecar = lhs.source == "sidecar"
+        let rhsIsSidecar = rhs.source == "sidecar"
+        if lhsIsSidecar != rhsIsSidecar {
+            return !lhsIsSidecar && rhsIsSidecar
+        }
+
+        let lhsDate = lhs.payload.updatedAt ?? .distantPast
+        let rhsDate = rhs.payload.updatedAt ?? .distantPast
+        if lhsDate != rhsDate {
+            return lhsDate < rhsDate
+        }
+
+        if lhs.payload.groups.count != rhs.payload.groups.count {
+            return lhs.payload.groups.count < rhs.payload.groups.count
+        }
+
+        return lhs.data.count < rhs.data.count
+    }
+
+    private func presentationStateDirectoryURL() -> URL? {
+        let fileManager = FileManager.default
+        let roots: [URL] = [
+            fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
+            fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
+        ]
+        .compactMap { $0 }
+
+        for root in roots {
+            let directory = root.appendingPathComponent("PresentationState", isDirectory: true)
+            if !fileManager.fileExists(atPath: directory.path) {
+                do {
+                    try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+                } catch {
+                    if presentationPersistenceDebugEnabled {
+                        persistenceLog("⚠️ Failed to create PresentationState directory at \(directory.path): \(error)", force: true)
+                    }
+                    continue
+                }
+            }
+            return directory
+        }
+
+        if presentationPersistenceDebugEnabled {
+            persistenceLog("❌ Unable to resolve PresentationState directory.", force: true)
+        }
+        return nil
+    }
+
+    private func presentationStateSidecarURL(fileID: UUID) -> URL? {
+        guard let directory = presentationStateDirectoryURL() else {
+            if presentationPersistenceDebugEnabled {
+                persistenceLog("❌ No PresentationState directory available for file \(fileID).", force: true)
+            }
+            return nil
+        }
+        return directory.appendingPathComponent("\(fileID.uuidString).json")
+    }
+
+    private func loadPresentationStateFromSidecar(fileID: UUID) -> Data? {
+        guard let url = presentationStateSidecarURL(fileID: fileID) else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        do {
+            return try Data(contentsOf: url)
+        } catch {
+            if presentationPersistenceDebugEnabled {
+                persistenceLog("⚠️ Failed to read presentation sidecar for file \(fileID) at \(url.path): \(error)", force: true)
+            }
+            return nil
+        }
+    }
+
+    @discardableResult
+    private func writePresentationStateToSidecar(fileID: UUID, data: Data) -> Bool {
+        guard let url = presentationStateSidecarURL(fileID: fileID) else {
+            persistenceLog("❌ Failed to write presentation sidecar for file \(fileID): no valid sidecar URL", force: true)
+            return false
+        }
+        do {
+            try data.write(to: url, options: .atomic)
+            if presentationPersistenceDebugEnabled {
+                persistenceLog("🗂️ Wrote presentation sidecar file=\(fileID) bytes=\(data.count) path=\(url.path)")
+            }
+            return true
+        } catch {
+            persistenceLog("❌ Failed to write presentation sidecar for file \(fileID) at \(url.path): \(error)", force: true)
+            return false
+        }
+    }
+
+    private func removePresentationStateSidecar(fileID: UUID) {
+        guard let url = presentationStateSidecarURL(fileID: fileID) else { return }
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            persistenceLog("⚠️ Failed to remove presentation sidecar for file \(fileID): \(error)", force: true)
+        }
+    }
+
+    private func persistenceLog(_ message: String, force: Bool = false) {
+        guard force || presentationPersistenceDebugEnabled else { return }
+        let tagged = "EDUNODE_PERSIST | \(message)"
+        lastPersistLog = tagged
+        print(tagged)
+        NSLog("%@", tagged)
+        appendDiagnosticLogLine(tagged)
+    }
+
+    private func appendDiagnosticLogLine(_ line: String) {
+        let fileManager = FileManager.default
+        guard let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            return
+        }
+        let url = documents.appendingPathComponent("edunode_debug.log")
+        guard let data = (line + "\n").data(using: .utf8) else { return }
+
+        if fileManager.fileExists(atPath: url.path),
+           let handle = try? FileHandle(forWritingTo: url) {
+            do {
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+                try handle.close()
+                return
+            } catch {
+                try? handle.close()
+            }
+        }
+
+        try? data.write(to: url, options: .atomic)
+    }
+
+    private func presentationOverlay(from record: PresentationPersistedOverlay) -> PresentationSlideOverlay {
+        let kind = PresentationOverlayKind(rawValue: record.kindRaw) ?? .image
+        let selectedFilter = SVGFilterStyle(rawValue: record.selectedFilterRaw) ?? .original
+        return PresentationSlideOverlay(
+            id: record.id,
+            kind: kind,
+            imageData: record.imageData,
+            extractedImageData: record.extractedImageData,
+            vectorDocument: record.vectorDocument.map {
+                SVGDocument(width: $0.width, height: $0.height, body: $0.body)
+            },
+            selectedFilter: selectedFilter,
+            stylization: record.stylization.value,
+            center: CGPoint(x: record.centerX, y: record.centerY),
+            normalizedWidth: CGFloat(record.normalizedWidth),
+            normalizedHeight: CGFloat(record.normalizedHeight),
+            aspectRatio: CGFloat(record.aspectRatio),
+            rotationDegrees: record.rotationDegrees,
+            isExtracting: false,
+            activeVectorizationRequestID: nil,
+            textContent: record.textContent,
+            textStylePreset: record.textStylePreset,
+            textColorHex: record.textColorHex,
+            textAlignment: record.textAlignment,
+            textFontSize: record.textFontSize,
+            textWeightValue: record.textWeightValue,
+            shapeFillColorHex: record.shapeFillColorHex,
+            shapeBorderColorHex: record.shapeBorderColorHex,
+            shapeBorderWidth: record.shapeBorderWidth,
+            shapeCornerRadiusRatio: record.shapeCornerRadiusRatio,
+            shapeStyle: PresentationShapeStyle(rawValue: record.shapeStyleRaw) ?? .roundedRect,
+            iconSystemName: record.iconSystemName,
+            iconColorHex: record.iconColorHex,
+            iconHasBackground: record.iconHasBackground,
+            iconBackgroundColorHex: record.iconBackgroundColorHex,
+            vectorStrokeColorHex: record.vectorStrokeColorHex,
+            vectorBackgroundColorHex: record.vectorBackgroundColorHex,
+            vectorBackgroundVisible: record.vectorBackgroundVisible
+        )
+    }
+
     private func deleteWorkspaceFile(_ file: GNodeWorkspaceFile) {
         let currentID = file.id
         let orderedIDs = workspaceFiles.map(\.id)
@@ -478,6 +1337,7 @@ struct ContentView: View {
 
         modelContext.delete(file)
         try? modelContext.save()
+        removePresentationStateSidecar(fileID: currentID)
 
         if remainingIDs.isEmpty {
             selectedFileID = nil
@@ -867,6 +1727,35 @@ Extend learning with monthly photo bird identification
     }
 
     @ViewBuilder
+    private var presentationPreparingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.56)
+                .ignoresSafeArea()
+            Rectangle()
+                .fill(.regularMaterial)
+                .opacity(0.34)
+                .ignoresSafeArea()
+
+            VStack(spacing: 10) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+                Text(isChineseUI() ? "正在准备演讲模式…" : "Preparing presentation mode…")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+            )
+        }
+        .allowsHitTesting(true)
+    }
+
+    @ViewBuilder
     private func sidebarContextRow(label: String, value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(label)
@@ -896,21 +1785,93 @@ Extend learning with monthly photo bird identification
     }
 
     private func togglePresentationMode(for file: GNodeWorkspaceFile) {
+        if presentationModeLoadingFileID == file.id {
+            presentationModeActivationToken = nil
+            presentationModeLoadingFileID = nil
+            pendingPresentationThumbnailIDsByFile[file.id] = nil
+            return
+        }
+
         if activePresentationModeFileID == file.id {
             activePresentationModeFileID = nil
+            if activePresentationStylingFileID == file.id {
+                activePresentationStylingFileID = nil
+            }
+            presentationModeActivationToken = nil
+            presentationModeLoadingFileID = nil
+            pendingPresentationThumbnailIDsByFile[file.id] = nil
             return
         }
 
-        let rawDeck = EduPresentationPlanner.makeDeck(graphData: file.data)
-        let deck = filteredPresentationDeck(for: file.id, from: rawDeck)
-        guard !deck.orderedSlides.isEmpty else {
-            showingPresentationEmptyAlert = true
-            return
-        }
+        activePresentationStylingFileID = nil
+        let activationToken = UUID()
+        presentationModeActivationToken = activationToken
+        presentationModeLoadingFileID = file.id
 
-        activePresentationModeFileID = file.id
-        if let firstGroup = presentationGroups(for: file.id, deck: deck).first {
-            selectPresentationGroup(fileID: file.id, group: firstGroup)
+        Task { @MainActor in
+            await Task.yield()
+            guard presentationModeActivationToken == activationToken else { return }
+
+            // Force a fresh restore each time user enters Present mode to avoid stale in-memory state.
+            hydratePresentationState(for: file, force: true)
+
+            let rawDeck = EduPresentationPlanner.makeDeck(graphData: file.data)
+            let deck = filteredPresentationDeck(for: file.id, from: rawDeck)
+            guard !deck.orderedSlides.isEmpty else {
+                if presentationModeActivationToken == activationToken {
+                    presentationModeLoadingFileID = nil
+                    pendingPresentationThumbnailIDsByFile[file.id] = nil
+                    showingPresentationEmptyAlert = true
+                }
+                return
+            }
+            let groups = presentationGroups(for: file.id, deck: deck)
+            guard !groups.isEmpty else {
+                if presentationModeActivationToken == activationToken {
+                    presentationModeLoadingFileID = nil
+                    pendingPresentationThumbnailIDsByFile[file.id] = nil
+                    showingPresentationEmptyAlert = true
+                }
+                return
+            }
+
+            guard presentationModeActivationToken == activationToken else { return }
+            let pendingThumbnailIDs = Set(groups.map(\.id))
+            pendingPresentationThumbnailIDsByFile[file.id] = pendingThumbnailIDs
+            activePresentationModeFileID = file.id
+            if let preferredID = selectedPresentationGroupIDByFile[file.id],
+               let preferredGroup = groups.first(where: { $0.id == preferredID }) {
+                selectPresentationGroup(fileID: file.id, group: preferredGroup)
+            } else if let overlayGroup = firstGroupWithOverlays(fileID: file.id, groups: groups) {
+                selectPresentationGroup(fileID: file.id, group: overlayGroup)
+            } else if let firstGroup = groups.first {
+                selectPresentationGroup(fileID: file.id, group: firstGroup)
+            }
+            if pendingThumbnailIDs.isEmpty {
+                presentationModeLoadingFileID = nil
+                pendingPresentationThumbnailIDsByFile[file.id] = nil
+            } else {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    guard presentationModeActivationToken == activationToken,
+                          presentationModeLoadingFileID == file.id else { return }
+                    presentationModeLoadingFileID = nil
+                    pendingPresentationThumbnailIDsByFile[file.id] = nil
+                }
+            }
+        }
+    }
+
+    private func markPresentationThumbnailLoaded(fileID: UUID, groupID: UUID) {
+        guard presentationModeLoadingFileID == fileID else { return }
+        guard var pendingIDs = pendingPresentationThumbnailIDsByFile[fileID] else { return }
+        guard pendingIDs.contains(groupID) else { return }
+        pendingIDs.remove(groupID)
+        if pendingIDs.isEmpty {
+            pendingPresentationThumbnailIDsByFile[fileID] = nil
+            presentationModeLoadingFileID = nil
+        } else {
+            pendingPresentationThumbnailIDsByFile[fileID] = pendingIDs
         }
     }
 
@@ -927,10 +1888,14 @@ Extend learning with monthly photo bird identification
             from: groups,
             isChinese: isChineseUI()
         )
+        let overlayHTMLBySlideID = presentationOverlayHTMLBySlideID(fileID: file.id, groups: groups)
         presentationPreviewPayload = EduPresentationPreviewPayload(
             courseName: file.name,
             baseFileName: sanitizedExportBaseName(file.name),
-            slides: slides
+            slides: slides,
+            pageStyle: resolvedPresentationPageStyle(fileID: file.id),
+            textTheme: resolvedPresentationTextTheme(fileID: file.id),
+            overlayHTMLBySlideID: overlayHTMLBySlideID
         )
     }
 
@@ -955,11 +1920,211 @@ Extend learning with monthly photo bird identification
         return EduPresentationDeck(orderedSlides: visibleSlides)
     }
 
+    private func presentationOverlayHTMLBySlideID(
+        fileID: UUID,
+        groups: [EduPresentationSlideGroup]
+    ) -> [UUID: String] {
+        var result: [UUID: String] = [:]
+        let slideAspect = max(0.75, resolvedPresentationPageStyle(fileID: fileID).aspectPreset.ratio)
+        let textTheme = resolvedPresentationTextTheme(fileID: fileID)
+        for group in groups {
+            let overlays = presentationStylingState(fileID: fileID, groupID: group.id).overlays
+            let html = presentationOverlayLayerHTML(
+                overlays: overlays,
+                slideAspect: slideAspect,
+                textTheme: textTheme
+            )
+            if !html.isEmpty {
+                result[group.id] = html
+            }
+        }
+        return result
+    }
+
+    private func presentationOverlayLayerHTML(
+        overlays: [PresentationSlideOverlay],
+        slideAspect: CGFloat,
+        textTheme: PresentationTextTheme
+    ) -> String {
+        overlays.compactMap { overlay in
+            presentationOverlayNodeHTML(
+                overlay,
+                slideAspect: slideAspect,
+                textTheme: textTheme
+            )
+        }.joined(separator: "\n")
+    }
+
+    private func presentationOverlayNodeHTML(
+        _ overlay: PresentationSlideOverlay,
+        slideAspect: CGFloat,
+        textTheme: PresentationTextTheme
+    ) -> String? {
+        _ = slideAspect
+        let centerX = max(0.04, min(0.96, overlay.center.x)) * 100
+        let centerY = max(0.08, min(0.92, overlay.center.y)) * 100
+        let widthPercent = max(2.0, min(96.0, Double(overlay.normalizedWidth * 100)))
+        let resolvedNormalizedHeight = overlay.normalizedHeight
+        let heightPercent = max(2.0, min(96.0, Double(resolvedNormalizedHeight * 100)))
+        let rotationDegrees = cssNumber(overlay.rotationDegrees)
+
+        let basePositionStyle = "left:\(cssNumber(centerX))%;top:\(cssNumber(centerY))%;"
+        let rotationTransformStyle = "transform:translate(-50%, -50%) rotate(\(rotationDegrees)deg);"
+
+        if overlay.isText {
+            let alignment: String
+            switch overlay.textAlignment {
+            case .leading:
+                alignment = "left"
+            case .center:
+                alignment = "center"
+            case .trailing:
+                alignment = "right"
+            }
+            let themedText = textTheme.style(for: overlay.textStylePreset)
+            let fontSizeCqw = max(0.7, min(8.5, themedText.sizeCqw))
+            let textWeight = String(themedText.cssWeight)
+            let textColor = normalizedOverlayHex(themedText.colorHex, fallback: "#111111")
+            let content = escapeOverlayHTML(overlay.textContent)
+                .replacingOccurrences(of: "\n", with: "<br/>")
+            let style = [
+                basePositionStyle,
+                "width:\(cssNumber(widthPercent))%;",
+                "height:\(cssNumber(heightPercent))%;",
+                rotationTransformStyle,
+                "color:\(textColor);",
+                "font-size:\(cssNumber(fontSizeCqw))cqw;",
+                "font-weight:\(textWeight);",
+                "text-align:\(alignment);"
+            ].joined()
+            return "<div class=\"edunode-overlay text\" style=\"\(style)\">\(content)</div>"
+        }
+
+        if overlay.isRoundedRect {
+            let cornerRatio = cssNumber(max(0.0, min(0.5, overlay.shapeCornerRadiusRatio)))
+            let fillColor = normalizedOverlayHex(overlay.shapeFillColorHex, fallback: "#FFFFFF")
+            let borderColor = normalizedOverlayHex(overlay.shapeBorderColorHex, fallback: "#D6DDE8")
+            let borderWidth = cssNumber(max(0.4, overlay.shapeBorderWidth))
+            let borderRadius: String
+            switch overlay.shapeStyle {
+            case .rectangle:
+                borderRadius = "0"
+            case .roundedRect:
+                borderRadius = "calc(min(\(cssNumber(widthPercent))%, \(cssNumber(heightPercent))%) * \(cornerRatio))"
+            case .capsule:
+                borderRadius = "9999px"
+            case .ellipse:
+                borderRadius = "50%"
+            }
+            let style = [
+                basePositionStyle,
+                "width:\(cssNumber(widthPercent))%;",
+                "height:\(cssNumber(heightPercent))%;",
+                rotationTransformStyle,
+                "background:\(fillColor);",
+                "border:\(borderWidth)px solid \(borderColor);",
+                "border-radius:\(borderRadius);"
+            ].joined()
+            return "<div class=\"edunode-overlay rect\" style=\"\(style)\"></div>"
+        }
+
+        if overlay.isIcon {
+            let glyph = escapeOverlayHTML(iconFallbackGlyph(systemName: overlay.iconSystemName))
+            let iconSizePercent = max(3.0, min(36.0, Double(overlay.normalizedWidth * 100)))
+            let background = overlay.iconHasBackground
+                ? normalizedOverlayHex(overlay.iconBackgroundColorHex, fallback: "#FFFFFF")
+                : "transparent"
+            let iconColor = normalizedOverlayHex(overlay.iconColorHex, fallback: "#111111")
+            let style = [
+                basePositionStyle,
+                "width:\(cssNumber(iconSizePercent))%;",
+                "height:\(cssNumber(iconSizePercent))%;",
+                rotationTransformStyle,
+                "background:\(background);",
+                "color:\(iconColor);",
+                "border:1px solid rgba(17,17,17,0.08);"
+            ].joined()
+            return "<div class=\"edunode-overlay icon\" style=\"\(style)\">\(glyph)</div>"
+        }
+
+        let aspect = max(0.15, overlay.aspectRatio)
+        let imageStyle = [
+            basePositionStyle,
+            "width:\(cssNumber(widthPercent))%;",
+            "height:\(cssNumber(heightPercent))%;",
+            rotationTransformStyle,
+            "aspect-ratio:\(cssNumber(Double(aspect)))/1;"
+        ].joined()
+
+        let filter = presentationImageCSSFilter(style: overlay.selectedFilter, params: overlay.stylization)
+        if let svg = overlay.renderedSVGString, !svg.isEmpty {
+            let backgroundHex = normalizedOverlayHex(overlay.vectorBackgroundColorHex, fallback: "#FFFFFF")
+            let backgroundDisplay = overlay.vectorBackgroundVisible ? "block" : "none"
+            return """
+            <div class="edunode-overlay vector" style="\(imageStyle)">
+              <div class="edunode-svg-bg" style="background:\(backgroundHex);display:\(backgroundDisplay);"></div>
+              <div class="edunode-svg-ink" style="filter:\(filter);">
+                <div class="edunode-svg-wrap">\(svg)</div>
+              </div>
+            </div>
+            """
+        }
+
+        let imageData = overlay.displayImageData
+        guard !imageData.isEmpty else { return nil }
+        let dataURI = presentationImageDataURI(imageData)
+        let pixelatedClass = overlay.selectedFilter == .pixelPainter ? " pixelated" : ""
+        return "<div class=\"edunode-overlay image\(pixelatedClass)\" style=\"\(imageStyle)\"><img style=\"filter:\(filter);\" src=\"\(dataURI)\" alt=\"Overlay Image\"/></div>"
+    }
+
+    private func cssNumber(_ value: CGFloat) -> String {
+        cssNumber(Double(value))
+    }
+
+    private func cssNumber(_ value: Double) -> String {
+        String(format: "%.3f", value)
+            .replacingOccurrences(of: "\\.?0+$", with: "", options: .regularExpression)
+    }
+
+    private func normalizedOverlayHex(_ value: String, fallback: String) -> String {
+        var cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("#") {
+            cleaned.removeFirst()
+        }
+        if cleaned.count == 3 {
+            cleaned = cleaned.map { "\($0)\($0)" }.joined()
+        }
+        guard cleaned.count == 6, Int(cleaned, radix: 16) != nil else {
+            return fallback
+        }
+        return "#\(cleaned.uppercased())"
+    }
+
+    private func escapeOverlayHTML(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
+    }
+
+    private func iconFallbackGlyph(systemName: String) -> String {
+        let key = systemName.lowercased()
+        if key.contains("wrench") { return "🛠︎" }
+        if key.contains("star") { return "★" }
+        if key.contains("book") { return "📘" }
+        if key.contains("person") { return "👤" }
+        if key.contains("photo") { return "🖼︎" }
+        return "●"
+    }
+
     private func mergeSlideGroupBackward(fileID: UUID, group: EduPresentationSlideGroup, slideCount: Int) {
         guard group.startIndex > 0 else { return }
         var breaks = effectivePresentationBreaks(fileID: fileID, slideCount: slideCount)
         breaks.remove(group.startIndex - 1)
         presentationBreaksByFile[fileID] = breaks
+        persistPresentationState(fileID: fileID)
     }
 
     private func mergeSlideGroupForward(fileID: UUID, group: EduPresentationSlideGroup, slideCount: Int) {
@@ -967,6 +2132,7 @@ Extend learning with monthly photo bird identification
         var breaks = effectivePresentationBreaks(fileID: fileID, slideCount: slideCount)
         breaks.remove(group.endIndex)
         presentationBreaksByFile[fileID] = breaks
+        persistPresentationState(fileID: fileID)
     }
 
     private func removeSlideGroupFromPresentation(fileID: UUID, group: EduPresentationSlideGroup) {
@@ -988,9 +2154,13 @@ Extend learning with monthly photo bird identification
         let filteredDeck = filteredPresentationDeck(for: fileID, from: rawDeck)
         if filteredDeck.orderedSlides.isEmpty {
             activePresentationModeFileID = nil
+            if activePresentationStylingFileID == fileID {
+                activePresentationStylingFileID = nil
+            }
         } else if let firstGroup = presentationGroups(for: fileID, deck: filteredDeck).first {
             selectPresentationGroup(fileID: fileID, group: firstGroup)
         }
+        persistPresentationState(fileID: fileID)
     }
 
     private func focusOnSlideGroup(_ group: EduPresentationSlideGroup) {
@@ -1003,6 +2173,1073 @@ Extend learning with monthly photo bird identification
         DispatchQueue.main.async {
             focusOnSlideGroup(group)
         }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func resolvedPresentationSelection(
+        fileID: UUID,
+        groups: [EduPresentationSlideGroup],
+        slides: [EduPresentationComposedSlide]
+    ) -> ResolvedPresentationSelection? {
+        guard !groups.isEmpty, !slides.isEmpty else { return nil }
+
+        let preferredID = selectedPresentationGroupIDByFile[fileID]
+        let selectedIndex: Int
+        if let preferredID,
+           let index = groups.firstIndex(where: { $0.id == preferredID }) {
+            selectedIndex = index
+        } else if let overlayGroup = firstGroupWithOverlays(fileID: fileID, groups: groups),
+                  let index = groups.firstIndex(where: { $0.id == overlayGroup.id }) {
+            selectedIndex = index
+        } else {
+            selectedIndex = 0
+        }
+
+        guard groups.indices.contains(selectedIndex),
+              slides.indices.contains(selectedIndex) else {
+            return nil
+        }
+
+        return ResolvedPresentationSelection(
+            group: groups[selectedIndex],
+            slide: slides[selectedIndex]
+        )
+    }
+
+    private func firstGroupWithOverlays(
+        fileID: UUID,
+        groups: [EduPresentationSlideGroup]
+    ) -> EduPresentationSlideGroup? {
+        let byGroup = presentationStylingByFile[fileID] ?? [:]
+        return groups.first { group in
+            guard let state = byGroup[group.id] else { return false }
+            return !state.overlays.isEmpty
+        }
+    }
+
+    @ViewBuilder
+    private func presentationStylingOverlay(
+        file: GNodeWorkspaceFile,
+        selectedGroup: EduPresentationSlideGroup,
+        selectedSlide: EduPresentationComposedSlide,
+        toolbarTopPadding: CGFloat,
+        bottomSafeInset: CGFloat
+    ) -> some View {
+        PresentationStylingOverlayView(
+            courseName: file.name,
+            slide: selectedSlide,
+            stylingState: presentationStylingState(fileID: file.id, groupID: selectedGroup.id),
+            pageStyle: resolvedPresentationPageStyle(fileID: file.id),
+            textTheme: resolvedPresentationTextTheme(fileID: file.id),
+            topPadding: toolbarTopPadding,
+            bottomReservedHeight: max(228, 208 + bottomSafeInset),
+            isChinese: isChineseUI(),
+            onBack: {
+                activePresentationStylingFileID = nil
+            },
+            onReset: {
+                resetPresentationStyling(fileID: file.id, groupID: selectedGroup.id)
+            },
+            onUndo: {
+                undoPresentationStyling(fileID: file.id, groupID: selectedGroup.id)
+            },
+            onRedo: {
+                redoPresentationStyling(fileID: file.id, groupID: selectedGroup.id)
+            },
+            onInsertText: {
+                insertPresentationTextOverlay(fileID: file.id, groupID: selectedGroup.id)
+            },
+            onInsertRoundedRect: {
+                insertPresentationRoundedRectOverlay(fileID: file.id, groupID: selectedGroup.id)
+            },
+            onInsertImage: { data in
+                insertPresentationOverlayImage(fileID: file.id, groupID: selectedGroup.id, imageData: data)
+            },
+            onClearSelection: {
+                clearPresentationOverlaySelection(fileID: file.id, groupID: selectedGroup.id)
+            },
+            onSelectOverlay: { overlayID in
+                selectPresentationOverlay(fileID: file.id, groupID: selectedGroup.id, overlayID: overlayID)
+            },
+            onMoveOverlay: { overlayID, center in
+                movePresentationOverlay(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    overlayID: overlayID,
+                    center: center
+                )
+            },
+            onRotateOverlay: { overlayID, deltaDegrees in
+                rotatePresentationOverlay(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    overlayID: overlayID,
+                    deltaDegrees: deltaDegrees
+                )
+            },
+            onUpdateImageOverlayFrame: { overlayID, center, normalizedWidth, normalizedHeight in
+                updatePresentationImageOverlayFrame(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    overlayID: overlayID,
+                    center: center,
+                    normalizedWidth: normalizedWidth,
+                    normalizedHeight: normalizedHeight
+                )
+            },
+            onScaleOverlay: { overlayID, scale in
+                scalePresentationOverlay(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    overlayID: overlayID,
+                    scale: scale
+                )
+            },
+            onCropOverlay: { overlayID, cropRect in
+                cropPresentationOverlay(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    overlayID: overlayID,
+                    normalizedRect: cropRect
+                )
+            },
+            onDeleteOverlay: { overlayID in
+                deletePresentationOverlay(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    overlayID: overlayID
+                )
+            },
+            onExtractSubject: { overlayID in
+                extractPresentationOverlaySubject(fileID: file.id, groupID: selectedGroup.id, overlayID: overlayID)
+            },
+            onConvertToSVG: { overlayID in
+                convertPresentationOverlayToSVG(fileID: file.id, groupID: selectedGroup.id, overlayID: overlayID)
+            },
+            onApplyFilter: { overlayID, style in
+                applyPresentationOverlayFilter(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    overlayID: overlayID,
+                    style: style
+                )
+            },
+            onUpdateStylization: { overlayID, stylization in
+                updatePresentationOverlayStylization(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    overlayID: overlayID,
+                    stylization: stylization
+                )
+            },
+            onUpdateImageVectorStyle: { overlayID, strokeHex, backgroundHex, backgroundVisible in
+                updatePresentationImageVectorStyle(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    overlayID: overlayID,
+                    strokeHex: strokeHex,
+                    backgroundHex: backgroundHex,
+                    backgroundVisible: backgroundVisible
+                )
+            },
+            onApplyImageStyleToAll: { overlayID in
+                applyPresentationImageStyleToAll(
+                    fileID: file.id,
+                    sourceGroupID: selectedGroup.id,
+                    sourceOverlayID: overlayID
+                )
+            },
+            onUpdateTextOverlay: { overlayID, editingState in
+                updatePresentationTextOverlay(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    overlayID: overlayID,
+                    editingState: editingState
+                )
+            },
+            onUpdateRoundedRectOverlay: { overlayID, editingState in
+                updatePresentationRoundedRectOverlay(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    overlayID: overlayID,
+                    editingState: editingState
+                )
+            },
+            onUpdateIconOverlay: { overlayID, editingState in
+                updatePresentationIconOverlay(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    overlayID: overlayID,
+                    editingState: editingState
+                )
+            },
+            onUpdateTextTheme: { textTheme in
+                updatePresentationTextTheme(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    textTheme: textTheme
+                )
+            },
+            onApplyTemplate: { template in
+                applyPresentationTemplate(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    template: template
+                )
+            },
+            onUpdatePageStyle: { pageStyle in
+                updatePresentationPageStyle(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    pageStyle: pageStyle
+                )
+            },
+            onUpdateVectorization: { settings in
+                updatePresentationVectorizationSettings(
+                    fileID: file.id,
+                    groupID: selectedGroup.id,
+                    settings: settings
+                )
+            }
+        )
+        .transition(.opacity)
+    }
+
+    private func presentationStylingState(fileID: UUID, groupID: UUID) -> PresentationSlideStylingState {
+        var state = presentationStylingByFile[fileID]?[groupID] ?? .empty
+        state.pageStyle = resolvedPresentationPageStyle(fileID: fileID)
+        state.textTheme = resolvedPresentationTextTheme(fileID: fileID)
+        return state
+    }
+
+    private func resolvedPresentationPageStyle(fileID: UUID) -> PresentationPageStyle {
+        presentationPageStyleByFile[fileID] ?? .default
+    }
+
+    private func resolvedPresentationTextTheme(fileID: UUID) -> PresentationTextTheme {
+        presentationTextThemeByFile[fileID] ?? .default
+    }
+
+    private func mutatePresentationStylingState(
+        fileID: UUID,
+        groupID: UUID,
+        markTouched: Bool = true,
+        _ mutate: (inout PresentationSlideStylingState) -> Void
+    ) {
+        var byGroup = presentationStylingByFile[fileID] ?? [:]
+        var state = byGroup[groupID] ?? .empty
+        mutate(&state)
+
+        if state.overlays.isEmpty &&
+            state.undoStack.isEmpty &&
+            state.redoStack.isEmpty &&
+            state.selectedOverlayID == nil &&
+            state.vectorization == .default &&
+            state.pageStyle == .default &&
+            state.textTheme == .default {
+            byGroup.removeValue(forKey: groupID)
+        } else {
+            byGroup[groupID] = state
+        }
+
+        if byGroup.isEmpty {
+            presentationStylingByFile.removeValue(forKey: fileID)
+        } else {
+            presentationStylingByFile[fileID] = byGroup
+        }
+        if markTouched {
+            presentationStylingTouchedFileIDs.insert(fileID)
+        }
+    }
+
+    private func pushPresentationStylingUndo(fileID: UUID, groupID: UUID) {
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
+            state.undoStack.append(state.overlays)
+            if state.undoStack.count > 40 {
+                state.undoStack.removeFirst(state.undoStack.count - 40)
+            }
+            state.redoStack.removeAll()
+        }
+    }
+
+    private func resetPresentationStyling(fileID: UUID, groupID: UUID) {
+        let state = presentationStylingState(fileID: fileID, groupID: groupID)
+        guard !state.overlays.isEmpty ||
+                state.vectorization != .default ||
+                state.pageStyle != .default ||
+                state.textTheme != .default else { return }
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { editableState in
+            editableState.overlays.removeAll()
+            editableState.selectedOverlayID = nil
+            editableState.vectorization = .default
+            editableState.pageStyle = .default
+            editableState.textTheme = .default
+        }
+        presentationPageStyleByFile.removeValue(forKey: fileID)
+        presentationTextThemeByFile.removeValue(forKey: fileID)
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func undoPresentationStyling(fileID: UUID, groupID: UUID) {
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
+            guard let previous = state.undoStack.popLast() else { return }
+            state.redoStack.append(state.overlays)
+            if state.redoStack.count > 40 {
+                state.redoStack.removeFirst(state.redoStack.count - 40)
+            }
+            state.overlays = previous
+            if let selectedID = state.selectedOverlayID,
+               !state.overlays.contains(where: { $0.id == selectedID }) {
+                state.selectedOverlayID = state.overlays.last?.id
+            }
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func redoPresentationStyling(fileID: UUID, groupID: UUID) {
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
+            guard let next = state.redoStack.popLast() else { return }
+            state.undoStack.append(state.overlays)
+            if state.undoStack.count > 40 {
+                state.undoStack.removeFirst(state.undoStack.count - 40)
+            }
+            state.overlays = next
+            if let selectedID = state.selectedOverlayID,
+               !state.overlays.contains(where: { $0.id == selectedID }) {
+                state.selectedOverlayID = state.overlays.last?.id
+            }
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func insertPresentationOverlayImage(fileID: UUID, groupID: UUID, imageData: Data) {
+        guard !imageData.isEmpty else { return }
+        let storedImageData = normalizedPersistentImageData(imageData)
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
+            let imageCount = state.overlays.filter(\.isImage).count
+            let col = imageCount % 4
+            let row = imageCount / 4
+            let centerX = min(0.82, 0.46 + CGFloat(col) * 0.1)
+            let centerY = min(0.8, 0.48 + CGFloat(row % 3) * 0.1)
+            let aspect = presentationOverlayAspectRatio(from: storedImageData)
+            let slideAspect = max(0.75, resolvedPresentationPageStyle(fileID: fileID).aspectPreset.ratio)
+            let targetHeight: CGFloat = 0.24
+            let width = max(0.1, min(0.44, targetHeight * aspect / slideAspect))
+            let overlay = PresentationSlideOverlay(
+                imageData: storedImageData,
+                selectedFilter: .original,
+                center: CGPoint(x: centerX, y: centerY),
+                normalizedWidth: width,
+                normalizedHeight: presentationImageNormalizedHeight(
+                    fileID: fileID,
+                    normalizedWidth: width,
+                    aspectRatio: aspect
+                ),
+                aspectRatio: aspect
+            )
+            state.overlays.append(overlay)
+            state.selectedOverlayID = overlay.id
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func insertPresentationTextOverlay(fileID: UUID, groupID: UUID) {
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        let h2Style = resolvedPresentationTextTheme(fileID: fileID).style(for: .h2)
+        let h2FontSize = max(14, min(96, h2Style.sizeCqw * 13.66))
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
+            var overlay = PresentationSlideOverlay.makeText(
+                center: CGPoint(x: 0.5, y: 0.6)
+            )
+            overlay.textStylePreset = .h2
+            overlay.textColorHex = h2Style.colorHex
+            overlay.textWeightValue = h2Style.weightValue
+            overlay.textFontSize = h2FontSize
+            state.overlays.append(overlay)
+            state.selectedOverlayID = overlay.id
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func insertPresentationRoundedRectOverlay(fileID: UUID, groupID: UUID) {
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
+            let overlay = PresentationSlideOverlay.makeRoundedRect(
+                center: CGPoint(x: 0.5, y: 0.6)
+            )
+            state.overlays.append(overlay)
+            state.selectedOverlayID = overlay.id
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func insertPresentationIconOverlay(fileID: UUID, groupID: UUID) {
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
+            let overlay = PresentationSlideOverlay.makeIcon(
+                center: CGPoint(x: 0.5, y: 0.6)
+            )
+            state.overlays.append(overlay)
+            state.selectedOverlayID = overlay.id
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func selectPresentationOverlay(fileID: UUID, groupID: UUID, overlayID: UUID) {
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID, markTouched: false) { state in
+            guard state.overlays.contains(where: { $0.id == overlayID }) else { return }
+            state.selectedOverlayID = overlayID
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func clearPresentationOverlaySelection(fileID: UUID, groupID: UUID) {
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID, markTouched: false) { state in
+            state.selectedOverlayID = nil
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func applyPresentationOverlayFilter(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID,
+        style: SVGFilterStyle
+    ) {
+        let state = presentationStylingState(fileID: fileID, groupID: groupID)
+        guard let overlay = state.overlays.first(where: { $0.id == overlayID }),
+              overlay.isImage,
+              overlay.vectorDocument != nil,
+              overlay.selectedFilter != style else {
+            return
+        }
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+            editable.selectedFilter = style
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func movePresentationOverlay(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID,
+        center: CGPoint
+    ) {
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+            editable.center = center
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func rotatePresentationOverlay(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID,
+        deltaDegrees: Double
+    ) {
+        guard deltaDegrees.isFinite, abs(deltaDegrees) > 0.05 else { return }
+        let state = presentationStylingState(fileID: fileID, groupID: groupID)
+        guard let overlay = state.overlays.first(where: { $0.id == overlayID }),
+              overlay.isImage else {
+            return
+        }
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+            editable.rotationDegrees = normalizedRotationDegrees(editable.rotationDegrees + deltaDegrees)
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func scalePresentationOverlay(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID,
+        scale: CGFloat
+    ) {
+        guard scale.isFinite else { return }
+        let clampedScale = max(0.5, min(2.4, scale))
+        guard abs(clampedScale - 1) > 0.01 else { return }
+
+        let state = presentationStylingState(fileID: fileID, groupID: groupID)
+        guard state.overlays.contains(where: { $0.id == overlayID }) else { return }
+
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+            let scaledWidth = editable.normalizedWidth * clampedScale
+            editable.normalizedWidth = max(0.08, min(0.9, scaledWidth))
+            if editable.isIcon {
+                editable.normalizedHeight = editable.normalizedWidth
+                editable.aspectRatio = 1
+            } else if editable.isImage {
+                editable.normalizedHeight = presentationImageNormalizedHeight(
+                    fileID: fileID,
+                    normalizedWidth: editable.normalizedWidth,
+                    aspectRatio: editable.aspectRatio
+                )
+            } else if editable.isText || editable.isRoundedRect {
+                let scaledHeight = editable.normalizedHeight * clampedScale
+                editable.normalizedHeight = max(0.08, min(0.72, scaledHeight))
+                editable.aspectRatio = max(0.15, editable.normalizedWidth / max(editable.normalizedHeight, 0.01))
+            }
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func cropPresentationOverlay(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID,
+        normalizedRect: CGRect
+    ) {
+        let state = presentationStylingState(fileID: fileID, groupID: groupID)
+        guard let overlay = state.overlays.first(where: { $0.id == overlayID }),
+              overlay.isImage else {
+            return
+        }
+
+        let rect = normalizedCropRect(normalizedRect)
+        guard rect.width > 0.02, rect.height > 0.02 else { return }
+
+        let sourceData = overlay.displayImageData
+        guard let croppedData = cropImageData(sourceData, normalizedRect: rect) else { return }
+        let persistedCroppedData = normalizedPersistentImageData(croppedData)
+        let wasVectorized = overlay.vectorDocument != nil
+        let preservedFilter = overlay.selectedFilter
+        let vectorizationOptions = state.vectorization.svgOptions
+
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+            if editable.extractedImageData != nil {
+                editable.extractedImageData = persistedCroppedData
+            } else {
+                editable.imageData = persistedCroppedData
+            }
+            editable.aspectRatio = presentationOverlayAspectRatio(from: persistedCroppedData)
+            editable.normalizedHeight = presentationImageNormalizedHeight(
+                fileID: fileID,
+                normalizedWidth: editable.normalizedWidth,
+                aspectRatio: editable.aspectRatio
+            )
+            if wasVectorized {
+                editable.selectedFilter = preservedFilter
+            } else {
+                editable.vectorDocument = nil
+                editable.selectedFilter = .original
+            }
+        }
+        persistPresentationState(fileID: fileID)
+
+        if wasVectorized {
+            rebuildPresentationOverlaySVG(
+                fileID: fileID,
+                groupID: groupID,
+                overlayID: overlayID,
+                sourceData: persistedCroppedData,
+                options: vectorizationOptions,
+                resetFilterToOriginal: false
+            )
+        }
+    }
+
+    private func updatePresentationImageOverlayFrame(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID,
+        center: CGPoint,
+        normalizedWidth: CGFloat,
+        normalizedHeight: CGFloat
+    ) {
+        let state = presentationStylingState(fileID: fileID, groupID: groupID)
+        guard let overlay = state.overlays.first(where: { $0.id == overlayID }),
+              overlay.isImage else {
+            return
+        }
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+            editable.center = CGPoint(
+                x: max(0.04, min(0.96, center.x)),
+                y: max(0.08, min(0.92, center.y))
+            )
+            let width = max(0.08, min(0.92, normalizedWidth))
+            let height = max(0.08, min(0.92, normalizedHeight))
+            editable.normalizedWidth = width
+            editable.normalizedHeight = height
+
+            let slideAspect = max(0.75, resolvedPresentationPageStyle(fileID: fileID).aspectPreset.ratio)
+            let derivedAspect = width * slideAspect / max(0.08, height)
+            if derivedAspect.isFinite {
+                editable.aspectRatio = max(0.15, min(12, derivedAspect))
+            } else {
+                editable.aspectRatio = max(0.15, editable.aspectRatio)
+            }
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func deletePresentationOverlay(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID
+    ) {
+        let state = presentationStylingState(fileID: fileID, groupID: groupID)
+        guard state.overlays.contains(where: { $0.id == overlayID }) else { return }
+        pushPresentationStylingUndo(fileID: fileID, groupID: groupID)
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { editableState in
+            editableState.overlays.removeAll { $0.id == overlayID }
+            if editableState.selectedOverlayID == overlayID {
+                editableState.selectedOverlayID = editableState.overlays.last?.id
+            }
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func updatePresentationOverlayStylization(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID,
+        stylization: SVGStylizationParameters
+    ) {
+        updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+            guard editable.isImage else { return }
+            editable.stylization = stylization
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func updatePresentationImageVectorStyle(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID,
+        strokeHex: String,
+        backgroundHex: String,
+        backgroundVisible: Bool
+    ) {
+        updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+            guard editable.isImage else { return }
+            editable.vectorStrokeColorHex = strokeHex
+            editable.vectorBackgroundColorHex = backgroundHex
+            editable.vectorBackgroundVisible = backgroundVisible
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func applyPresentationImageStyleToAll(
+        fileID: UUID,
+        sourceGroupID: UUID,
+        sourceOverlayID: UUID
+    ) {
+        guard var byGroup = presentationStylingByFile[fileID],
+              let sourceState = byGroup[sourceGroupID],
+              let sourceOverlay = sourceState.overlays.first(where: { $0.id == sourceOverlayID && $0.isImage }),
+              sourceOverlay.vectorDocument != nil else {
+            return
+        }
+
+        let sourceFilter = sourceOverlay.selectedFilter
+        let sourceStylization = sourceOverlay.stylization
+        let sourceStroke = sourceOverlay.vectorStrokeColorHex
+        let sourceBackground = sourceOverlay.vectorBackgroundColorHex
+        let sourceBackgroundVisible = sourceOverlay.vectorBackgroundVisible
+        let sourceVectorization = sourceState.vectorization
+
+        var pendingRevectorization: [(groupID: UUID, overlayID: UUID, sourceData: Data)] = []
+
+        for (groupID, var state) in byGroup {
+            state.vectorization = sourceVectorization
+            for index in state.overlays.indices {
+                guard state.overlays[index].isImage else { continue }
+                if groupID == sourceGroupID && state.overlays[index].id == sourceOverlayID {
+                    continue
+                }
+
+                state.overlays[index].selectedFilter = sourceFilter
+                state.overlays[index].stylization = sourceStylization
+                state.overlays[index].vectorStrokeColorHex = sourceStroke
+                state.overlays[index].vectorBackgroundColorHex = sourceBackground
+                state.overlays[index].vectorBackgroundVisible = sourceBackgroundVisible
+
+                if state.overlays[index].vectorDocument == nil {
+                    pendingRevectorization.append((
+                        groupID: groupID,
+                        overlayID: state.overlays[index].id,
+                        sourceData: state.overlays[index].displayImageData
+                    ))
+                }
+            }
+            byGroup[groupID] = state
+        }
+
+        presentationStylingByFile[fileID] = byGroup
+        persistPresentationState(fileID: fileID)
+
+        for pending in pendingRevectorization {
+            rebuildPresentationOverlaySVG(
+                fileID: fileID,
+                groupID: pending.groupID,
+                overlayID: pending.overlayID,
+                sourceData: pending.sourceData,
+                options: sourceVectorization.svgOptions,
+                resetFilterToOriginal: false
+            )
+        }
+    }
+
+    private func updatePresentationTextOverlay(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID,
+        editingState: PresentationTextEditingState
+    ) {
+        updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+            guard editable.isText else { return }
+            editable.textEditingState = editingState
+            editable.aspectRatio = max(0.15, editable.normalizedWidth / max(editable.normalizedHeight, 0.01))
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func updatePresentationRoundedRectOverlay(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID,
+        editingState: PresentationRoundedRectEditingState
+    ) {
+        updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+            guard editable.isRoundedRect else { return }
+            editable.roundedRectEditingState = editingState
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func updatePresentationIconOverlay(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID,
+        editingState: PresentationIconEditingState
+    ) {
+        updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+            guard editable.isIcon else { return }
+            editable.iconEditingState = editingState
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func updatePresentationPageStyle(
+        fileID: UUID,
+        groupID: UUID,
+        pageStyle: PresentationPageStyle
+    ) {
+        _ = groupID
+        presentationPageStyleByFile[fileID] = pageStyle
+        presentationStylingTouchedFileIDs.insert(fileID)
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func updatePresentationTextTheme(
+        fileID: UUID,
+        groupID: UUID,
+        textTheme: PresentationTextTheme
+    ) {
+        _ = groupID
+        presentationTextThemeByFile[fileID] = textTheme
+        presentationStylingTouchedFileIDs.insert(fileID)
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func applyPresentationTemplate(
+        fileID: UUID,
+        groupID: UUID,
+        template: PresentationThemeTemplate
+    ) {
+        _ = groupID
+        let aspect = resolvedPresentationPageStyle(fileID: fileID).aspectPreset
+        var nextStyle = template.pageStyle
+        nextStyle.aspectPreset = aspect
+        presentationPageStyleByFile[fileID] = nextStyle
+        presentationTextThemeByFile[fileID] = template.textTheme
+        presentationStylingTouchedFileIDs.insert(fileID)
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func updatePresentationOverlay(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID,
+        _ mutate: (inout PresentationSlideOverlay) -> Void
+    ) {
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
+            guard let index = state.overlays.firstIndex(where: { $0.id == overlayID }) else { return }
+            mutate(&state.overlays[index])
+        }
+    }
+
+    private func updatePresentationVectorizationSettings(
+        fileID: UUID,
+        groupID: UUID,
+        settings: PresentationVectorizationSettings
+    ) {
+        let previousState = presentationStylingState(fileID: fileID, groupID: groupID)
+        mutatePresentationStylingState(fileID: fileID, groupID: groupID) { state in
+            state.vectorization = settings
+        }
+        if let selectedID = previousState.selectedOverlayID,
+           let overlay = previousState.overlays.first(where: { $0.id == selectedID }),
+           overlay.isImage,
+           overlay.vectorDocument != nil {
+            rebuildPresentationOverlaySVG(
+                fileID: fileID,
+                groupID: groupID,
+                overlayID: selectedID,
+                sourceData: overlay.displayImageData,
+                options: settings.svgOptions,
+                resetFilterToOriginal: false
+            )
+        }
+        persistPresentationState(fileID: fileID)
+    }
+
+    private func extractPresentationOverlaySubject(fileID: UUID, groupID: UUID, overlayID: UUID) {
+        let state = presentationStylingState(fileID: fileID, groupID: groupID)
+        guard let overlay = state.overlays.first(where: { $0.id == overlayID }),
+              overlay.isImage,
+              !overlay.isExtracting else {
+            return
+        }
+
+        updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+            editable.isExtracting = true
+            editable.activeVectorizationRequestID = nil
+        }
+        persistPresentationState(fileID: fileID)
+
+        Task {
+            let extractedImageData = await presentationOverlayExtractedSubject(imageData: overlay.imageData)
+            await MainActor.run {
+                updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+                    editable.isExtracting = false
+                    editable.activeVectorizationRequestID = nil
+                    if let extractedImageData {
+                        let persistedExtractedData = normalizedPersistentImageData(extractedImageData)
+                        editable.extractedImageData = persistedExtractedData
+                        editable.aspectRatio = presentationOverlayAspectRatio(from: persistedExtractedData)
+                        editable.normalizedHeight = presentationImageNormalizedHeight(
+                            fileID: fileID,
+                            normalizedWidth: editable.normalizedWidth,
+                            aspectRatio: editable.aspectRatio
+                        )
+                        // Subject extraction should stay in bitmap mode until user taps Convert to SVG.
+                        editable.vectorDocument = nil
+                        editable.selectedFilter = .original
+                    }
+                }
+                persistPresentationState(fileID: fileID)
+            }
+        }
+    }
+
+    private func presentationOverlayExtractedSubject(imageData: Data) async -> Data? {
+        #if canImport(UIKit) && canImport(CoreImage)
+        if let sourceImage = UIImage(data: imageData),
+           let extractedImage = await PresentationSubjectExtractor.extractSubject(from: sourceImage),
+           let extractedPNG = extractedImage.pngData() {
+            return extractedPNG
+        }
+        #endif
+        return nil
+    }
+
+    private func convertPresentationOverlayToSVG(fileID: UUID, groupID: UUID, overlayID: UUID) {
+        let state = presentationStylingState(fileID: fileID, groupID: groupID)
+        guard let overlay = state.overlays.first(where: { $0.id == overlayID }),
+              overlay.isImage else {
+            return
+        }
+
+        rebuildPresentationOverlaySVG(
+            fileID: fileID,
+            groupID: groupID,
+            overlayID: overlayID,
+            sourceData: overlay.displayImageData,
+            options: state.vectorization.svgOptions,
+            resetFilterToOriginal: true
+        )
+    }
+
+    private func rebuildPresentationOverlaySVG(
+        fileID: UUID,
+        groupID: UUID,
+        overlayID: UUID,
+        sourceData: Data,
+        options: SVGVectorizationOptions,
+        resetFilterToOriginal: Bool
+    ) {
+        let requestID = UUID()
+        updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+            editable.isExtracting = true
+            editable.activeVectorizationRequestID = requestID
+        }
+        persistPresentationState(fileID: fileID)
+
+        Task {
+            let document = try? SVGBitmapConverter.vectorize(imageData: sourceData, options: options)
+
+            await MainActor.run {
+                updatePresentationOverlay(fileID: fileID, groupID: groupID, overlayID: overlayID) { editable in
+                    guard editable.activeVectorizationRequestID == requestID else { return }
+                    editable.isExtracting = false
+                    editable.activeVectorizationRequestID = nil
+                    guard let document else { return }
+                    editable.vectorDocument = document
+                    if resetFilterToOriginal {
+                        editable.selectedFilter = .original
+                    }
+                }
+                persistPresentationState(fileID: fileID)
+            }
+        }
+    }
+
+    private func presentationOverlayAspectRatio(from imageData: Data) -> CGFloat {
+        #if canImport(UIKit)
+        if let image = UIImage(data: imageData),
+           image.size.height > 0 {
+            return max(0.15, image.size.width / image.size.height)
+        }
+        #endif
+        return 1
+    }
+
+    private func presentationImageNormalizedHeight(
+        fileID: UUID,
+        normalizedWidth: CGFloat,
+        aspectRatio: CGFloat
+    ) -> CGFloat {
+        let slideAspect = max(0.75, resolvedPresentationPageStyle(fileID: fileID).aspectPreset.ratio)
+        let normalized = normalizedWidth * slideAspect / max(0.15, aspectRatio)
+        return max(0.08, min(0.92, normalized))
+    }
+
+    private func normalizedRotationDegrees(_ value: Double) -> Double {
+        var next = value.truncatingRemainder(dividingBy: 360)
+        if next <= -180 { next += 360 }
+        if next > 180 { next -= 360 }
+        return next
+    }
+
+    private func normalizedCropRect(_ rect: CGRect) -> CGRect {
+        let x = max(0, min(0.98, rect.origin.x))
+        let y = max(0, min(0.98, rect.origin.y))
+        let maxW = max(0.02, 1 - x)
+        let maxH = max(0.02, 1 - y)
+        let w = max(0.02, min(maxW, rect.width))
+        let h = max(0.02, min(maxH, rect.height))
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+
+    private func cropImageData(_ imageData: Data, normalizedRect: CGRect) -> Data? {
+        #if canImport(UIKit)
+        guard let image = UIImage(data: imageData),
+              let cgImage = image.cgImage else {
+            return nil
+        }
+
+        let clamped = normalizedCropRect(normalizedRect)
+        let pixelRect = CGRect(
+            x: CGFloat(cgImage.width) * clamped.origin.x,
+            y: CGFloat(cgImage.height) * clamped.origin.y,
+            width: CGFloat(cgImage.width) * clamped.width,
+            height: CGFloat(cgImage.height) * clamped.height
+        ).integral
+
+        guard pixelRect.width > 1, pixelRect.height > 1,
+              let cropped = cgImage.cropping(to: pixelRect) else {
+            return nil
+        }
+
+        let output = UIImage(cgImage: cropped, scale: image.scale, orientation: .up)
+        return output.pngData()
+        #else
+        _ = imageData
+        _ = normalizedRect
+        return nil
+        #endif
+    }
+
+    private func togglePresentationStylingMode(
+        fileID: UUID,
+        groups: [EduPresentationSlideGroup],
+        selectedGroupID: UUID?
+    ) {
+        if let file = workspaceFiles.first(where: { $0.id == fileID }) {
+            hydratePresentationState(for: file, force: true)
+        }
+        if activePresentationStylingFileID == fileID {
+            activePresentationStylingFileID = nil
+            return
+        }
+
+        activePresentationStylingFileID = fileID
+        if let target = groups.first(where: { $0.id == selectedGroupID }) ?? groups.first {
+            selectPresentationGroup(fileID: fileID, group: target)
+        }
+    }
+
+    @ViewBuilder
+    private func presentationStylingEntryButton(
+        isActive: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            ZStack {
+                Image(systemName: "paintpalette")
+                    .font(.system(size: 21, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.96))
+            }
+            .frame(width: 58, height: 58)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay(
+                Circle()
+                    .fill(Color.black.opacity(isActive ? 0.36 : 0.28))
+            )
+            .overlay(
+                ZStack {
+                    AnimatedGradientRing(lineWidth: isActive ? 3.6 : 3.0)
+                        .blur(radius: isActive ? 4.6 : 3.6)
+                        .opacity(isActive ? 0.95 : 0.78)
+                    AnimatedGradientRing(lineWidth: isActive ? 2.2 : 1.8)
+                        .opacity(0.82)
+                }
+            )
+            .overlay(
+                Circle()
+                    .stroke(Color.white.opacity(isActive ? 0.22 : 0.14), lineWidth: 0.9)
+                    .blur(radius: 0.6)
+            )
+            .overlay(
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                Color.white.opacity(isActive ? 0.24 : 0.16),
+                                Color.white.opacity(0)
+                            ],
+                            center: .center,
+                            startRadius: 6,
+                            endRadius: 33
+                        )
+                    )
+            )
+            .overlay(
+                Circle()
+                    .stroke(Color.white.opacity(0.16), lineWidth: 0.8)
+            )
+            .shadow(color: .black.opacity(0.26), radius: 9, y: 4)
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -1014,15 +3251,28 @@ Extend learning with monthly photo bird identification
         slides: [EduPresentationComposedSlide]
     ) -> some View {
         let storedSelectedID = selectedPresentationGroupIDByFile[fileID]
-        let selectedGroupID = groups.contains(where: { $0.id == storedSelectedID }) ? storedSelectedID : groups.first?.id
+        let selectedGroupID: UUID? = {
+            if groups.contains(where: { $0.id == storedSelectedID }) {
+                return storedSelectedID
+            }
+            if let overlayGroup = firstGroupWithOverlays(fileID: fileID, groups: groups) {
+                return overlayGroup.id
+            }
+            return groups.first?.id
+        }()
+        let stripHeight: CGFloat = presentationFilmstripHeight
 
-        VStack {
+        VStack(spacing: 0) {
             Spacer(minLength: 0)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
                         let isSelected = group.id == selectedGroupID
+                        let styleState = presentationStylingState(fileID: fileID, groupID: group.id)
+                        let overlays = styleState.overlays
+                        let pageStyle = styleState.pageStyle
+                        let textTheme = styleState.textTheme
                         ZStack(alignment: .topTrailing) {
                             Button {
                                 selectPresentationGroup(fileID: fileID, group: group)
@@ -1030,9 +3280,15 @@ Extend learning with monthly photo bird identification
                                 presentationSlideThumbnail(
                                     courseName: courseName,
                                     slide: slides.indices.contains(index) ? slides[index] : nil,
+                                    overlays: overlays,
+                                    pageStyle: pageStyle,
+                                    textTheme: textTheme,
                                     fallbackGroup: group,
                                     displayIndex: index + 1,
-                                    isSelected: isSelected
+                                    isSelected: isSelected,
+                                    onLoaded: {
+                                        markPresentationThumbnailLoaded(fileID: fileID, groupID: group.id)
+                                    }
                                 )
                             }
                             .buttonStyle(.plain)
@@ -1075,8 +3331,10 @@ Extend learning with monthly photo bird identification
                     }
                 }
                 .padding(.horizontal, 14)
-                .padding(.vertical, 12)
+                .padding(.vertical, 6)
+                .frame(minHeight: stripHeight - 10, alignment: .center)
             }
+            .frame(height: stripHeight, alignment: .center)
             .frame(maxWidth: .infinity)
             .background(.ultraThinMaterial)
             .overlay(alignment: .top) {
@@ -1089,25 +3347,68 @@ Extend learning with monthly photo bird identification
     }
 
     @ViewBuilder
+    private func presentationStylingFloatingEntryButton(
+        fileID: UUID,
+        groups: [EduPresentationSlideGroup],
+        bottomSafeInset: CGFloat
+    ) -> some View {
+        let storedSelectedID = selectedPresentationGroupIDByFile[fileID]
+        let selectedGroupID: UUID? = {
+            if groups.contains(where: { $0.id == storedSelectedID }) {
+                return storedSelectedID
+            }
+            if let overlayGroup = firstGroupWithOverlays(fileID: fileID, groups: groups) {
+                return overlayGroup.id
+            }
+            return groups.first?.id
+        }()
+
+        VStack {
+            Spacer(minLength: 0)
+            HStack {
+                presentationStylingEntryButton(
+                    isActive: false
+                ) {
+                    togglePresentationStylingMode(
+                        fileID: fileID,
+                        groups: groups,
+                        selectedGroupID: selectedGroupID
+                    )
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, 20)
+            .padding(.bottom, max(bottomSafeInset, 12) + (presentationFilmstripHeight - 18))
+        }
+    }
+
+    @ViewBuilder
     private func presentationSlideThumbnail(
         courseName: String,
         slide: EduPresentationComposedSlide?,
+        overlays: [PresentationSlideOverlay],
+        pageStyle: PresentationPageStyle,
+        textTheme: PresentationTextTheme,
         fallbackGroup: EduPresentationSlideGroup,
         displayIndex: Int,
-        isSelected: Bool
+        isSelected: Bool,
+        onLoaded: @escaping () -> Void
     ) -> some View {
-        let thumbnailWidth: CGFloat = 250
-        let thumbnailHeight: CGFloat = thumbnailWidth * 9.0 / 16.0
+        let thumbnailWidth: CGFloat = 286
+        let thumbnailHeight: CGFloat = thumbnailWidth / max(0.7, pageStyle.aspectPreset.ratio)
         let title = slide?.title ?? fallbackGroup.slideTitle
 
         ZStack(alignment: .topLeading) {
             if let slide {
                 PresentationSlideThumbnailHTMLView(
-                    html: EduPresentationHTMLExporter.singleSlideHTML(
+                    html: presentationSlideThumbnailHTML(
                         courseName: courseName,
                         slide: slide,
-                        isChinese: isChineseUI()
-                    )
+                        overlays: overlays,
+                        pageStyle: pageStyle,
+                        textTheme: textTheme
+                    ),
+                    onLoaded: onLoaded
                 )
                 .allowsHitTesting(false)
             } else {
@@ -1123,7 +3424,10 @@ Extend learning with monthly photo bird identification
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .background(Color.white)
+                .background(Color(hex: pageStyle.backgroundColorHex))
+                .onAppear {
+                    onLoaded()
+                }
             }
 
             Text("\(displayIndex)")
@@ -1139,13 +3443,45 @@ Extend learning with monthly photo bird identification
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(width: thumbnailWidth, height: thumbnailHeight, alignment: .leading)
-        .background(Color.white)
+        .background(Color(hex: pageStyle.backgroundColorHex))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(isSelected ? Color.cyan : Color.black.opacity(0.1), lineWidth: isSelected ? 2.6 : 1)
         )
         .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+    }
+
+    private func presentationSlideThumbnailHTML(
+        courseName: String,
+        slide: EduPresentationComposedSlide,
+        overlays: [PresentationSlideOverlay],
+        pageStyle: PresentationPageStyle,
+        textTheme: PresentationTextTheme
+    ) -> String {
+        let baseHTML = themedPresentationSlideHTML(
+            courseName: courseName,
+            slide: slide,
+            isChinese: isChineseUI(),
+            pageStyle: pageStyle,
+            textTheme: textTheme
+        )
+        let slideAspect = max(0.75, pageStyle.aspectPreset.ratio)
+        let overlayNodesHTML = presentationOverlayLayerHTML(
+            overlays: overlays,
+            slideAspect: slideAspect,
+            textTheme: textTheme
+        )
+        guard !overlayNodesHTML.isEmpty else { return baseHTML }
+
+        let layerHTML = "<div class=\"edunode-overlay-layer\">\(overlayNodesHTML)</div>"
+        guard let insertion = baseHTML.range(of: "</article>", options: .backwards) else {
+            return baseHTML
+        }
+        return baseHTML.replacingCharacters(
+            in: insertion.lowerBound..<insertion.lowerBound,
+            with: layerHTML
+        )
     }
 
     @ViewBuilder
@@ -1237,36 +3573,68 @@ Extend learning with monthly photo bird identification
 #if canImport(UIKit) && canImport(WebKit)
 private struct PresentationSlideThumbnailHTMLView: UIViewRepresentable {
     let html: String
+    let onLoaded: () -> Void
 
-    final class Coordinator {
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        var parent: PresentationSlideThumbnailHTMLView
         var lastHTML = ""
+        var hasReportedLoadForCurrentHTML = false
+
+        init(parent: PresentationSlideThumbnailHTMLView) {
+            self.parent = parent
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            reportLoadedIfNeeded()
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+            reportLoadedIfNeeded()
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+            reportLoadedIfNeeded()
+        }
+
+        private func reportLoadedIfNeeded() {
+            guard !hasReportedLoadForCurrentHTML else { return }
+            hasReportedLoadForCurrentHTML = true
+            DispatchQueue.main.async {
+                self.parent.onLoaded()
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(parent: self)
     }
 
     func makeUIView(context: Context) -> WKWebView {
         let webView = WKWebView(frame: .zero)
+        webView.navigationDelegate = context.coordinator
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
         webView.scrollView.isScrollEnabled = false
         webView.isUserInteractionEnabled = false
         context.coordinator.lastHTML = html
+        context.coordinator.hasReportedLoadForCurrentHTML = false
         webView.loadHTMLString(html, baseURL: nil)
         return webView
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {
+        context.coordinator.parent = self
         guard context.coordinator.lastHTML != html else { return }
         context.coordinator.lastHTML = html
+        context.coordinator.hasReportedLoadForCurrentHTML = false
         uiView.loadHTMLString(html, baseURL: nil)
     }
 }
 #else
 private struct PresentationSlideThumbnailHTMLView: View {
     let html: String
+    let onLoaded: () -> Void
 
     var body: some View {
         Color.white.overlay(
@@ -1277,9 +3645,282 @@ private struct PresentationSlideThumbnailHTMLView: View {
                 .padding(8),
             alignment: .topLeading
         )
+        .onAppear {
+            onLoaded()
+        }
     }
 }
 #endif
+
+private struct PresentationPersistedState: Codable {
+    var version: Int = 1
+    var breaks: [Int]
+    var excludedNodeIDs: [UUID]
+    var selectedGroupID: UUID?
+    var selectedGroupSignature: String?
+    var pageStyle: PresentationPageStyle
+    var textTheme: PresentationTextTheme
+    var updatedAt: Date?
+    var groups: [PresentationPersistedGroupState]
+}
+
+private struct PresentationPersistedGroupState: Codable {
+    var groupID: UUID
+    var groupSignature: String?
+    var selectedOverlayID: UUID?
+    var vectorization: PresentationVectorizationSettings
+    var overlays: [PresentationPersistedOverlay]
+}
+
+private struct PresentationPersistedOverlay: Codable {
+    var id: UUID
+    var kindRaw: String
+    var imageData: Data
+    var extractedImageData: Data?
+    var vectorDocument: PresentationPersistedSVGDocument?
+    var selectedFilterRaw: String
+    var stylization: PresentationPersistedStylization
+    var centerX: Double
+    var centerY: Double
+    var normalizedWidth: Double
+    var normalizedHeight: Double
+    var aspectRatio: Double
+    var rotationDegrees: Double
+    var textContent: String
+    var textStylePreset: PresentationTextStylePreset
+    var textColorHex: String
+    var textAlignment: PresentationTextAlignment
+    var textFontSize: Double
+    var textWeightValue: Double
+    var shapeFillColorHex: String
+    var shapeBorderColorHex: String
+    var shapeBorderWidth: Double
+    var shapeCornerRadiusRatio: Double
+    var shapeStyleRaw: String
+    var iconSystemName: String
+    var iconColorHex: String
+    var iconHasBackground: Bool
+    var iconBackgroundColorHex: String
+    var vectorStrokeColorHex: String
+    var vectorBackgroundColorHex: String
+    var vectorBackgroundVisible: Bool
+
+    init(
+        id: UUID,
+        kindRaw: String,
+        imageData: Data,
+        extractedImageData: Data?,
+        vectorDocument: PresentationPersistedSVGDocument?,
+        selectedFilterRaw: String,
+        stylization: PresentationPersistedStylization,
+        centerX: Double,
+        centerY: Double,
+        normalizedWidth: Double,
+        normalizedHeight: Double,
+        aspectRatio: Double,
+        rotationDegrees: Double,
+        textContent: String,
+        textStylePreset: PresentationTextStylePreset,
+        textColorHex: String,
+        textAlignment: PresentationTextAlignment,
+        textFontSize: Double,
+        textWeightValue: Double,
+        shapeFillColorHex: String,
+        shapeBorderColorHex: String,
+        shapeBorderWidth: Double,
+        shapeCornerRadiusRatio: Double,
+        shapeStyleRaw: String,
+        iconSystemName: String,
+        iconColorHex: String,
+        iconHasBackground: Bool,
+        iconBackgroundColorHex: String,
+        vectorStrokeColorHex: String,
+        vectorBackgroundColorHex: String,
+        vectorBackgroundVisible: Bool
+    ) {
+        self.id = id
+        self.kindRaw = kindRaw
+        self.imageData = imageData
+        self.extractedImageData = extractedImageData
+        self.vectorDocument = vectorDocument
+        self.selectedFilterRaw = selectedFilterRaw
+        self.stylization = stylization
+        self.centerX = centerX
+        self.centerY = centerY
+        self.normalizedWidth = normalizedWidth
+        self.normalizedHeight = normalizedHeight
+        self.aspectRatio = aspectRatio
+        self.rotationDegrees = rotationDegrees
+        self.textContent = textContent
+        self.textStylePreset = textStylePreset
+        self.textColorHex = textColorHex
+        self.textAlignment = textAlignment
+        self.textFontSize = textFontSize
+        self.textWeightValue = textWeightValue
+        self.shapeFillColorHex = shapeFillColorHex
+        self.shapeBorderColorHex = shapeBorderColorHex
+        self.shapeBorderWidth = shapeBorderWidth
+        self.shapeCornerRadiusRatio = shapeCornerRadiusRatio
+        self.shapeStyleRaw = shapeStyleRaw
+        self.iconSystemName = iconSystemName
+        self.iconColorHex = iconColorHex
+        self.iconHasBackground = iconHasBackground
+        self.iconBackgroundColorHex = iconBackgroundColorHex
+        self.vectorStrokeColorHex = vectorStrokeColorHex
+        self.vectorBackgroundColorHex = vectorBackgroundColorHex
+        self.vectorBackgroundVisible = vectorBackgroundVisible
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kindRaw, imageData, extractedImageData, vectorDocument, selectedFilterRaw, stylization
+        case centerX, centerY, normalizedWidth, normalizedHeight, aspectRatio, rotationDegrees
+        case textContent, textStylePreset, textColorHex, textAlignment, textFontSize, textWeightValue
+        case shapeFillColorHex, shapeBorderColorHex, shapeBorderWidth, shapeCornerRadiusRatio, shapeStyleRaw
+        case iconSystemName, iconColorHex, iconHasBackground, iconBackgroundColorHex
+        case vectorStrokeColorHex, vectorBackgroundColorHex, vectorBackgroundVisible
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        kindRaw = try container.decode(String.self, forKey: .kindRaw)
+        imageData = (try? container.decode(Data.self, forKey: .imageData)) ?? Data()
+        extractedImageData = try? container.decode(Data.self, forKey: .extractedImageData)
+        vectorDocument = try? container.decode(PresentationPersistedSVGDocument.self, forKey: .vectorDocument)
+        selectedFilterRaw = (try? container.decode(String.self, forKey: .selectedFilterRaw)) ?? SVGFilterStyle.original.rawValue
+        stylization = (try? container.decode(PresentationPersistedStylization.self, forKey: .stylization))
+            ?? PresentationPersistedStylization(from: .default)
+        centerX = (try? container.decode(Double.self, forKey: .centerX)) ?? 0.5
+        centerY = (try? container.decode(Double.self, forKey: .centerY)) ?? 0.58
+        normalizedWidth = (try? container.decode(Double.self, forKey: .normalizedWidth)) ?? 0.28
+        normalizedHeight = (try? container.decode(Double.self, forKey: .normalizedHeight)) ?? 0.2
+        aspectRatio = (try? container.decode(Double.self, forKey: .aspectRatio)) ?? 1
+        rotationDegrees = (try? container.decode(Double.self, forKey: .rotationDegrees)) ?? 0
+        textContent = (try? container.decode(String.self, forKey: .textContent)) ?? ""
+        textStylePreset = (try? container.decode(PresentationTextStylePreset.self, forKey: .textStylePreset)) ?? .paragraph
+        textColorHex = (try? container.decode(String.self, forKey: .textColorHex)) ?? "#111111"
+        textAlignment = (try? container.decode(PresentationTextAlignment.self, forKey: .textAlignment)) ?? .leading
+        textFontSize = (try? container.decode(Double.self, forKey: .textFontSize)) ?? 24
+        textWeightValue = (try? container.decode(Double.self, forKey: .textWeightValue)) ?? 0.5
+        shapeFillColorHex = (try? container.decode(String.self, forKey: .shapeFillColorHex)) ?? "#FFFFFF"
+        shapeBorderColorHex = (try? container.decode(String.self, forKey: .shapeBorderColorHex)) ?? "#D6DDE8"
+        shapeBorderWidth = (try? container.decode(Double.self, forKey: .shapeBorderWidth)) ?? 1.2
+        shapeCornerRadiusRatio = (try? container.decode(Double.self, forKey: .shapeCornerRadiusRatio)) ?? 0.18
+        shapeStyleRaw = (try? container.decode(String.self, forKey: .shapeStyleRaw)) ?? PresentationShapeStyle.roundedRect.rawValue
+        iconSystemName = (try? container.decode(String.self, forKey: .iconSystemName)) ?? "wrench.adjustable"
+        iconColorHex = (try? container.decode(String.self, forKey: .iconColorHex)) ?? "#111111"
+        iconHasBackground = (try? container.decode(Bool.self, forKey: .iconHasBackground)) ?? true
+        iconBackgroundColorHex = (try? container.decode(String.self, forKey: .iconBackgroundColorHex)) ?? "#FFFFFF"
+        vectorStrokeColorHex = (try? container.decode(String.self, forKey: .vectorStrokeColorHex)) ?? "#0F172A"
+        vectorBackgroundColorHex = (try? container.decode(String.self, forKey: .vectorBackgroundColorHex)) ?? "#FFFFFF"
+        vectorBackgroundVisible = (try? container.decode(Bool.self, forKey: .vectorBackgroundVisible)) ?? false
+    }
+}
+
+private struct PresentationPersistedSVGDocument: Codable {
+    var width: Int
+    var height: Int
+    var body: String
+}
+
+private struct PresentationPersistedStylization: Codable {
+    var flowDisplacement: Double
+    var flowOctaves: Double
+    var crayonRoughness: Double
+    var crayonWax: Double
+    var crayonHatchDensity: Double
+    var pixelDotSize: Double
+    var pixelDensity: Double
+    var pixelJitter: Double
+    var equationN: Double
+    var equationTheta: Double
+    var equationScale: Double
+    var equationContrast: Double
+
+    init(from source: SVGStylizationParameters) {
+        flowDisplacement = source.flowDisplacement
+        flowOctaves = source.flowOctaves
+        crayonRoughness = source.crayonRoughness
+        crayonWax = source.crayonWax
+        crayonHatchDensity = source.crayonHatchDensity
+        pixelDotSize = source.pixelDotSize
+        pixelDensity = source.pixelDensity
+        pixelJitter = source.pixelJitter
+        equationN = source.equationN
+        equationTheta = source.equationTheta
+        equationScale = source.equationScale
+        equationContrast = source.equationContrast
+    }
+
+    var value: SVGStylizationParameters {
+        SVGStylizationParameters(
+            flowDisplacement: flowDisplacement,
+            flowOctaves: flowOctaves,
+            crayonRoughness: crayonRoughness,
+            crayonWax: crayonWax,
+            crayonHatchDensity: crayonHatchDensity,
+            pixelDotSize: pixelDotSize,
+            pixelDensity: pixelDensity,
+            pixelJitter: pixelJitter,
+            equationN: equationN,
+            equationTheta: equationTheta,
+            equationScale: equationScale,
+            equationContrast: equationContrast
+        )
+    }
+}
+
+private struct AnimatedGradientRing: View {
+    let lineWidth: CGFloat
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            let rotation = Angle.degrees(
+                (timeline.date.timeIntervalSinceReferenceDate * 72.0)
+                    .truncatingRemainder(dividingBy: 360)
+            )
+            Circle()
+                .stroke(
+                    AngularGradient(
+                        gradient: Gradient(
+                            colors: [
+                                Color(red: 0.99, green: 0.37, blue: 0.54),
+                                Color(red: 0.99, green: 0.70, blue: 0.26),
+                                Color(red: 0.28, green: 0.89, blue: 0.70),
+                                Color(red: 0.27, green: 0.67, blue: 0.98),
+                                Color(red: 0.72, green: 0.49, blue: 0.98),
+                                Color(red: 0.99, green: 0.37, blue: 0.54)
+                            ]
+                        ),
+                        center: .center,
+                        angle: rotation
+                    ),
+                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+                )
+        }
+        .padding(1)
+    }
+}
+
+private extension Color {
+    init(hex: String) {
+        var cleaned = hex.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        if cleaned.hasPrefix("#") {
+            cleaned.removeFirst()
+        }
+        if cleaned.count == 3 {
+            cleaned = cleaned.map { "\($0)\($0)" }.joined()
+        }
+        guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else {
+            self = Color.white
+            return
+        }
+        let r = Double((value & 0xFF0000) >> 16) / 255
+        let g = Double((value & 0x00FF00) >> 8) / 255
+        let b = Double(value & 0x0000FF) / 255
+        self = Color(red: r, green: g, blue: b)
+    }
+}
 
 #Preview {
     ContentView()
