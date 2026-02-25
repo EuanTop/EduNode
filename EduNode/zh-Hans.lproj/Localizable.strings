@@ -58,6 +58,7 @@
 "course.duration" = "课时长度（分钟）";
 "course.allowOvertime" = "允许拖堂";
 "course.periodRange" = "起止节次（可选）";
+"course.notes" = "备注（可选）";
 "course.studentCount" = "学生人数";
 "course.studentPriorAssessmentScore" = "前测平均分";
 "course.studentAssignmentCompletion" = "作业完成率";

@@ -58,6 +58,7 @@
 "course.duration" = "Lesson Duration (minutes)";
 "course.allowOvertime" = "Allow Overtime";
 "course.periodRange" = "Session Range (Optional)";
+"course.notes" = "Notes (Optional)";
 "course.studentCount" = "Student Count";
 "course.studentPriorAssessmentScore" = "Prior Assessment Score";
 "course.studentAssignmentCompletion" = "Assignment Completion Rate";

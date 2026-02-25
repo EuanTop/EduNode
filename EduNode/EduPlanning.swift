@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import GNodeKit
 
 enum GradeInputMode: String, CaseIterable {
@@ -306,6 +307,7 @@ enum EduPlanning {
         isChinese: Bool
     ) -> Data {
         var entries: [TemplateNodeEntry] = []
+        var templateLayoutNodes: [TemplateLayoutNode] = []
         let graph = NodeGraph()
 
         func add(_ node: any GNode, type: String, x: Double, y: Double, role: String? = nil) {
@@ -322,7 +324,94 @@ enum EduPlanning {
             )
         }
 
+        func markLayout(_ node: any GNode, type: String, column: Int, preferredY: Double) {
+            templateLayoutNodes.append(
+                TemplateLayoutNode(
+                    nodeID: node.id,
+                    column: column,
+                    preferredY: preferredY,
+                    size: estimatedTemplateNodeSize(node: node, nodeType: type),
+                    order: templateLayoutNodes.count
+                )
+            )
+        }
+
         let templateConfig = modelTemplateConfig(for: modelRule.id, isChinese: isChinese)
+        let courseContextSummary: String = {
+            let gradeLabel: String
+            switch draft.gradeInputMode {
+            case .grade:
+                gradeLabel = isChinese ? "年级" : "Grade"
+            case .age:
+                gradeLabel = isChinese ? "年龄" : "Age"
+            }
+
+            let durationLabel = isChinese ? "时长" : "Duration"
+            let countLabel = isChinese ? "人数" : "Students"
+            let subjectLabel = isChinese ? "学科" : "Subject"
+            let periodLabel = isChinese ? "节次" : "Period"
+
+            var lines: [String] = [
+                "\(subjectLabel): \(draft.subject)",
+                "\(gradeLabel): \(draft.gradeLevelSummary)",
+                "\(durationLabel): \(draft.lessonDurationMinutes)\(isChinese ? " 分钟" : " min")",
+                "\(countLabel): \(draft.studentCount)"
+            ]
+
+            let periodText = draft.periodRange.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !periodText.isEmpty {
+                lines.append("\(periodLabel): \(periodText)")
+            }
+            return lines.joined(separator: "\n")
+        }()
+
+        let goalsSummary: String = {
+            let goals = draft.goals
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if goals.isEmpty {
+                return isChinese ? "待补充教学目标" : "Teaching goals to be defined"
+            }
+            return goals.enumerated().map { idx, goal in
+                "\(idx + 1). \(goal)"
+            }.joined(separator: "\n")
+        }()
+
+        let courseInfoNode: any GNode = {
+            if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: EduNodeType.courseInfo) {
+                registered.attributes.name = S("menu.node.courseInfo")
+                if let node = registered as? any NodeTextEditable {
+                    node.editorTextValue = courseContextSummary
+                }
+                return registered
+            }
+            return EduTextNode(
+                name: S("menu.node.courseInfo"),
+                value: courseContextSummary,
+                outputName: S("edu.output.courseInfo"),
+                placeholder: S("edu.courseInfo.placeholder")
+            )
+        }()
+        add(courseInfoNode, type: EduNodeType.courseInfo, x: 0, y: 0, role: "course_info")
+        markLayout(courseInfoNode, type: EduNodeType.courseInfo, column: 0, preferredY: -220)
+
+        let goalsNode: any GNode = {
+            if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: EduNodeType.goal) {
+                registered.attributes.name = S("menu.node.goal")
+                if let node = registered as? any NodeTextEditable {
+                    node.editorTextValue = goalsSummary
+                }
+                return registered
+            }
+            return EduTextNode(
+                name: S("menu.node.goal"),
+                value: goalsSummary,
+                outputName: S("edu.output.goal"),
+                placeholder: S("edu.goal.placeholder")
+            )
+        }()
+        add(goalsNode, type: EduNodeType.goal, x: 0, y: 0, role: "goals")
+        markLayout(goalsNode, type: EduNodeType.goal, column: 0, preferredY: 70)
 
         let knowledgeNode: any GNode = {
             if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: EduNodeType.knowledge) {
@@ -339,7 +428,8 @@ enum EduPlanning {
                 level: templateConfig.knowledgeLevel
             )
         }()
-        add(knowledgeNode, type: EduNodeType.knowledge, x: -220, y: -210, role: "knowledge")
+        add(knowledgeNode, type: EduNodeType.knowledge, x: 0, y: 0, role: "knowledge")
+        markLayout(knowledgeNode, type: EduNodeType.knowledge, column: 1, preferredY: -70)
 
         let presets = modelRule.toolkitPresetIDs
             .compactMap { presetID in
@@ -349,8 +439,8 @@ enum EduPlanning {
             ? Array(toolkitPresets().prefix(templateConfig.toolkitCount))
             : Array(presets.prefix(templateConfig.toolkitCount))
 
+        var toolkitNodes: [any GNode] = []
         for (index, preset) in selectedPresets.enumerated() {
-            let y = -70.0 + Double(index) * 130.0
             let placement = toolkitPlacement(forPresetID: preset.id)
             let toolkitNode: any GNode = {
                 if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: placement.nodeType) {
@@ -370,7 +460,14 @@ enum EduPlanning {
                     selectedMethodID: placement.methodID
                 )
             }()
-            add(toolkitNode, type: placement.nodeType, x: -220, y: y, role: "toolkit")
+            add(toolkitNode, type: placement.nodeType, x: 0, y: 0, role: "toolkit")
+            markLayout(
+                toolkitNode,
+                type: placement.nodeType,
+                column: 2,
+                preferredY: -250 + Double(index) * 230
+            )
+            toolkitNodes.append(toolkitNode)
         }
 
         var metricNodes: [any GNode] = []
@@ -385,7 +482,13 @@ enum EduPlanning {
                 }
                 return NumNode(name: input.displayName, value: NumData(input.defaultValue))
             }()
-            add(metricNode, type: EduNodeType.metricValue, x: 80, y: -220 + Double(index) * 110.0)
+            add(metricNode, type: EduNodeType.metricValue, x: 0, y: 0, role: "metric_value")
+            markLayout(
+                metricNode,
+                type: EduNodeType.metricValue,
+                column: 3,
+                preferredY: -260 + Double(index) * 180
+            )
             metricNodes.append(metricNode)
         }
 
@@ -403,7 +506,8 @@ enum EduPlanning {
             }
             return ScriptNode(name: S("template.evaluationMetric"), expression: metricExpression)
         }()
-        add(metricScript, type: EduNodeType.evaluationMetric, x: 360, y: -90, role: "evaluation_metric")
+        add(metricScript, type: EduNodeType.evaluationMetric, x: 0, y: 0, role: "evaluation_metric")
+        markLayout(metricScript, type: EduNodeType.evaluationMetric, column: 4, preferredY: -80)
 
         let summaryExpression = """
 		function process(metricScore, metricFocus) {
@@ -426,14 +530,41 @@ enum EduPlanning {
             }
             return ScriptNode(name: S("template.evaluationSummary"), expression: summaryExpression)
         }()
-        add(summaryScript, type: EduNodeType.evaluationSummary, x: 640, y: -90, role: "evaluation_summary")
+        add(summaryScript, type: EduNodeType.evaluationSummary, x: 0, y: 0, role: "evaluation_summary")
+        markLayout(summaryScript, type: EduNodeType.evaluationSummary, column: 5, preferredY: -80)
+
+        connectFirstOutput(from: courseInfoNode, to: knowledgeNode, inputIndex: 0, in: graph)
+        connectFirstOutput(from: goalsNode, to: knowledgeNode, inputIndex: 0, in: graph)
+        if let firstToolkit = toolkitNodes.first {
+            connectOutput(from: knowledgeNode, outputIndex: 0, to: firstToolkit, inputIndex: 0, in: graph)
+            connectFirstOutput(from: courseInfoNode, to: firstToolkit, inputIndex: 0, in: graph)
+        }
+        if toolkitNodes.count > 1 {
+            for index in 0..<(toolkitNodes.count - 1) {
+                connectFirstOutput(from: toolkitNodes[index], to: toolkitNodes[index + 1], inputIndex: 0, in: graph)
+            }
+        }
 
         for (index, node) in metricNodes.enumerated() {
             connectFirstOutput(from: node, to: metricScript, inputIndex: index, in: graph)
         }
 
         connectOutput(from: metricScript, outputIndex: 0, to: summaryScript, inputIndex: 0, in: graph)
-        connectOutput(from: metricScript, outputIndex: 2, to: summaryScript, inputIndex: 1, in: graph)
+        if let lastToolkit = toolkitNodes.last {
+            connectOutput(from: lastToolkit, outputIndex: 0, to: summaryScript, inputIndex: 1, in: graph)
+        } else {
+            connectOutput(from: metricScript, outputIndex: 2, to: summaryScript, inputIndex: 1, in: graph)
+        }
+
+        let resolvedLayout = resolveTemplateLayout(for: templateLayoutNodes)
+        entries = entries.map { entry in
+            let resolvedPosition = resolvedLayout[entry.node.id] ?? entry.position
+            return TemplateNodeEntry(
+                node: entry.node,
+                type: entry.type,
+                position: resolvedPosition
+            )
+        }
 
         let serializedNodes = entries.map { entry in
             SerializableNode(from: entry.node, nodeType: entry.type)
@@ -1469,10 +1600,207 @@ private struct ToolkitPlacement {
     let methodID: String
 }
 
+private struct TemplateLayoutNode {
+    let nodeID: UUID
+    let column: Int
+    let preferredY: Double
+    let size: CGSize
+    let order: Int
+}
+
 private struct TemplateNodeEntry {
     let node: any GNode
     let type: String
     let position: CGPoint
+}
+
+private extension EduPlanning {
+    static func estimatedTemplateNodeSize(node: any GNode, nodeType: String) -> CGSize {
+        let isToolkitNode = nodeType.hasPrefix("EduToolkit")
+        let formNode = node as? any NodeFormEditable
+        let hasAdvancedToolkitEditors = formNode?.editorFormTextFields.contains(where: { field in
+            switch field.editorKind {
+            case .tags, .orderedList, .keyValueTable:
+                return true
+            case .text:
+                return false
+            }
+        }) ?? false
+
+        let width: Double = (isToolkitNode && hasAdvancedToolkitEditors) ? 440 : 220
+
+        var height: Double = 92
+        let portRows = max(node.inputs.count, node.outputs.count)
+        height += Double(portRows) * 22
+
+        if node is any NodeOptionSelectable {
+            height += 44
+        }
+
+        if let formNode {
+            height += Double(formNode.editorFormOptionFields.count) * 58
+            for field in formNode.editorFormTextFields {
+                switch field.editorKind {
+                case .tags:
+                    height += 66
+                case .orderedList:
+                    height += 110
+                case .keyValueTable:
+                    height += 148
+                case .text:
+                    if field.isMultiline {
+                        let minLines = max(1, min(field.minVisibleLines, 8))
+                        height += Double(minLines) * 20 + 32
+                    } else {
+                        height += 54
+                    }
+                }
+            }
+        }
+
+        if let textNode = node as? any NodeTextEditable {
+            if textNode.editorPrefersMultiline {
+                let visibleLines = max(2, min(textNode.editorMinVisibleLines + 2, 8))
+                height += Double(visibleLines) * 18 + 26
+            } else {
+                height += 54
+            }
+
+            let lineCount = max(1, min(textNode.editorTextValue.components(separatedBy: .newlines).count, 12))
+            if lineCount > 1 {
+                height += Double(lineCount - 1) * 12
+            }
+        }
+
+        let clampedHeight = min(max(height, 150), 760)
+        return CGSize(width: CGFloat(width), height: CGFloat(clampedHeight))
+    }
+
+    static func resolveTemplateLayout(for nodes: [TemplateLayoutNode]) -> [UUID: CGPoint] {
+        guard !nodes.isEmpty else { return [:] }
+
+        let sortedColumns = Array(Set(nodes.map(\.column))).sorted()
+        var widthByColumn: [Int: CGFloat] = [:]
+        for column in sortedColumns {
+            let maxWidth = nodes
+                .filter { $0.column == column }
+                .map(\.size.width)
+                .max() ?? 220
+            widthByColumn[column] = maxWidth
+        }
+
+        let horizontalGap: CGFloat = 180
+        var xByColumn: [Int: CGFloat] = [:]
+        for (index, column) in sortedColumns.enumerated() {
+            if index == 0 {
+                xByColumn[column] = 0
+                continue
+            }
+            let prevColumn = sortedColumns[index - 1]
+            let prevCenter = xByColumn[prevColumn] ?? 0
+            let prevWidth = widthByColumn[prevColumn] ?? 220
+            let currentWidth = widthByColumn[column] ?? 220
+            xByColumn[column] = prevCenter + prevWidth / 2 + currentWidth / 2 + horizontalGap
+        }
+
+        let verticalGap: CGFloat = 72
+        var positions: [UUID: CGPoint] = [:]
+
+        for column in sortedColumns {
+            let columnNodes = nodes
+                .filter { $0.column == column }
+                .sorted { lhs, rhs in
+                    if lhs.preferredY == rhs.preferredY {
+                        return lhs.order < rhs.order
+                    }
+                    return lhs.preferredY < rhs.preferredY
+                }
+
+            var yByNode: [UUID: CGFloat] = [:]
+            var previousBottom = -CGFloat.greatestFiniteMagnitude
+            for item in columnNodes {
+                let halfHeight = item.size.height / 2
+                let minCenterY = previousBottom + verticalGap + halfHeight
+                let y = max(CGFloat(item.preferredY), minCenterY)
+                yByNode[item.nodeID] = y
+                previousBottom = y + halfHeight
+            }
+
+            let avgPreferred = CGFloat(columnNodes.map(\.preferredY).reduce(0, +)) / CGFloat(max(1, columnNodes.count))
+            let avgPlaced = yByNode.values.reduce(0, +) / CGFloat(max(1, yByNode.count))
+            let shift = avgPreferred - avgPlaced
+
+            previousBottom = -CGFloat.greatestFiniteMagnitude
+            for item in columnNodes {
+                let halfHeight = item.size.height / 2
+                let current = (yByNode[item.nodeID] ?? CGFloat(item.preferredY)) + shift
+                let minCenterY = previousBottom + verticalGap + halfHeight
+                let adjustedY = max(current, minCenterY)
+                yByNode[item.nodeID] = adjustedY
+                previousBottom = adjustedY + halfHeight
+            }
+
+            let x = xByColumn[column] ?? 0
+            for item in columnNodes {
+                positions[item.nodeID] = CGPoint(
+                    x: x,
+                    y: yByNode[item.nodeID] ?? CGFloat(item.preferredY)
+                )
+            }
+        }
+
+        let collisionPadding: CGFloat = 56
+        let sortedNodes = nodes.sorted { $0.order < $1.order }
+        for _ in 0..<120 {
+            var hasCollision = false
+
+            for i in 0..<sortedNodes.count {
+                for j in (i + 1)..<sortedNodes.count {
+                    let lhs = sortedNodes[i]
+                    let rhs = sortedNodes[j]
+                    guard let lhsPos = positions[lhs.nodeID], let rhsPos = positions[rhs.nodeID] else { continue }
+
+                    let lhsRect = CGRect(
+                        x: lhsPos.x - lhs.size.width / 2 - collisionPadding / 2,
+                        y: lhsPos.y - lhs.size.height / 2 - collisionPadding / 2,
+                        width: lhs.size.width + collisionPadding,
+                        height: lhs.size.height + collisionPadding
+                    )
+                    let rhsRect = CGRect(
+                        x: rhsPos.x - rhs.size.width / 2 - collisionPadding / 2,
+                        y: rhsPos.y - rhs.size.height / 2 - collisionPadding / 2,
+                        width: rhs.size.width + collisionPadding,
+                        height: rhs.size.height + collisionPadding
+                    )
+
+                    guard lhsRect.intersects(rhsRect) else { continue }
+                    hasCollision = true
+
+                    let overlapY = min(lhsRect.maxY, rhsRect.maxY) - max(lhsRect.minY, rhsRect.minY)
+                    let pushDown = max(CGFloat(24), overlapY + 12)
+                    positions[rhs.nodeID] = CGPoint(x: rhsPos.x, y: rhsPos.y + pushDown)
+                }
+            }
+
+            if !hasCollision {
+                break
+            }
+        }
+
+        if !positions.isEmpty {
+            let xs = positions.values.map(\.x)
+            let ys = positions.values.map(\.y)
+            let shiftX = (xs.min()! + xs.max()!) / 2
+            let shiftY = (ys.min()! + ys.max()!) / 2
+
+            for key in positions.keys {
+                guard let point = positions[key] else { continue }
+                positions[key] = CGPoint(x: point.x - shiftX, y: point.y - shiftY)
+            }
+        }
+
+        return positions
+    }
 }
 
 private extension String {

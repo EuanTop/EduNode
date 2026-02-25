@@ -24,12 +24,15 @@ struct ContentView: View {
     @Query(sort: \GNodeWorkspaceFile.createdAt, order: .forward) private var workspaceFiles: [GNodeWorkspaceFile]
     @AppStorage("edunode.seeded_default_course.v1") private var didSeedDefaultCourse = false
     @AppStorage("edunode.lastPersistLog") private var lastPersistLog = ""
+    @AppStorage("edunode.onboarding.completed.v1") private var didCompleteOnboarding = false
 
     @State private var selectedFileID: UUID?
     @State private var splitVisibility: NavigationSplitViewVisibility = .automatic
     @State private var showingCreateCourseSheet = false
     @State private var creationDraft = CourseCreationDraft()
     @State private var showingDocs = false
+    @State private var docsPreferredNodeType: String?
+    @State private var showingOnboardingGuide = false
     @State private var showingSidebarImporter = false
     @State private var lessonPlanPreviewPayload: EduLessonPlanPreviewPayload?
     @State private var presentationPreviewPayload: EduPresentationPreviewPayload?
@@ -53,6 +56,7 @@ struct ContentView: View {
     @State private var pendingFlowStepIsDone = false
     @State private var isSidebarBasicInfoExpanded = false
     @State private var editorStatsByFileID: [UUID: NodeEditorCanvasStats] = [:]
+    @State private var initialCameraFocusToken: UUID?
     private let presentationPersistenceDebugEnabled = true
 
     private let modelRules = EduPlanning.loadModelRules()
@@ -73,31 +77,41 @@ struct ContentView: View {
 
     var body: some View {
         GeometryReader { rootGeometry in
-            NavigationSplitView(columnVisibility: $splitVisibility) {
-                sidebarView
-            } detail: {
-                if showingCreateCourseSheet {
-                    Color(white: 0.1)
-                        .ignoresSafeArea()
-                } else {
+            ZStack {
+                NavigationSplitView(columnVisibility: $splitVisibility) {
+                    sidebarView
+                } detail: {
                     let topToolbarPadding = rootGeometry.safeAreaInsets.top + (splitVisibility == .detailOnly ? 0 : 8)
                     detailView(
                         toolbarTopPadding: topToolbarPadding,
                         bottomSafeInset: rootGeometry.safeAreaInsets.bottom
                     )
                 }
+                .navigationSplitViewStyle(.balanced)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if presentationModeLoadingFileID != nil {
+                    presentationPreparingOverlay
+                        .zIndex(6000)
+                }
+
+                if showingOnboardingGuide {
+                    onboardingGuideOverlay
+                        .zIndex(6100)
+                }
             }
-            .navigationSplitViewStyle(.balanced)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             persistenceLog("ContentView.onAppear files=\(workspaceFiles.count)", force: true)
             seedDefaultCourseIfNeeded()
             syncSelectedWorkspaceFile()
-            requestCameraFocusOnFirstNodeForSelectedFile()
             hydratePresentationStateFromStoreIfNeeded()
             migrateWorkspaceFilesIfNeeded()
+            requestCameraFocusOnFirstNodeForSelectedFile()
+            if !didCompleteOnboarding {
+                showingOnboardingGuide = true
+            }
         }
         .onChange(of: workspaceFiles.map(\.id)) { _, _ in
             syncSelectedWorkspaceFile()
@@ -126,6 +140,7 @@ struct ContentView: View {
                 self.presentationModeActivationToken = nil
             }
             pendingPresentationThumbnailIDsByFile = pendingPresentationThumbnailIDsByFile.filter { existingIDs.contains($0.key) }
+            requestCameraFocusOnFirstNodeForSelectedFile()
         }
         .onChange(of: selectedFileID) { _, _ in
             isSidebarBasicInfoExpanded = false
@@ -278,7 +293,6 @@ struct ContentView: View {
                 isChinese: isChineseUI()
             )
             let isPresentationModeActive = activePresentationModeFileID == file.id
-            let isPreparingPresentationMode = presentationModeLoadingFileID == file.id
             ZStack {
                 NodeEditorView(
                     documentID: file.id,
@@ -332,11 +346,6 @@ struct ContentView: View {
                     .zIndex(2000)
                 }
 
-                if isPreparingPresentationMode {
-                    presentationPreparingOverlay
-                        .zIndex(2100)
-                }
-
                 editorStatsOverlay(
                     stats: statsForDisplay(for: file),
                     bottomSafeInset: bottomSafeInset
@@ -379,13 +388,135 @@ struct ContentView: View {
     @ViewBuilder
     private var docsContent: some View {
         if #available(iOS 17.0, macOS 14.0, *) {
-            NodeDocumentationView(onClose: {
-                showingDocs = false
-            })
+            if let docsPreferredNodeType {
+                NodeDocumentationView(
+                    selectedNodeType: docsPreferredNodeType,
+                    onClose: {
+                        showingDocs = false
+                        self.docsPreferredNodeType = nil
+                    }
+                )
+            } else {
+                NodeDocumentationView(onClose: {
+                    showingDocs = false
+                })
+            }
         } else {
             Text(S("app.docs.unsupported"))
                 .padding()
         }
+    }
+
+    @ViewBuilder
+    private var onboardingGuideOverlay: some View {
+        let chinese = isChineseUI()
+
+        ZStack {
+            Color.black.opacity(0.56)
+                .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 14) {
+                Text(chinese ? "欢迎使用 EduNode" : "Welcome to EduNode")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+
+                Text(
+                    chinese
+                    ? "这是一个专业的教学设计工具。建议按下面 3 步完成首次上手：先学，再练，再探索。"
+                    : "This is a professional lesson-design tool. Start with this 3-step route: learn, practice, then explore."
+                )
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.92))
+
+                onboardingStepRow(
+                    index: 1,
+                    title: chinese ? "5 分钟基础教程" : "5-min Basics",
+                    detail: chinese
+                    ? "了解课程框架、节点角色与连线规则。"
+                    : "Learn framework, node roles, and connection rules."
+                )
+
+                onboardingStepRow(
+                    index: 2,
+                    title: chinese ? "实战训练：中学物理微课" : "Practice: Physics Micro-Lesson",
+                    detail: chinese
+                    ? "从 Course Context 到 Knowledge/Toolkit 串联，完成讲义与演讲产出。"
+                    : "Build Course Context -> Knowledge/Toolkit chain, then finish lesson-plan and presentation output."
+                )
+
+                onboardingStepRow(
+                    index: 3,
+                    title: chinese ? "示例探索" : "Explore Example",
+                    detail: chinese
+                    ? "先参考内置观鸟案例，再迁移到你自己的主题。"
+                    : "Inspect the built-in bird sample, then adapt it to your own topic."
+                )
+
+                VStack(spacing: 8) {
+                    Button {
+                        docsPreferredNodeType = "EduGuideBasics5Min"
+                        showingDocs = true
+                        completeOnboardingGuide()
+                    } label: {
+                        Text(chinese ? "开始基础教程" : "Start Basics Tutorial")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 34)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button {
+                        createPhysicsMicroLessonTrainingFile()
+                        completeOnboardingGuide()
+                    } label: {
+                        Text(chinese ? "创建中学物理实战任务" : "Create Physics Practice Task")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 34)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button(chinese ? "稍后再看" : "Maybe Later") {
+                        dismissOnboardingGuideForNow()
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.76))
+                    .buttonStyle(.plain)
+                    .padding(.top, 4)
+                }
+                .padding(.top, 4)
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 20)
+            .frame(maxWidth: 640, alignment: .leading)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
+            )
+            .padding(.horizontal, 20)
+        }
+        .allowsHitTesting(true)
+    }
+
+    @ViewBuilder
+    private func onboardingStepRow(index: Int, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("\(index)")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.black.opacity(0.78))
+                .frame(width: 18, height: 18)
+                .background(Color.white.opacity(0.86), in: Circle())
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.84))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 2)
     }
 
     @ViewBuilder
@@ -514,6 +645,58 @@ struct ContentView: View {
         showingCreateCourseSheet = false
     }
 
+    private func completeOnboardingGuide() {
+        showingOnboardingGuide = false
+        didCompleteOnboarding = true
+    }
+
+    private func dismissOnboardingGuideForNow() {
+        showingOnboardingGuide = false
+    }
+
+    private func createPhysicsMicroLessonTrainingFile() {
+        let chinese = isChineseUI()
+        var draft = CourseCreationDraft()
+        draft.courseName = chinese ? "中学物理微课（新手训练）" : "Junior Physics Micro-Lesson (Training)"
+        draft.gradeInputMode = .grade
+        draft.gradeMinText = "7"
+        draft.gradeMaxText = "8"
+        draft.subject = chinese ? "物理" : "Physics"
+        draft.lessonDurationMinutesText = "20"
+        draft.periodRange = chinese ? "新手实战训练 · 20 分钟微课" : "Guided onboarding drill · 20-min micro lesson"
+        draft.studentCountText = "32"
+        draft.priorAssessmentScoreText = "68"
+        draft.assignmentCompletionRateText = "74"
+        draft.supportNeedCountText = "6"
+        draft.studentSupportNotes = chinese
+            ? "关注实验操作安全与分层提问支持。"
+            : "Prioritize lab safety and tiered questioning support."
+        draft.goals = chinese
+            ? [
+                "理解力、速度、加速度之间的基本关系。",
+                "能够从观测数据中提出解释并进行简短表达。",
+                "完成一个 Knowledge -> Toolkit -> Knowledge 的课堂活动链。"
+            ]
+            : [
+                "Understand the core relation among force, speed, and acceleration.",
+                "Explain observations using collected data.",
+                "Build one classroom chain: Knowledge -> Toolkit -> Knowledge."
+            ]
+        draft.modelID = modelRules.first(where: { $0.id == "inquiry" })?.id ?? (modelRules.first?.id ?? "")
+        draft.leadTeacherCountText = "1"
+        draft.assistantTeacherCountText = "1"
+        draft.teacherRolePlan = chinese
+            ? "主讲负责提问与归纳；助教负责器材与巡视反馈。"
+            : "Lead teacher handles questioning/synthesis; TA handles equipment and live support."
+        draft.resourceConstraints = chinese
+            ? "器材：小车、轨道、秒表；场地限制 20 分钟。"
+            : "Resources: cart, track, stopwatch; constrained to a 20-minute session."
+
+        creationDraft = draft
+        createWorkspaceFileFromDraft()
+        requestCameraFocusOnFirstNodeForSelectedFile()
+    }
+
     private func seedDefaultCourseIfNeeded() {
         guard !didSeedDefaultCourse else { return }
         let descriptor = FetchDescriptor<GNodeWorkspaceFile>()
@@ -582,11 +765,19 @@ struct ContentView: View {
               let firstNodePosition = firstCanvasNodePosition(from: file.data) else {
             return
         }
-        let fileID = file.id
-        cameraRequest = nil
-        DispatchQueue.main.async {
-            guard self.selectedFileID == fileID else { return }
-            self.cameraRequest = NodeEditorCameraRequest(canvasPosition: firstNodePosition)
+        guard selectedFileID == file.id else { return }
+
+        let focusToken = UUID()
+        initialCameraFocusToken = focusToken
+        cameraRequest = NodeEditorCameraRequest(canvasPosition: firstNodePosition)
+
+        Task { @MainActor in
+            for delay in [120_000_000, 360_000_000] {
+                try? await Task.sleep(nanoseconds: UInt64(delay))
+                guard initialCameraFocusToken == focusToken,
+                      selectedFileID == file.id else { return }
+                cameraRequest = NodeEditorCameraRequest(canvasPosition: firstNodePosition)
+            }
         }
     }
 
@@ -623,18 +814,7 @@ struct ContentView: View {
         var columns: [Column] = []
 
         for node in sortedByX {
-            var candidateIndex: Int?
-            var candidateDistance: CGFloat = .greatestFiniteMagnitude
-
-            for idx in columns.indices {
-                let distance = abs(node.position.x - columns[idx].anchorX)
-                if distance < candidateDistance {
-                    candidateDistance = distance
-                    candidateIndex = idx
-                }
-            }
-
-            if let candidateIndex, candidateDistance <= columnThreshold {
+            if let candidateIndex = columns.firstIndex(where: { abs(node.position.x - $0.anchorX) <= columnThreshold }) {
                 columns[candidateIndex].members.append(node)
                 let xs = columns[candidateIndex].members.map(\.position.x)
                 columns[candidateIndex].anchorX = xs.reduce(0, +) / CGFloat(xs.count)
@@ -1789,31 +1969,69 @@ Extend learning with monthly photo bird identification
 
     @ViewBuilder
     private var presentationPreparingOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.56)
-                .ignoresSafeArea()
-            Rectangle()
-                .fill(.regularMaterial)
-                .opacity(0.34)
-                .ignoresSafeArea()
+        if #available(iOS 26.0, macOS 26.0, *) {
+            GlassEffectContainer(spacing: 0) {
+                ZStack {
+                    Color.clear
+                        .ignoresSafeArea()
 
-            VStack(spacing: 10) {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .tint(.white)
-                Text(isChineseUI() ? "正在准备演讲模式…" : "Preparing presentation mode…")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.92))
+                    Rectangle()
+                        .fill(.ultraThinMaterial)
+                        .overlay(Color.black.opacity(0.26))
+                        .ignoresSafeArea()
+                    .allowsHitTesting(false)
+
+                    VStack(spacing: 10) {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(.primary)
+                        Text(isChineseUI() ? "正在准备演讲模式…" : "Preparing presentation mode…")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary)
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 13)
+                    .glassEffect(
+                        .regular,
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    )
+                }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
-            )
+            .allowsHitTesting(true)
+        } else {
+            ZStack {
+                Color.black.opacity(0.76)
+                    .ignoresSafeArea()
+                Rectangle()
+                    .fill(.ultraThickMaterial)
+                    .opacity(0.72)
+                    .ignoresSafeArea()
+                Rectangle()
+                    .fill(Color.black.opacity(0.18))
+                    .ignoresSafeArea()
+
+                VStack(spacing: 10) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.white)
+                    Text(isChineseUI() ? "正在准备演讲模式…" : "Preparing presentation mode…")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.92))
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+            }
+            .allowsHitTesting(true)
         }
-        .allowsHitTesting(true)
     }
 
     @ViewBuilder
@@ -1831,14 +2049,15 @@ Extend learning with monthly photo bird identification
     }
 
     private func editorToolbarActions(for file: GNodeWorkspaceFile) -> [NodeEditorToolbarAction] {
-        let isActive = activePresentationModeFileID == file.id
+        let isActive = activePresentationModeFileID == file.id || presentationModeLoadingFileID == file.id
         return [
             NodeEditorToolbarAction(
                 id: "edunode.present",
-                title: isActive ? S("app.presentation.exit") : S("app.presentation.button"),
-                systemImage: isActive ? "xmark.rectangle.portrait" : "play.rectangle.on.rectangle",
+                title: S("app.presentation.button"),
+                systemImage: "play.rectangle.on.rectangle",
                 accent: .orange,
-                minWidth: 102
+                isActive: isActive,
+                minWidth: 108
             ) {
                 togglePresentationMode(for: file)
             }
@@ -1900,12 +2119,7 @@ Extend learning with monthly photo bird identification
             let pendingThumbnailIDs = Set(groups.map(\.id))
             pendingPresentationThumbnailIDsByFile[file.id] = pendingThumbnailIDs
             activePresentationModeFileID = file.id
-            if let preferredID = selectedPresentationGroupIDByFile[file.id],
-               let preferredGroup = groups.first(where: { $0.id == preferredID }) {
-                selectPresentationGroup(fileID: file.id, group: preferredGroup)
-            } else if let overlayGroup = firstGroupWithOverlays(fileID: file.id, groups: groups) {
-                selectPresentationGroup(fileID: file.id, group: overlayGroup)
-            } else if let firstGroup = groups.first {
+            if let firstGroup = groups.first {
                 selectPresentationGroup(fileID: file.id, group: firstGroup)
             }
             if pendingThumbnailIDs.isEmpty {
@@ -2295,9 +2509,6 @@ Extend learning with monthly photo bird identification
         if let preferredID,
            let index = groups.firstIndex(where: { $0.id == preferredID }) {
             selectedIndex = index
-        } else if let overlayGroup = firstGroupWithOverlays(fileID: fileID, groups: groups),
-                  let index = groups.firstIndex(where: { $0.id == overlayGroup.id }) {
-            selectedIndex = index
         } else {
             selectedIndex = 0
         }
@@ -2311,17 +2522,6 @@ Extend learning with monthly photo bird identification
             group: groups[selectedIndex],
             slide: slides[selectedIndex]
         )
-    }
-
-    private func firstGroupWithOverlays(
-        fileID: UUID,
-        groups: [EduPresentationSlideGroup]
-    ) -> EduPresentationSlideGroup? {
-        let byGroup = presentationStylingByFile[fileID] ?? [:]
-        return groups.first { group in
-            guard let state = byGroup[group.id] else { return false }
-            return !state.overlays.isEmpty
-        }
     }
 
     @ViewBuilder
@@ -3740,9 +3940,6 @@ Extend learning with monthly photo bird identification
             if groups.contains(where: { $0.id == storedSelectedID }) {
                 return storedSelectedID
             }
-            if let overlayGroup = firstGroupWithOverlays(fileID: fileID, groups: groups) {
-                return overlayGroup.id
-            }
             return groups.first?.id
         }()
         let stripHeight: CGFloat = presentationFilmstripHeight
@@ -3844,9 +4041,6 @@ Extend learning with monthly photo bird identification
         let selectedGroupID: UUID? = {
             if groups.contains(where: { $0.id == storedSelectedID }) {
                 return storedSelectedID
-            }
-            if let overlayGroup = firstGroupWithOverlays(fileID: fileID, groups: groups) {
-                return overlayGroup.id
             }
             return groups.first?.id
         }()
@@ -4470,6 +4664,42 @@ private struct AnimatedGradientRing: View {
                 )
         }
         .padding(1)
+    }
+}
+
+private struct AnimatedGradientScreenBorder: View {
+    let lineWidth: CGFloat
+    let inset: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            let corner = max(20, min(proxy.size.width, proxy.size.height) * 0.035)
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                let rotation = Angle.degrees(
+                    (timeline.date.timeIntervalSinceReferenceDate * 58.0)
+                        .truncatingRemainder(dividingBy: 360)
+                )
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
+                    .stroke(
+                        AngularGradient(
+                            gradient: Gradient(
+                                colors: [
+                                    Color(red: 0.99, green: 0.35, blue: 0.53),
+                                    Color(red: 1.00, green: 0.76, blue: 0.25),
+                                    Color(red: 0.28, green: 0.88, blue: 0.72),
+                                    Color(red: 0.25, green: 0.66, blue: 0.98),
+                                    Color(red: 0.74, green: 0.50, blue: 0.99),
+                                    Color(red: 0.99, green: 0.35, blue: 0.53)
+                                ]
+                            ),
+                            center: .center,
+                            angle: rotation
+                        ),
+                        style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+                    )
+                    .padding(inset)
+            }
+        }
     }
 }
 

@@ -299,23 +299,27 @@ enum EduPresentationPlanner {
         return isChinese ? "（待补充课堂内容）" : "(Class content pending)"
     }
 
-    private static func toolkitSubtitle(selectedOption: String, nodeType: String, isChinese: Bool) -> String {
+    private static func toolkitSubtitle(selectedOption: String, nodeType: String, isChinese _: Bool) -> String {
         let option = normalized(selectedOption)
         if !option.isEmpty {
             return option
         }
         switch nodeType {
         case EduNodeType.toolkitPerceptionInquiry:
-            return isChinese ? "Inquiry" : "Inquiry"
+            return localized("menu.node.perceptionInquiry")
         case EduNodeType.toolkitConstructionPrototype:
-            return isChinese ? "Prototype" : "Prototype"
+            return localized("menu.node.constructionPrototype")
         case EduNodeType.toolkitCommunicationNegotiation:
-            return isChinese ? "Negotiation" : "Negotiation"
+            return localized("menu.node.communicationNegotiation")
         case EduNodeType.toolkitRegulationMetacognition:
-            return isChinese ? "Metacognition" : "Metacognition"
+            return localized("menu.node.regulationMetacognition")
         default:
-            return isChinese ? "Toolkit" : "Toolkit"
+            return localized("menu.section.toolkit")
         }
+    }
+
+    private static func localized(_ key: String) -> String {
+        Bundle.main.localizedString(forKey: key, value: key, table: nil)
     }
 
     private static func toolkitKeyPoints(

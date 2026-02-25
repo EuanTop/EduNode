@@ -20,6 +20,39 @@ private enum CourseFormPage: Int, CaseIterable {
     }
 }
 
+private enum TeacherRoleType: String, CaseIterable {
+    case lead
+    case assistant
+
+    func title(isChinese: Bool) -> String {
+        switch self {
+        case .lead:
+            return isChinese ? "主讲" : "Lead"
+        case .assistant:
+            return isChinese ? "助教" : "Assistant"
+        }
+    }
+}
+
+private struct TeacherRoleRow: Identifiable, Equatable {
+    let id: UUID
+    var roleType: TeacherRoleType
+    var teacherName: String
+    var responsibility: String
+
+    init(
+        id: UUID = UUID(),
+        roleType: TeacherRoleType,
+        teacherName: String = "",
+        responsibility: String = ""
+    ) {
+        self.id = id
+        self.roleType = roleType
+        self.teacherName = teacherName
+        self.responsibility = responsibility
+    }
+}
+
 @MainActor
 struct CourseCreationSheet: View {
     @Binding var draft: CourseCreationDraft
@@ -30,9 +63,18 @@ struct CourseCreationSheet: View {
     @State private var page: CourseFormPage = .basics
     @State private var selectedSubjectPreset = "__custom__"
     @State private var newGoalText = ""
-    @State private var showAllModelsSheet = false
+    @State private var showAllModelsInline = false
+    @State private var teacherRoleRows: [TeacherRoleRow] = []
 
     private let customSubjectTag = "__custom__"
+    private struct HeaderArtItem {
+        let name: String
+        let widthRatio: CGFloat
+        let xOffsetRatio: CGFloat
+        let yOffset: CGFloat
+        let rotation: Double
+        let opacity: Double
+    }
 
     private var isChinese: Bool {
         Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
@@ -56,8 +98,37 @@ struct CourseCreationSheet: View {
         EduPlanning.recommendedModels(for: draft, rules: modelRules)
     }
 
+    private var toolkitPresetLookup: [String: EduToolkitPreset] {
+        Dictionary(uniqueKeysWithValues: EduPlanning.toolkitPresets().map { ($0.id, $0) })
+    }
+
     private var pages: [CourseFormPage] {
         CourseFormPage.allCases
+    }
+
+    private var headerArtItems: [HeaderArtItem] {
+        switch page {
+        case .basics:
+            return [
+                HeaderArtItem(name: "cap", widthRatio: 3.30, xOffsetRatio: -0.33, yOffset: 10, rotation: -34, opacity: 0.30),
+                HeaderArtItem(name: "book", widthRatio: 2.10, xOffsetRatio: 0.48, yOffset: 78, rotation: 22, opacity: 0.20)
+            ]
+        case .studentsGoals:
+            return [
+                HeaderArtItem(name: "tellurion", widthRatio: 3.10, xOffsetRatio: -0.30, yOffset: 12, rotation: -31, opacity: 0.28),
+                HeaderArtItem(name: "book", widthRatio: 2.05, xOffsetRatio: 0.48, yOffset: 76, rotation: 25, opacity: 0.19)
+            ]
+        case .model:
+            return [
+                HeaderArtItem(name: "bulb", widthRatio: 3.16, xOffsetRatio: -0.31, yOffset: 10, rotation: -32, opacity: 0.30),
+                HeaderArtItem(name: "chemistry", widthRatio: 2.08, xOffsetRatio: 0.48, yOffset: 78, rotation: 23, opacity: 0.20)
+            ]
+        case .teachingTeam:
+            return [
+                HeaderArtItem(name: "award", widthRatio: 3.36, xOffsetRatio: -0.33, yOffset: 12, rotation: -30, opacity: 0.28),
+                HeaderArtItem(name: "football", widthRatio: 2.02, xOffsetRatio: 0.49, yOffset: 76, rotation: 23, opacity: 0.20)
+            ]
+        }
     }
 
     private var pageIndex: Int {
@@ -86,7 +157,7 @@ struct CourseCreationSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 10) {
+            VStack(spacing: 0) {
                 header
 
                 Group {
@@ -101,154 +172,267 @@ struct CourseCreationSheet: View {
                         teachingTeamPage
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 footer
             }
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.08),
+                        Color.black.opacity(0.03)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+            )
             .navigationTitle(S("course.createTitle"))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(S("action.cancel"), action: onCancel)
                 }
             }
-            .sheet(isPresented: $showAllModelsSheet) {
-                allModelsSheet
-            }
+            .toolbarBackground(.hidden, for: .navigationBar)
             .onAppear {
                 if draft.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                    let first = subjectPresets.first {
                     draft.subject = first
                 }
                 syncPresetSelectionWithSubject()
+                initializeTeacherRoleRowsFromDraft()
 
                 if draft.modelID.isEmpty, let firstRecommended = recommended.first {
                     draft.modelID = firstRecommended.id
                 }
             }
+            .onChange(of: teacherRoleRows) { _, _ in
+                syncDraftFromTeacherRoleRows()
+            }
         }
     }
 
     private var header: some View {
-        VStack(spacing: 6) {
-            Text(pageIndicatorText)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(pageIndicatorText)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
 
             Text(page.title(S))
-                .font(.headline)
+                .font(.title3.weight(.bold))
 
             ProgressView(value: Double(pageIndex + 1), total: Double(pages.count))
                 .tint(.cyan)
-                .padding(.horizontal, 20)
         }
-        .padding(.top, 8)
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+        .background(
+            GeometryReader { proxy in
+                let topExtension = max(108, proxy.size.height * 1.3)
+                let topBleed: CGFloat = 8
+                let artSize = CGSize(width: proxy.size.width, height: proxy.size.height + topExtension + topBleed)
+
+                ZStack(alignment: .top) {
+                    Rectangle()
+                        .fill(.ultraThinMaterial)
+                    headerBackgroundArt(for: artSize)
+                }
+                .frame(width: artSize.width, height: artSize.height, alignment: .top)
+                .offset(y: -(topExtension + topBleed))
+            }
+        )
+    }
+
+    private func headerBackgroundArt(for size: CGSize) -> some View {
+        ZStack {
+            ForEach(Array(headerArtItems.enumerated()), id: \.offset) { _, item in
+                Image(item.name)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: max(420, size.width * item.widthRatio))
+                    .foregroundStyle(Color(white: 0.88))
+                    .opacity(item.opacity)
+                    .rotationEffect(.degrees(item.rotation))
+                    .offset(
+                        x: size.width * item.xOffsetRatio,
+                        y: item.yOffset
+                    )
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .clipped()
     }
 
     private var basicsPage: some View {
-        Form {
-            Section(S("course.section.required")) {
-                labeledTextRow(S("course.name"), text: $draft.courseName)
+        pageContainer {
+            sectionCard {
+                formField(S("course.name"), required: true) {
+                    textInputField(
+                        isChinese ? "例如：八年级牛顿第一定律" : "e.g. Newton's First Law",
+                        text: $draft.courseName
+                    )
+                }
 
-                HStack(spacing: 12) {
-                    Picker("", selection: $draft.gradeInputMode) {
-                        Text(S("course.gradeMode.gradeRange")).tag(GradeInputMode.grade)
-                        Text(S("course.gradeMode.ageRange")).tag(GradeInputMode.age)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        HStack(spacing: 4) {
+                            Text(isChinese ? "年级 / 年龄范围" : "Grade / Age Range")
+                                .font(.subheadline.weight(.semibold))
+                            Text("*")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(.orange)
+                        }
+                        .foregroundStyle(.secondary)
+
+                        Spacer(minLength: 0)
+
+                        Picker("", selection: $draft.gradeInputMode) {
+                            Text(S("course.gradeMode.gradeRange")).tag(GradeInputMode.grade)
+                            Text(S("course.gradeMode.ageRange")).tag(GradeInputMode.age)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 210)
                     }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 250)
 
-                    HStack(spacing: 8) {
-                        TextField(
+                    HStack(alignment: .center, spacing: 8) {
+                        rangeBoundField(
                             draft.gradeInputMode == .grade ? S("course.gradeMin") : S("course.ageMin"),
                             text: digitsOnlyBinding($draft.gradeMinText)
                         )
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.center)
-                        .frame(width: 88)
-
-                        Text("-")
+                        Text("~")
+                            .font(.title3.weight(.semibold))
                             .foregroundStyle(.secondary)
-
-                        TextField(
+                            .frame(width: 18)
+                        rangeBoundField(
                             draft.gradeInputMode == .grade ? S("course.gradeMax") : S("course.ageMax"),
                             text: digitsOnlyBinding($draft.gradeMaxText)
                         )
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.center)
-                        .frame(width: 88)
                     }
                 }
+                .padding(.top, 2)
 
-                LabeledContent(S("course.subject")) {
+                formField(S("course.subject"), required: true) {
                     Picker("", selection: $selectedSubjectPreset) {
                         ForEach(subjectPresets, id: \.self) { item in
                             Text(item).tag(item)
                         }
                         Text(S("course.subjectCustom")).tag(customSubjectTag)
                     }
+                    .pickerStyle(.menu)
                     .labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
+                    )
                     .onChange(of: selectedSubjectPreset) { _, newValue in
                         if newValue != customSubjectTag {
                             draft.subject = newValue
                         }
                     }
+
+                    if selectedSubjectPreset == customSubjectTag {
+                        textInputField(
+                            isChinese ? "请输入学科" : "Enter subject",
+                            text: $draft.subject
+                        )
+                    }
                 }
 
-                if selectedSubjectPreset == customSubjectTag {
-                    labeledTextRow(S("course.subjectCustomInput"), text: $draft.subject)
+                HStack(alignment: .top, spacing: 12) {
+                    formField(S("course.duration"), required: true) {
+                        numberInputField(S("course.duration"), text: $draft.lessonDurationMinutesText)
+                    }
+                    .frame(maxWidth: .infinity)
+
+                    formField(S("course.studentCount"), required: true) {
+                        numberInputField(S("course.studentCount"), text: $draft.studentCountText)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
 
-                labeledNumberRow(S("course.duration"), text: $draft.lessonDurationMinutesText)
-                labeledNumberRow(S("course.studentCount"), text: $draft.studentCountText)
-                labeledTextRow(S("course.periodRange"), text: $draft.periodRange)
+                formField(S("course.notes")) {
+                    textInputField(
+                        isChinese ? "例如：器材有限，需分组轮换；需要双语关键词。" : "e.g. Limited equipment, rotate by groups; include bilingual keywords.",
+                        text: $draft.periodRange
+                    )
+                }
             }
         }
     }
 
     private var studentsGoalsPage: some View {
-        Form {
-            Section(S("course.section.students")) {
-                labeledPercentRow(S("course.studentPriorAssessmentScore"), text: $draft.priorAssessmentScoreText)
-                labeledPercentRow(S("course.studentAssignmentCompletion"), text: $draft.assignmentCompletionRateText)
-                labeledNumberRow(S("course.studentSupportNeedCount"), text: $draft.supportNeedCountText)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(S("course.studentSupport"))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    multilineTextInput(text: $draft.studentSupportNotes, minHeight: 100)
+        pageContainer {
+            sectionCard(
+                title: S("course.section.students"),
+                subtitle: isChinese ? "填写教师可直接提供的班级信息即可。" : "Only fill teacher-friendly class information."
+            ) {
+                formField(isChinese ? "班级学情简述（可选）" : "Class Profile (Optional)") {
+                    multilineTextInput(
+                        text: $draft.studentSupportNotes,
+                        minHeight: 110,
+                        placeholder: isChinese ? "例如：整体基础中等，实验参与积极，个别学生需要更多操作指导。" : "e.g. Moderate baseline, active in experiments, a few students need extra hands-on guidance."
+                    )
                 }
-
-                Button(S("course.studentImportTable")) {
-                }
-                .disabled(true)
             }
 
-            Section(S("course.section.goals")) {
+            sectionCard(
+                title: S("course.section.goals"),
+                subtitle: isChinese ? "至少 1 条目标，建议 2-4 条。" : "At least one goal is required. Recommended 2-4 goals."
+            ) {
                 if draft.goals.isEmpty {
                     Text(S("course.goals.empty"))
                         .foregroundStyle(.secondary)
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     ForEach(Array(draft.goals.enumerated()), id: \.offset) { index, goal in
-                        HStack(alignment: .top, spacing: 8) {
+                        HStack(alignment: .top, spacing: 10) {
                             Text("\(index + 1).")
+                                .font(.subheadline.weight(.bold))
                                 .foregroundStyle(.secondary)
                             Text(goal)
+                                .font(.subheadline)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             Button(role: .destructive) {
                                 draft.goals.remove(at: index)
                             } label: {
                                 Image(systemName: "trash")
+                                    .font(.caption.weight(.semibold))
                             }
                             .buttonStyle(.plain)
                         }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.white.opacity(0.04))
+                        )
                     }
                 }
 
                 HStack(spacing: 8) {
-                    TextField(S("course.goals.placeholder"), text: $newGoalText)
+                    textInputField(
+                        S("course.goals.placeholder"),
+                        text: $newGoalText
+                    )
+                    .frame(maxWidth: .infinity)
+
                     Button(S("course.goals.add")) {
                         addGoal()
                     }
+                    .buttonStyle(.borderedProminent)
                     .disabled(newGoalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -256,67 +440,78 @@ struct CourseCreationSheet: View {
     }
 
     private var modelPage: some View {
-        Form {
-            Section(S("course.recommendedModels")) {
+        pageContainer {
+            sectionCard(
+                title: S("course.recommendedModels"),
+                subtitle: isChinese ? "根据你已填写的信息推荐。" : "Recommended from your current course inputs."
+            ) {
                 if recommended.isEmpty {
                     Text(S("course.recommended.empty"))
                         .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     ForEach(recommended) { rule in
-                        modelRow(rule: rule, recommended: true)
+                        modelRow(rule: rule, recommended: true, showDetails: false)
                     }
                 }
-            }
 
-            Section {
                 Button {
-                    showAllModelsSheet = true
+                    showAllModelsInline.toggle()
                 } label: {
-                    HStack {
-                        Text(S("course.allModelsAction"))
-                        Spacer()
-                        Image(systemName: "chevron.right")
+                    HStack(spacing: 4) {
+                        Text(S("course.allModels"))
+                        Image(systemName: showAllModelsInline ? "chevron.down" : "chevron.right")
                             .foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(.cyan)
+
+                if showAllModelsInline {
+                    VStack(spacing: 10) {
+                        ForEach(modelRules) { rule in
+                            modelRow(rule: rule, recommended: false, showDetails: true)
+                        }
+                    }
+                }
             }
         }
     }
 
     private var teachingTeamPage: some View {
-        Form {
-            Section(S("course.section.teachingTeam")) {
-                labeledNumberRow(S("course.team.leadCount"), text: $draft.leadTeacherCountText)
-                labeledNumberRow(S("course.team.assistantCount"), text: $draft.assistantTeacherCountText)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(S("course.team.rolePlan"))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    multilineTextInput(text: $draft.teacherRolePlan, minHeight: 110)
+        pageContainer {
+            sectionCard(
+                title: S("course.section.teachingTeam"),
+                subtitle: isChinese ? "用表格逐行填写每位老师及职责。" : "Use rows to assign each teacher and responsibility."
+            ) {
+                formField(isChinese ? "角色分工" : "Role Division", required: true) {
+                    roleDivisionTable
                 }
-            }
 
-            Section(S("course.section.optional")) {
-                labeledTextRow(S("course.resourceConstraints"), text: $draft.resourceConstraints)
-            }
-        }
-    }
-
-    private var allModelsSheet: some View {
-        NavigationStack {
-            List {
-                ForEach(modelRules) { rule in
-                    modelRow(rule: rule, recommended: false)
+                HStack(spacing: 14) {
+                    roleCountPill(
+                        title: S("course.team.leadCount"),
+                        count: teacherRoleRows.filter { $0.roleType == .lead }.count
+                    )
+                    roleCountPill(
+                        title: S("course.team.assistantCount"),
+                        count: teacherRoleRows.filter { $0.roleType == .assistant }.count
+                    )
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .navigationTitle(S("course.allModels"))
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(S("action.close")) {
-                        showAllModelsSheet = false
-                    }
+
+            sectionCard(
+                title: S("course.section.optional"),
+                subtitle: isChinese ? "可补充设备、空间、时间等限制条件。" : "Optional constraints: equipment, space, time, etc."
+            ) {
+                formField(S("course.resourceConstraints")) {
+                    multilineTextInput(
+                        text: $draft.resourceConstraints,
+                        minHeight: 96,
+                        placeholder: isChinese ? "例如：实验器材有限，需分组轮换" : "e.g. Limited lab devices, use group rotation."
+                    )
                 }
             }
         }
@@ -344,21 +539,25 @@ struct CourseCreationSheet: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 12)
         .background(.ultraThinMaterial)
+        .overlay(
+            Rectangle()
+                .fill(Color.white.opacity(0.2))
+                .frame(height: 1),
+            alignment: .top
+        )
     }
 
     @ViewBuilder
-    private func modelRow(rule: EduModelRule, recommended: Bool) -> some View {
+    private func modelRow(rule: EduModelRule, recommended: Bool, showDetails: Bool) -> some View {
         Button {
             draft.modelID = rule.id
-            if !recommended {
-                showAllModelsSheet = false
-            }
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: draft.modelID == rule.id ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(draft.modelID == rule.id ? .cyan : .secondary)
+                    .font(.callout.weight(.semibold))
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
@@ -367,22 +566,503 @@ struct CourseCreationSheet: View {
                         if recommended {
                             Text(S("course.recommended"))
                                 .font(.caption2.weight(.semibold))
-                                .padding(.horizontal, 6)
+                                .padding(.horizontal, 7)
                                 .padding(.vertical, 2)
-                                .background(Color.cyan.opacity(0.2))
+                                .background(Color.cyan.opacity(0.22))
                                 .clipShape(Capsule())
                         }
                     }
                     Text(rule.displayDescription(isChinese: isChinese))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    if showDetails {
+                        VStack(alignment: .leading, spacing: 4) {
+                            modelDetailRow(
+                                title: isChinese ? "模板重点" : "Template Focus",
+                                value: rule.templateFocus(isChinese: isChinese)
+                            )
+                            modelDetailRow(
+                                title: isChinese ? "适用学段" : "Best For Grades",
+                                value: localizedHints(rule.gradeHints, category: .grade).joined(separator: " / ")
+                            )
+                            modelDetailRow(
+                                title: isChinese ? "适用学科" : "Best For Subjects",
+                                value: localizedHints(rule.subjectHints, category: .subject).joined(separator: " / ")
+                            )
+                            modelDetailRow(
+                                title: isChinese ? "适用场景" : "Best For Scenarios",
+                                value: localizedHints(rule.scenarioHints, category: .scenario).joined(separator: " / ")
+                            )
+                            modelDetailRow(
+                                title: isChinese ? "推荐 Toolkit" : "Recommended Toolkit",
+                                value: recommendedToolkitNames(for: rule).joined(separator: " / ")
+                            )
+                        }
+                        .padding(.top, 4)
+                    }
                 }
 
                 Spacer(minLength: 0)
             }
-            .contentShape(Rectangle())
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(
+                        draft.modelID == rule.id
+                            ? Color.cyan.opacity(0.16)
+                            : Color.white.opacity(0.05)
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(
+                        draft.modelID == rule.id
+                            ? Color.cyan.opacity(0.62)
+                            : Color.white.opacity(0.16),
+                        lineWidth: 1
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func modelDetailRow(title: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text("\(title):")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(value.isEmpty ? "-" : value)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func recommendedToolkitNames(for rule: EduModelRule) -> [String] {
+        let names = rule.toolkitPresetIDs.compactMap { toolkitPresetLookup[$0]?.title(isChinese: isChinese) }
+        if names.isEmpty { return [] }
+        return Array(NSOrderedSet(array: names)) as? [String] ?? names
+    }
+
+    private enum ModelHintCategory {
+        case grade
+        case subject
+        case scenario
+    }
+
+    private func localizedHints(_ hints: [String], category: ModelHintCategory) -> [String] {
+        var values: [String] = []
+        for raw in hints {
+            let mapped = localizedHint(raw, category: category)
+            if !mapped.isEmpty, !values.contains(mapped) {
+                values.append(mapped)
+            }
+        }
+        return values
+    }
+
+    private func localizedHint(_ raw: String, category: ModelHintCategory) -> String {
+        let key = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        switch category {
+        case .grade:
+            if isChinese {
+                switch key {
+                case "elementary", "小学": return "小学"
+                case "middle", "初中": return "初中"
+                case "high", "高中": return "高中"
+                case "all", "全学段": return "全学段"
+                default: return containsChinese(raw) ? raw : ""
+                }
+            } else {
+                switch key {
+                case "elementary", "小学": return "Elementary"
+                case "middle", "初中": return "Middle School"
+                case "high", "高中": return "High School"
+                case "all", "全学段": return "All Grades"
+                default: return containsChinese(raw) ? "" : raw.capitalized
+                }
+            }
+
+        case .subject:
+            if isChinese {
+                switch key {
+                case "science", "理": return "理科"
+                case "math": return "数学"
+                case "history": return "历史"
+                case "language", "语文": return "语文"
+                case "social": return "社会"
+                case "lab": return "实验科学"
+                case "physics": return "物理"
+                case "chemistry": return "化学"
+                case "project", "综合": return "项目/综合"
+                case "文": return "文科"
+                default: return containsChinese(raw) ? raw : ""
+                }
+            } else {
+                switch key {
+                case "science", "理": return "Science"
+                case "math": return "Mathematics"
+                case "history": return "History"
+                case "language", "语文": return "Language Arts"
+                case "social": return "Social Studies"
+                case "lab": return "Lab Science"
+                case "physics": return "Physics"
+                case "chemistry": return "Chemistry"
+                case "project", "综合": return "Project-Based"
+                case "文": return "Humanities"
+                default: return containsChinese(raw) ? "" : raw.capitalized
+                }
+            }
+
+        case .scenario:
+            if isChinese {
+                switch key {
+                case "formal": return "常规课堂"
+                case "class", "课堂": return "课堂教学"
+                case "workshop": return "工作坊"
+                case "discussion", "研讨", "讨论": return "讨论研讨"
+                case "lab", "实验": return "实验探究"
+                case "project": return "项目任务"
+                default: return containsChinese(raw) ? raw : ""
+                }
+            } else {
+                switch key {
+                case "formal": return "Formal Lesson"
+                case "class", "课堂": return "Classroom Lesson"
+                case "workshop": return "Workshop"
+                case "discussion", "研讨", "讨论": return "Discussion"
+                case "lab", "实验": return "Lab Investigation"
+                case "project": return "Project Task"
+                default: return containsChinese(raw) ? "" : raw.capitalized
+                }
+            }
+        }
+    }
+
+    private func containsChinese(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            (scalar.value >= 0x4E00 && scalar.value <= 0x9FFF) ||
+            (scalar.value >= 0x3400 && scalar.value <= 0x4DBF)
+        }
+    }
+
+    @ViewBuilder
+    private func pageContainer<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                content()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+    }
+
+    @ViewBuilder
+    private func sectionCard<Content: View>(
+        title: String? = nil,
+        subtitle: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let title, !title.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.headline)
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else if let subtitle, !subtitle.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            content()
+        }
+    }
+
+    @ViewBuilder
+    private func formField<Content: View>(
+        _ title: String,
+        required: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                if required {
+                    Text("*")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.orange)
+                }
+            }
+            .foregroundStyle(.secondary)
+
+            content()
+        }
+    }
+
+    @ViewBuilder
+    private func textInputField(_ placeholder: String, text: Binding<String>) -> some View {
+        TextField(placeholder, text: text)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
+            )
+    }
+
+    @ViewBuilder
+    private func numberInputField(_ placeholder: String, text: Binding<String>) -> some View {
+        TextField(placeholder, text: digitsOnlyBinding(text))
+            .keyboardType(.numberPad)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
+            )
+    }
+
+    @ViewBuilder
+    private func percentInputField(text: Binding<String>) -> some View {
+        HStack(spacing: 6) {
+            TextField("0-100", text: digitsOnlyBinding(text, max: 100))
+                .keyboardType(.numberPad)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("%")
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func rangeBoundField(_ title: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            TextField("", text: text)
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.center)
+                .font(.body.weight(.semibold))
+
+            Rectangle()
+                .fill(Color.cyan.opacity(0.85))
+                .frame(height: 2)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func multilineTextInput(
+        text: Binding<String>,
+        minHeight: CGFloat,
+        placeholder: String
+    ) -> some View {
+        if #available(iOS 16.0, macOS 13.0, *) {
+            TextField(placeholder, text: text, axis: .vertical)
+                .lineLimit(4...10)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(minHeight: minHeight, alignment: .topLeading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.white.opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
+                )
+        } else {
+            TextField(placeholder, text: text)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(minHeight: minHeight, alignment: .topLeading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.white.opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var roleDivisionTable: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                roleDivisionHeaderText(isChinese ? "角色" : "Role")
+                    .frame(width: 116, alignment: .leading)
+                roleDivisionHeaderText(isChinese ? "老师" : "Teacher")
+                    .frame(width: 110, alignment: .leading)
+                roleDivisionHeaderText(isChinese ? "职责" : "Responsibility")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Color.clear.frame(width: 18)
+            }
+
+            ForEach(Array(teacherRoleRows.indices), id: \.self) { index in
+                HStack(spacing: 8) {
+                    Menu {
+                        ForEach(TeacherRoleType.allCases, id: \.self) { roleType in
+                            Button(roleType.title(isChinese: isChinese)) {
+                                teacherRoleRows[index].roleType = roleType
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(teacherRoleRows[index].roleType.title(isChinese: isChinese))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.82)
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.down")
+                                .font(.caption2.weight(.semibold))
+                        }
+                    }
+                    .menuStyle(.borderlessButton)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 8)
+                    .frame(width: 116, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
+                    )
+
+                    TextField(
+                        isChinese ? "姓名" : "Name",
+                        text: Binding(
+                            get: { teacherRoleRows[index].teacherName },
+                            set: { teacherRoleRows[index].teacherName = $0 }
+                        )
+                    )
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(width: 110)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
+                    )
+
+                    TextField(
+                        isChinese ? "负责内容" : "Responsibility",
+                        text: Binding(
+                            get: { teacherRoleRows[index].responsibility },
+                            set: { teacherRoleRows[index].responsibility = $0 }
+                        )
+                    )
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
+                    )
+
+                    Button(role: .destructive) {
+                        teacherRoleRows.remove(at: index)
+                        if teacherRoleRows.isEmpty {
+                            teacherRoleRows.append(TeacherRoleRow(roleType: .lead))
+                        }
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 18)
+                }
+            }
+
+            HStack {
+                Button {
+                    teacherRoleRows.append(TeacherRoleRow(roleType: .assistant))
+                } label: {
+                    Label(isChinese ? "添加一行" : "Add Row", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 2)
+        }
+    }
+
+    @ViewBuilder
+    private func roleDivisionHeaderText(_ value: String) -> some View {
+        Text(value)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private func roleCountPill(title: String, count: Int) -> some View {
+        Text("\(title): \(max(0, count))")
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(Color.white.opacity(0.08))
+            )
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+            )
     }
 
     private func addGoal() {
@@ -413,6 +1093,64 @@ struct CourseCreationSheet: View {
         }
     }
 
+    private func initializeTeacherRoleRowsFromDraft() {
+        guard teacherRoleRows.isEmpty else { return }
+        let trimmedPlan = draft.teacherRolePlan.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPlan.isEmpty else {
+            teacherRoleRows = [TeacherRoleRow(roleType: .lead)]
+            syncDraftFromTeacherRoleRows()
+            return
+        }
+
+        var parsedRows: [TeacherRoleRow] = []
+        for line in trimmedPlan.split(separator: "\n") {
+            let parts = line.split(separator: "|").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if parts.count >= 3 {
+                let rolePart = parts[0].lowercased()
+                let roleType: TeacherRoleType = (rolePart.contains("lead") || rolePart.contains("主讲")) ? .lead : .assistant
+                parsedRows.append(
+                    TeacherRoleRow(
+                        roleType: roleType,
+                        teacherName: parts[1],
+                        responsibility: parts[2...].joined(separator: " | ")
+                    )
+                )
+            }
+        }
+
+        if parsedRows.isEmpty {
+            parsedRows = [TeacherRoleRow(roleType: .lead, teacherName: "", responsibility: trimmedPlan)]
+        }
+        teacherRoleRows = parsedRows
+        syncDraftFromTeacherRoleRows()
+    }
+
+    private func syncDraftFromTeacherRoleRows() {
+        let rows = teacherRoleRows
+            .map { row in
+                TeacherRoleRow(
+                    id: row.id,
+                    roleType: row.roleType,
+                    teacherName: row.teacherName.trimmingCharacters(in: .whitespacesAndNewlines),
+                    responsibility: row.responsibility.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            }
+            .filter { !$0.teacherName.isEmpty || !$0.responsibility.isEmpty }
+
+        let leadCount = rows.filter { $0.roleType == .lead }.count
+        let assistantCount = rows.filter { $0.roleType == .assistant }.count
+
+        draft.leadTeacherCountText = String(max(1, leadCount))
+        draft.assistantTeacherCountText = String(max(0, assistantCount))
+
+        draft.teacherRolePlan = rows.map { row in
+            let role = row.roleType.title(isChinese: isChinese)
+            let name = row.teacherName.isEmpty ? (isChinese ? "未命名老师" : "Unnamed Teacher") : row.teacherName
+            let duty = row.responsibility.isEmpty ? (isChinese ? "未填写职责" : "Responsibility not provided") : row.responsibility
+            return "\(role) | \(name) | \(duty)"
+        }.joined(separator: "\n")
+    }
+
     private func S(_ key: String) -> String {
         NSLocalizedString(key, comment: "")
     }
@@ -436,54 +1174,5 @@ struct CourseCreationSheet: View {
                 text.wrappedValue = filtered
             }
         )
-    }
-
-    @ViewBuilder
-    private func labeledTextRow(_ title: String, text: Binding<String>) -> some View {
-        LabeledContent(title) {
-            TextField("", text: text)
-                .multilineTextAlignment(.trailing)
-        }
-    }
-
-    @ViewBuilder
-    private func labeledNumberRow(_ title: String, text: Binding<String>) -> some View {
-        LabeledContent(title) {
-            TextField("", text: digitsOnlyBinding(text))
-                .keyboardType(.numberPad)
-                .multilineTextAlignment(.trailing)
-        }
-    }
-
-    @ViewBuilder
-    private func labeledPercentRow(_ title: String, text: Binding<String>) -> some View {
-        LabeledContent(title) {
-            HStack(spacing: 4) {
-                TextField("", text: digitsOnlyBinding(text, max: 100))
-                    .keyboardType(.numberPad)
-                    .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: 80)
-                Text("%")
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func multilineTextInput(text: Binding<String>, minHeight: CGFloat) -> some View {
-        if #available(iOS 16.0, macOS 13.0, *) {
-            TextField("", text: text, axis: .vertical)
-                .lineLimit(4...10)
-                .padding(8)
-                .frame(minHeight: minHeight, alignment: .topLeading)
-                .background(Color.white.opacity(0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-        } else {
-            TextField("", text: text)
-                .padding(8)
-                .frame(minHeight: minHeight, alignment: .topLeading)
-                .background(Color.white.opacity(0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-        }
     }
 }

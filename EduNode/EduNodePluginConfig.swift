@@ -520,11 +520,12 @@ enum EduNodePluginConfig {
     }
 
     private static func eduDocs() -> [NodeDoc] {
+        let tutorialTitle = Bilingual.text(en: "Tutorial", zh: "教程")
         let coreTitle = S("menu.section.core")
         let toolkitTitle = S("menu.section.toolkit")
         let evalTitle = S("menu.section.evaluation")
 
-        return [
+        return tutorialDocs(categoryTitle: tutorialTitle) + [
             NodeDoc(
                 type: EduNodeType.knowledge,
                 name: S("menu.node.knowledge"),
@@ -719,6 +720,120 @@ enum EduNodePluginConfig {
         ]
     }
 
+    private static func tutorialDocs(categoryTitle: String) -> [NodeDoc] {
+        [
+            NodeDoc(
+                type: "EduGuideBasics5Min",
+                name: Bilingual.text(en: "5-Min Basics", zh: "5 分钟基础教程"),
+                categoryKey: "tutorial",
+                categoryTitle: categoryTitle,
+                description: Bilingual.text(
+                    en: "Quickly understand course-design structure, node roles, and connection rules. This is the fastest entry for first-time users.",
+                    zh: "快速建立课程设计框架、节点角色和连线规则的直觉，是新用户最短上手路径。"
+                ),
+                inputs: [],
+                outputs: [],
+                processDesc: Bilingual.text(
+                    en: "Finish in order: framework -> node roles -> connection rules. Then proceed to practical training.",
+                    zh: "按顺序完成：课程框架 -> 节点角色 -> 连线规则，随后进入实战训练。"
+                ),
+                detailSections: [
+                    detailSection(
+                        id: "framework",
+                        enTitle: "Step 1: Course Design Framework",
+                        zhTitle: "步骤 1：课程设计框架",
+                        enBody: "Open the left course list and pick one file.\nTop progress bar maps the six stages: Basic Info -> Model -> Class Content -> Evaluation -> Lesson Plan -> Summary.\nYour first goal is to understand where each stage is produced in canvas.",
+                        zhBody: "先在左侧课程列表选择一个课程文件。\n顶部进度条对应六阶段：基础信息 -> 模型 -> 课堂内容 -> 评价设计 -> 教案 -> 汇总。\n第一目标是理解每个阶段在画布中由哪些节点产出。",
+                        initiallyExpanded: true
+                    ),
+                    detailSection(
+                        id: "node_roles",
+                        enTitle: "Step 2: Node Roles",
+                        zhTitle: "步骤 2：节点角色",
+                        enBody: "Knowledge: define teachable concept units.\nToolkit: choose method and fill activity details.\nEvaluation nodes: compute and summarize evidence.\nRule of thumb: knowledge states 'what', toolkit defines 'how', evaluation verifies 'quality'.",
+                        zhBody: "Knowledge：定义可教授的知识单元。\nToolkit：选择方法并填写活动细节。\nEvaluation 节点：计算并汇总评价证据。\n记忆法：Knowledge 讲“学什么”，Toolkit 讲“怎么学”，Evaluation 讲“学得怎么样”。"
+                    ),
+                    detailSection(
+                        id: "connection_rules",
+                        enTitle: "Step 3: Connection Rules",
+                        zhTitle: "步骤 3：连线规则",
+                        enBody: "Connect outputs to compatible inputs. Start with one linear chain:\nCourse Context -> Knowledge -> Toolkit -> Knowledge.\nThen iterate by inserting more Toolkit nodes. If built-in Toolkit methods are insufficient, customize method fields in Toolkit form.",
+                        zhBody: "输出端连接到兼容输入端，先从线性链路开始：\nCourse Context -> Knowledge -> Toolkit -> Knowledge。\n随后逐步插入更多 Toolkit 节点迭代设计。若内置 Toolkit 不满足需求，可在 Toolkit 表单内自定义字段。"
+                    )
+                ],
+                exampleScenario: tutorialBasicsScenario()
+            ),
+            NodeDoc(
+                type: "EduGuidePhysicsMicroLesson",
+                name: Bilingual.text(en: "Practice: Physics Micro-Lesson", zh: "实战训练：中学物理微课"),
+                categoryKey: "tutorial",
+                categoryTitle: categoryTitle,
+                description: Bilingual.text(
+                    en: "Complete an end-to-end guided task: from context form input to lesson-plan and presentation output.",
+                    zh: "完成一个端到端引导任务：从课程信息表单到教案与演讲输出。"
+                ),
+                inputs: [],
+                outputs: [],
+                processDesc: Bilingual.text(
+                    en: "Target workflow: Course Context -> create Knowledge/Toolkit chain -> preview lesson plan -> generate PPT -> style -> preview.",
+                    zh: "目标路径：Course Context -> 新建 Knowledge/Toolkit 串联 -> 预览讲义 -> 生成 PPT -> 美化 -> 预览。"
+                ),
+                detailSections: [
+                    detailSection(
+                        id: "task_1",
+                        enTitle: "Task 1: Fill Context + Build Chain",
+                        zhTitle: "任务 1：填写课程信息并搭建链路",
+                        enBody: "Create a junior-high physics lesson context (e.g., force and motion).\nAdd at least one Knowledge and one Toolkit node, connect them as a valid chain, and keep the lesson objective explicit.",
+                        zhBody: "先填写一个中学物理微课背景（例如“力与运动”）。\n至少新建 1 个 Knowledge + 1 个 Toolkit，并完成有效连线，确保教学目标清晰。",
+                        initiallyExpanded: true
+                    ),
+                    detailSection(
+                        id: "task_2",
+                        enTitle: "Task 2: Validate Output",
+                        zhTitle: "任务 2：校验输出",
+                        enBody: "Open lesson-plan preview and confirm each stage has concrete actions/evidence.\nRefine Toolkit fields if the generated activity text is vague.",
+                        zhBody: "打开讲义预览，确认每一环都有具体活动与证据。\n若活动描述不够具体，回到 Toolkit 继续补全或修改字段。"
+                    ),
+                    detailSection(
+                        id: "task_3",
+                        enTitle: "Task 3: Presentation Finish",
+                        zhTitle: "任务 3：完成演讲产物",
+                        enBody: "Enter Present mode, verify slide grouping, then open style editor.\nFinish one styling pass and preview/export to complete the drill.",
+                        zhBody: "进入 Present 模式，确认分组后进入美化编辑。\n至少完成一次样式调整并预览/导出，即完成实战训练。"
+                    )
+                ],
+                exampleScenario: tutorialPhysicsMicroLessonScenario()
+            ),
+            NodeDoc(
+                type: "EduGuideBirdExploration",
+                name: Bilingual.text(en: "Explore Example: Bird Lesson", zh: "示例探索：珠海观鸟"),
+                categoryKey: "tutorial",
+                categoryTitle: categoryTitle,
+                description: Bilingual.text(
+                    en: "Explore the built-in bird-course sample, inspect node structure, and remix it for your own subject.",
+                    zh: "探索内置观鸟示例，理解节点结构后再改写为你自己的学科主题。"
+                ),
+                inputs: [],
+                outputs: [],
+                processDesc: Bilingual.text(
+                    en: "Read the sample chain, inspect Toolkit method choices, then clone the structure for new topics.",
+                    zh: "阅读示例链路，观察 Toolkit 方法选择，再按同结构迁移到新的主题。"
+                ),
+                detailSections: [
+                    detailSection(
+                        id: "bird_notes",
+                        enTitle: "Current Example Set",
+                        zhTitle: "当前示例集",
+                        enBody: "This release includes the bird-course sample for self-exploration.\nMore examples can be added later without changing your workflow.",
+                        zhBody: "当前版本先提供观鸟示例供自由探索。\n后续可继续扩展更多示例，不影响你的现有使用流程。",
+                        initiallyExpanded: true
+                    )
+                ],
+                exampleScenario: knowledgeExampleScenario()
+            )
+        ]
+    }
+
     private static func detailSection(
         id: String,
         enTitle: String,
@@ -736,6 +851,131 @@ enum EduNodePluginConfig {
             initiallyExpanded: initiallyExpanded,
             methodGuide: methodGuide,
             exampleScenario: exampleScenario
+        )
+    }
+
+    private static func tutorialBasicsScenario() -> NodeDocExampleScenario {
+        NodeDocExampleScenario(
+            nodes: [
+                NodeDocExampleNode(
+                    id: "knowledge_start",
+                    type: EduNodeType.knowledge,
+                    x: -440,
+                    y: -90,
+                    customTitle: Bilingual.text(en: "K1: Motion Context", zh: "K1：运动情境"),
+                    textValue: Bilingual.text(en: "Students observe examples of force and motion in daily life.", zh: "学生观察生活中的受力与运动现象。"),
+                    selectedOption: S("edu.knowledge.type.understand")
+                ),
+                NodeDocExampleNode(
+                    id: "toolkit_step",
+                    type: EduNodeType.toolkitPerceptionInquiry,
+                    x: 0,
+                    y: 0,
+                    customTitle: Bilingual.text(en: "Toolkit: Context Hook", zh: "Toolkit：情境导入"),
+                    selectedMethodID: "context_hook"
+                ),
+                NodeDocExampleNode(
+                    id: "knowledge_target",
+                    type: EduNodeType.knowledge,
+                    x: 430,
+                    y: 88,
+                    customTitle: Bilingual.text(en: "K2: Explain Relation", zh: "K2：解释关系"),
+                    textValue: Bilingual.text(en: "Students explain how force changes speed and direction.", zh: "学生解释力如何改变速度与方向。"),
+                    selectedOption: S("edu.knowledge.type.apply")
+                )
+            ],
+            connections: [
+                NodeDocExampleConnection(sourceNodeID: "knowledge_start", sourcePortIndex: 0, targetNodeID: "toolkit_step", targetPortIndex: 0),
+                NodeDocExampleConnection(sourceNodeID: "toolkit_step", sourcePortIndex: 0, targetNodeID: "knowledge_target", targetPortIndex: 0)
+            ]
+        )
+    }
+
+    private static func tutorialPhysicsMicroLessonScenario() -> NodeDocExampleScenario {
+        NodeDocExampleScenario(
+            nodes: [
+                NodeDocExampleNode(
+                    id: "k1",
+                    type: EduNodeType.knowledge,
+                    x: -700,
+                    y: -180,
+                    customTitle: Bilingual.text(en: "K1: Uniform Motion", zh: "K1：匀速直线运动"),
+                    textValue: Bilingual.text(en: "Identify variables of speed, distance, and time.", zh: "识别速度、路程、时间三变量。"),
+                    selectedOption: S("edu.knowledge.type.understand")
+                ),
+                NodeDocExampleNode(
+                    id: "tk_probe",
+                    type: EduNodeType.toolkitPerceptionInquiry,
+                    x: -250,
+                    y: -180,
+                    customTitle: Bilingual.text(en: "Toolkit: Sensor Probe", zh: "Toolkit：传感测量"),
+                    selectedMethodID: "sensor_probe"
+                ),
+                NodeDocExampleNode(
+                    id: "tk_phy",
+                    type: EduNodeType.toolkitConstructionPrototype,
+                    x: 220,
+                    y: -180,
+                    customTitle: Bilingual.text(en: "Toolkit: Physical Computing", zh: "Toolkit：物理计算"),
+                    selectedMethodID: "physical_computing"
+                ),
+                NodeDocExampleNode(
+                    id: "k2",
+                    type: EduNodeType.knowledge,
+                    x: 670,
+                    y: -180,
+                    customTitle: Bilingual.text(en: "K2: Force-Acceleration", zh: "K2：力与加速度"),
+                    textValue: Bilingual.text(en: "Use measured data to explain force-acceleration trend.", zh: "用测量数据说明力与加速度变化趋势。"),
+                    selectedOption: S("edu.knowledge.type.apply")
+                ),
+                NodeDocExampleNode(
+                    id: "metric_k",
+                    type: EduNodeType.metricValue,
+                    x: -230,
+                    y: 110,
+                    customTitle: Bilingual.text(en: "Knowledge", zh: "知识掌握"),
+                    textValue: "84"
+                ),
+                NodeDocExampleNode(
+                    id: "metric_e",
+                    type: EduNodeType.metricValue,
+                    x: -230,
+                    y: 240,
+                    customTitle: Bilingual.text(en: "Engagement", zh: "课堂参与"),
+                    textValue: "79"
+                ),
+                NodeDocExampleNode(
+                    id: "metric_p",
+                    type: EduNodeType.metricValue,
+                    x: -230,
+                    y: 370,
+                    customTitle: Bilingual.text(en: "Practice", zh: "实验执行"),
+                    textValue: "81"
+                ),
+                NodeDocExampleNode(
+                    id: "metric_main",
+                    type: EduNodeType.evaluationMetric,
+                    x: 210,
+                    y: 240,
+                    customTitle: Bilingual.text(en: "Metric", zh: "指标计算")
+                ),
+                NodeDocExampleNode(
+                    id: "summary",
+                    type: EduNodeType.evaluationSummary,
+                    x: 620,
+                    y: 240,
+                    customTitle: Bilingual.text(en: "Summary", zh: "评价汇总")
+                )
+            ],
+            connections: [
+                NodeDocExampleConnection(sourceNodeID: "k1", sourcePortIndex: 0, targetNodeID: "tk_probe", targetPortIndex: 0),
+                NodeDocExampleConnection(sourceNodeID: "tk_probe", sourcePortIndex: 0, targetNodeID: "tk_phy", targetPortIndex: 0),
+                NodeDocExampleConnection(sourceNodeID: "tk_phy", sourcePortIndex: 0, targetNodeID: "k2", targetPortIndex: 0),
+                NodeDocExampleConnection(sourceNodeID: "metric_k", sourcePortIndex: 0, targetNodeID: "metric_main", targetPortIndex: 0),
+                NodeDocExampleConnection(sourceNodeID: "metric_e", sourcePortIndex: 0, targetNodeID: "metric_main", targetPortIndex: 1),
+                NodeDocExampleConnection(sourceNodeID: "metric_p", sourcePortIndex: 0, targetNodeID: "metric_main", targetPortIndex: 2),
+                NodeDocExampleConnection(sourceNodeID: "metric_main", sourcePortIndex: 0, targetNodeID: "summary", targetPortIndex: 0)
+            ]
         )
     }
 

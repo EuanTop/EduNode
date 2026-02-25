@@ -78,12 +78,13 @@ enum SVGFilterStyle: String, CaseIterable, Identifiable, Sendable, Codable {
     var id: String { rawValue }
 
     var displayName: String {
+        let isChinese = Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
         switch self {
-        case .original: return "Original"
-        case .flowField: return "Flow Field"
-        case .crayonBrush: return "Crayon Brush"
-        case .pixelPainter: return "Pixel Painter"
-        case .equationField: return "Equation Field"
+        case .original: return isChinese ? "原图" : "Original"
+        case .flowField: return isChinese ? "流场笔触" : "Flow Field"
+        case .crayonBrush: return isChinese ? "蜡笔笔触" : "Crayon Brush"
+        case .pixelPainter: return isChinese ? "像素绘制" : "Pixel Painter"
+        case .equationField: return isChinese ? "方程场" : "Equation Field"
         }
     }
 }
@@ -3149,7 +3150,7 @@ struct PresentationStylingOverlayView: View {
     @ViewBuilder
     private var rightSidebar: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(isChinese ? "Presentation Design" : "Presentation Design")
+            Text(isChinese ? "演示设计" : "Presentation Design")
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.white)
 
@@ -3234,9 +3235,9 @@ struct PresentationStylingOverlayView: View {
 
     private var inspectorPanelPicker: some View {
         Picker("", selection: $activePanel) {
-            Text(isChinese ? "Page" : "Page")
+            Text(isChinese ? "页面" : "Page")
                 .tag(PresentationInspectorPanel.page)
-            Text(isChinese ? "Edit" : "Edit")
+            Text(isChinese ? "编辑" : "Edit")
                 .tag(PresentationInspectorPanel.edit)
         }
         .pickerStyle(.segmented)
@@ -3282,19 +3283,19 @@ struct PresentationStylingOverlayView: View {
                 .foregroundStyle(.white.opacity(0.9))
 
             HStack(spacing: 8) {
-                insertActionButton(title: "Text", systemImage: "textformat", isActive: isTextActive) {
+                insertActionButton(title: isChinese ? "文本" : "Text", systemImage: "textformat", isActive: isTextActive) {
                     onInsertText()
                     activePanel = .edit
                 }
 
-                insertActionButton(title: "Shape", systemImage: "rectangle.roundedtop.fill", isActive: isRectActive) {
+                insertActionButton(title: isChinese ? "形状" : "Shape", systemImage: "rectangle.roundedtop.fill", isActive: isRectActive) {
                     onInsertRoundedRect()
                     activePanel = .edit
                 }
 
                 PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
                     insertActionLabel(
-                        title: "Image",
+                        title: isChinese ? "图片" : "Image",
                         systemImage: "photo",
                         isActive: isImageActive
                     )
