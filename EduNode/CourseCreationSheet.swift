@@ -65,8 +65,23 @@ struct CourseCreationSheet: View {
     @State private var newGoalText = ""
     @State private var showAllModelsInline = false
     @State private var teacherRoleRows: [TeacherRoleRow] = []
+    @State private var isSubjectDropdownExpanded = false
+    @State private var expandedRoleRowID: UUID?
 
     private let customSubjectTag = "__custom__"
+    private let subjectDropdownID = "course.subject.dropdown"
+
+    private struct ActiveCourseDropdownPayload {
+        let id: String
+        let options: [CourseFormDropdownOption]
+        let selection: Binding<String>
+        let textFont: Font
+    }
+
+    private func roleDropdownID(_ rowID: UUID) -> String {
+        "course.role.\(rowID.uuidString)"
+    }
+
     private struct HeaderArtItem {
         let name: String
         let widthRatio: CGFloat
@@ -92,6 +107,23 @@ struct CourseCreationSheet: View {
             "Mathematics", "Physics", "Chemistry", "Biology", "History", "Geography", "Civics",
             "Computer Science", "Art", "Music", "Physical Education", "Liberal Arts", "Engineering", "English", "Chinese"
         ]
+    }
+
+    private var subjectDropdownOptions: [CourseFormDropdownOption] {
+        subjectPresets.map { CourseFormDropdownOption(value: $0, title: $0) }
+        + [CourseFormDropdownOption(value: customSubjectTag, title: S("course.subjectCustom"))]
+    }
+
+    private var subjectSelectionBinding: Binding<String> {
+        Binding(
+            get: { selectedSubjectPreset },
+            set: { newValue in
+                selectedSubjectPreset = newValue
+                if newValue != customSubjectTag {
+                    draft.subject = newValue
+                }
+            }
+        )
     }
 
     private var recommended: [EduModelRule] {
@@ -135,6 +167,38 @@ struct CourseCreationSheet: View {
         pages.firstIndex(of: page) ?? 0
     }
 
+    private var activeDropdownPayload: ActiveCourseDropdownPayload? {
+        if isSubjectDropdownExpanded {
+            return ActiveCourseDropdownPayload(
+                id: subjectDropdownID,
+                options: subjectDropdownOptions,
+                selection: subjectSelectionBinding,
+                textFont: .subheadline
+            )
+        }
+
+        if let rowID = expandedRoleRowID,
+           teacherRoleRows.contains(where: { $0.id == rowID }) {
+            return ActiveCourseDropdownPayload(
+                id: roleDropdownID(rowID),
+                options: TeacherRoleType.allCases.map {
+                    CourseFormDropdownOption(
+                        value: $0.rawValue,
+                        title: $0.title(isChinese: isChinese)
+                    )
+                },
+                selection: roleSelectionBinding(for: rowID),
+                textFont: .system(size: 13, weight: .regular)
+            )
+        }
+
+        return nil
+    }
+
+    private var isAnyFormDropdownExpanded: Bool {
+        isSubjectDropdownExpanded || expandedRoleRowID != nil
+    }
+
     private var canGoNext: Bool {
         switch page {
         case .basics:
@@ -173,8 +237,10 @@ struct CourseCreationSheet: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .zIndex(isAnyFormDropdownExpanded ? 2000 : 0)
 
                 footer
+                    .zIndex(0)
             }
             .background(
                 LinearGradient(
@@ -207,7 +273,14 @@ struct CourseCreationSheet: View {
                 }
             }
             .onChange(of: teacherRoleRows) { _, _ in
+                if let expandedRoleRowID,
+                   !teacherRoleRows.contains(where: { $0.id == expandedRoleRowID }) {
+                    self.expandedRoleRowID = nil
+                }
                 syncDraftFromTeacherRoleRows()
+            }
+            .overlayPreferenceValue(CourseDropdownFieldAnchorKey.self) { anchors in
+                globalDropdownOverlay(anchors: anchors)
             }
         }
     }
@@ -317,30 +390,22 @@ struct CourseCreationSheet: View {
                 .padding(.top, 2)
 
                 formField(S("course.subject"), required: true) {
-                    Picker("", selection: $selectedSubjectPreset) {
-                        ForEach(subjectPresets, id: \.self) { item in
-                            Text(item).tag(item)
-                        }
-                        Text(S("course.subjectCustom")).tag(customSubjectTag)
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.white.opacity(0.08))
+                    CourseFormDropdown(
+                        id: subjectDropdownID,
+                        title: S("course.subject"),
+                        options: subjectDropdownOptions,
+                        selection: subjectSelectionBinding,
+                        isExpanded: Binding(
+                            get: { isSubjectDropdownExpanded },
+                            set: { isOpen in
+                                isSubjectDropdownExpanded = isOpen
+                                if isOpen {
+                                    expandedRoleRowID = nil
+                                }
+                            }
+                        )
                     )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
-                    )
-                    .onChange(of: selectedSubjectPreset) { _, newValue in
-                        if newValue != customSubjectTag {
-                            draft.subject = newValue
-                        }
-                    }
+                    .zIndex(isSubjectDropdownExpanded ? 500 : 0)
 
                     if selectedSubjectPreset == customSubjectTag {
                         textInputField(
@@ -349,6 +414,7 @@ struct CourseCreationSheet: View {
                         )
                     }
                 }
+                .zIndex(isSubjectDropdownExpanded ? 1200 : 0)
 
                 HStack(alignment: .top, spacing: 12) {
                     formField(S("course.duration"), required: true) {
@@ -948,34 +1014,26 @@ struct CourseCreationSheet: View {
 
             ForEach(Array(teacherRoleRows.indices), id: \.self) { index in
                 HStack(spacing: 8) {
-                    Menu {
-                        ForEach(TeacherRoleType.allCases, id: \.self) { roleType in
-                            Button(roleType.title(isChinese: isChinese)) {
-                                teacherRoleRows[index].roleType = roleType
+                    CourseFormDropdown(
+                        id: roleDropdownID(teacherRoleRows[index].id),
+                        title: isChinese ? "角色" : "Role",
+                        options: TeacherRoleType.allCases.map {
+                            CourseFormDropdownOption(value: $0.rawValue, title: $0.title(isChinese: isChinese))
+                        },
+                        selection: roleSelectionBinding(for: teacherRoleRows[index].id),
+                        isExpanded: Binding(
+                            get: { expandedRoleRowID == teacherRoleRows[index].id },
+                            set: { isOpen in
+                                expandedRoleRowID = isOpen ? teacherRoleRows[index].id : nil
+                                if isOpen {
+                                    isSubjectDropdownExpanded = false
+                                }
                             }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(teacherRoleRows[index].roleType.title(isChinese: isChinese))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.82)
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.down")
-                                .font(.caption2.weight(.semibold))
-                        }
-                    }
-                    .menuStyle(.borderlessButton)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 8)
+                        ),
+                        textFont: .system(size: 13, weight: .regular)
+                    )
                     .frame(width: 116, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color.white.opacity(0.08))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
-                    )
+                    .zIndex(expandedRoleRowID == teacherRoleRows[index].id ? 500 : 0)
 
                     TextField(
                         isChinese ? "姓名" : "Name",
@@ -1027,6 +1085,7 @@ struct CourseCreationSheet: View {
                     .buttonStyle(.plain)
                     .frame(width: 18)
                 }
+                .zIndex(expandedRoleRowID == teacherRoleRows[index].id ? 1200 : 0)
             }
 
             HStack {
@@ -1074,6 +1133,7 @@ struct CourseCreationSheet: View {
 
     private func goPrev() {
         guard let currentIndex = pages.firstIndex(of: page), currentIndex > 0 else { return }
+        closeAllDropdowns()
         page = pages[currentIndex - 1]
     }
 
@@ -1081,6 +1141,7 @@ struct CourseCreationSheet: View {
         guard canGoNext,
               let currentIndex = pages.firstIndex(of: page),
               currentIndex + 1 < pages.count else { return }
+        closeAllDropdowns()
         page = pages[currentIndex + 1]
     }
 
@@ -1151,6 +1212,82 @@ struct CourseCreationSheet: View {
         }.joined(separator: "\n")
     }
 
+    private func roleSelectionBinding(for rowID: UUID) -> Binding<String> {
+        Binding(
+            get: {
+                teacherRoleRows.first(where: { $0.id == rowID })?.roleType.rawValue
+                ?? TeacherRoleType.assistant.rawValue
+            },
+            set: { newValue in
+                guard let role = TeacherRoleType(rawValue: newValue),
+                      let index = teacherRoleRows.firstIndex(where: { $0.id == rowID }) else {
+                    return
+                }
+                teacherRoleRows[index].roleType = role
+            }
+        )
+    }
+
+    private func closeAllDropdowns() {
+        isSubjectDropdownExpanded = false
+        expandedRoleRowID = nil
+    }
+
+    @ViewBuilder
+    private func globalDropdownOverlay(
+        anchors: [String: Anchor<CGRect>]
+    ) -> some View {
+        GeometryReader { proxy in
+            if let payload = activeDropdownPayload,
+               let anchor = anchors[payload.id] {
+                let sourceFrame = proxy[anchor]
+                let rowHeight: CGFloat = 40
+                let contentHeight = rowHeight * CGFloat(max(1, payload.options.count))
+                let maxHeight = min(contentHeight, proxy.size.height * 0.5)
+                let spacing: CGFloat = 8
+                let verticalPadding: CGFloat = 12
+                let sidePadding: CGFloat = 12
+
+                let availableBelow = max(0, proxy.size.height - sourceFrame.maxY - spacing - verticalPadding)
+                let availableAbove = max(0, sourceFrame.minY - spacing - verticalPadding)
+                let preferAbove = availableBelow < min(maxHeight, rowHeight * 2) && availableAbove > availableBelow
+                let panelHeight = max(
+                    rowHeight,
+                    min(maxHeight, preferAbove ? availableAbove : availableBelow)
+                )
+
+                let minCenterX = sourceFrame.width / 2 + sidePadding
+                let maxCenterX = proxy.size.width - sourceFrame.width / 2 - sidePadding
+                let centerX = min(max(sourceFrame.midX, minCenterX), maxCenterX)
+                let centerY = preferAbove
+                    ? sourceFrame.minY - spacing - panelHeight / 2
+                    : sourceFrame.maxY + spacing + panelHeight / 2
+
+                ZStack {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            closeAllDropdowns()
+                        }
+
+                    CourseFormDropdownPanel(
+                        options: payload.options,
+                        selection: payload.selection,
+                        textFont: payload.textFont,
+                        maxHeight: panelHeight
+                    ) {
+                        closeAllDropdowns()
+                    }
+                    .frame(width: sourceFrame.width, height: panelHeight)
+                    .position(x: centerX, y: centerY)
+                }
+                .zIndex(50_000)
+            }
+        }
+        .allowsHitTesting(activeDropdownPayload != nil)
+    }
+
     private func S(_ key: String) -> String {
         NSLocalizedString(key, comment: "")
     }
@@ -1174,5 +1311,175 @@ struct CourseCreationSheet: View {
                 text.wrappedValue = filtered
             }
         )
+    }
+}
+
+private struct CourseFormDropdownOption: Identifiable, Hashable {
+    let value: String
+    let title: String
+
+    var id: String { value }
+}
+
+private struct CourseDropdownFieldAnchorKey: PreferenceKey {
+    static var defaultValue: [String: Anchor<CGRect>] = [:]
+
+    static func reduce(
+        value: inout [String: Anchor<CGRect>],
+        nextValue: () -> [String: Anchor<CGRect>]
+    ) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct CourseFormDropdown: View {
+    let id: String
+    let title: String
+    let options: [CourseFormDropdownOption]
+    @Binding var selection: String
+    @Binding var isExpanded: Bool
+    var textFont: Font = .subheadline
+
+    private var selectedTitle: String {
+        if let matched = options.first(where: { $0.value == selection }) {
+            return matched.title
+        }
+        let trimmed = selection.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? title : trimmed
+    }
+
+    private var rowHeight: CGFloat {
+        40
+    }
+
+    var body: some View {
+        Group {
+            if #available(iOS 26.0, macOS 26.0, *) {
+                Button {
+                    isExpanded.toggle()
+                } label: {
+                    triggerLabel
+                }
+                .buttonStyle(.glass)
+            } else {
+                Button {
+                    isExpanded.toggle()
+                } label: {
+                    triggerLabel
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.white.opacity(0.08))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .anchorPreference(key: CourseDropdownFieldAnchorKey.self, value: .bounds) {
+            [id: $0]
+        }
+        .zIndex(isExpanded ? 3000 : 0)
+    }
+
+    private var triggerLabel: some View {
+        HStack(spacing: 8) {
+            Text(selectedTitle)
+                .font(textFont)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 0)
+
+            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .frame(height: rowHeight)
+    }
+}
+
+private struct CourseFormDropdownPanel: View {
+    let options: [CourseFormDropdownOption]
+    @Binding var selection: String
+    let textFont: Font
+    let maxHeight: CGFloat
+    let onSelect: () -> Void
+
+    private var rowHeight: CGFloat { 40 }
+    private var panelCornerRadius: CGFloat { 12 }
+
+    private func optionRow(for option: CourseFormDropdownOption) -> some View {
+        HStack(spacing: 8) {
+            Text(option.title)
+                .font(textFont)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .foregroundStyle(.primary)
+            Spacer(minLength: 0)
+            if selection == option.value {
+                Image(systemName: "checkmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.cyan)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .frame(height: rowHeight)
+        .background(
+            selection == option.value
+            ? Color.cyan.opacity(0.16)
+            : Color.clear
+        )
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(options) { option in
+                    Button {
+                        selection = option.value
+                        onSelect()
+                    } label: {
+                        optionRow(for: option)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(height: maxHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(panelBackground)
+        .clipShape(RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
+                .stroke(Color.white.opacity(0.22), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
+        .compositingGroup()
+    }
+
+    @ViewBuilder
+    private var panelBackground: some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            ZStack {
+                RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .opacity(0.95)
+                Color.clear
+                    .glassEffect(
+                        .regular,
+                        in: RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
+                    )
+            }
+        } else {
+            RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
+                .fill(.ultraThinMaterial)
+        }
     }
 }
