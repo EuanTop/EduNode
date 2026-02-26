@@ -2547,6 +2547,575 @@ final class EduToolkitNode: GNode, NodeOptionSelectable, NodeMethodSelectable, N
     }
 }
 
+final class EduEvaluationNode: GNode, NodeFormEditable {
+    let id: UUID
+    var attributes: NodeAttributes
+    var inputs: [AnyInputPort]
+    var outputs: [AnyOutputPort]
+
+    private var textFieldValues: [String: String]
+    private var optionFieldValues: [String: String]
+
+    private struct OptionChoice {
+        let id: String
+        let titleEn: String
+        let titleZh: String
+    }
+
+    private struct IndicatorRow {
+        let name: String
+        let type: String
+        let weight: String
+    }
+
+    private enum EvaluationOutputValue {
+        case number(Double)
+        case text(String)
+    }
+
+    private let indicatorsFieldID = "evaluation_indicators"
+    private let legacyDefsFieldID = "evaluation_indicator_defs"
+    private let legacyScoresFieldID = "evaluation_indicator_scores"
+    private let legacyWeightsFieldID = "evaluation_indicator_weights"
+
+    init(
+        name: String,
+        textFieldValues: [String: String] = [:],
+        optionFieldValues: [String: String] = [:]
+    ) {
+        self.id = UUID()
+        self.attributes = NodeAttributes(name: name)
+        self.inputs = []
+        self.outputs = [
+            AnyOutputPort(name: S("edu.evaluation.output.score"), dataType: "Any")
+        ]
+        self.textFieldValues = textFieldValues
+        self.optionFieldValues = optionFieldValues
+        applyOptionDefaultsIfNeeded()
+        normalizeStoredTextFieldValues()
+        updateDynamicInputPorts()
+    }
+
+    func process() throws {
+        guard attributes.isRun else {
+            throw GNodeError.nodeDisabled(id: id)
+        }
+
+        let formulaID = resolvedFormulaID()
+        let outputScaleID = resolvedOutputScaleID()
+        let indicatorRows = parseIndicatorRows()
+
+        var scoreRows: [(name: String, type: String, score5: Double, weight: Double)] = []
+        scoreRows.reserveCapacity(indicatorRows.count)
+
+        for (index, row) in indicatorRows.enumerated() {
+            let isCompletion = row.type == "completion" || isCompletionType(row.type)
+            let rawValue = connectedIndicatorValue(at: index) ?? "0"
+            let score5 = parsedScore5(from: rawValue, isCompletion: isCompletion)
+            let weight = parsedWeight(row.weight)
+            scoreRows.append((
+                name: row.name,
+                type: isCompletion ? "completion" : "score",
+                score5: score5,
+                weight: weight
+            ))
+        }
+
+        let computedScore5 = computeScore5(rows: scoreRows, formulaID: formulaID)
+        let outputValue = convertOutputValue(score5: computedScore5, outputScaleID: outputScaleID)
+        switch outputValue {
+        case .number(let number):
+            try outputs[0].setValue(NumData(number))
+        case .text(let text):
+            try outputs[0].setValue(StringData(text))
+        }
+    }
+
+    func canExecute() -> Bool {
+        attributes.isRun
+    }
+
+    var serializedTextFieldValues: [String: String] {
+        textFieldValues
+    }
+
+    var serializedOptionFieldValues: [String: String] {
+        optionFieldValues
+    }
+
+    var editorFormTextFields: [NodeEditorTextFieldSpec] {
+        let includeWeight = formulaNeedsWeights(resolvedFormulaID())
+        let normalizedValue = normalizedIndicatorTableText(
+            from: textFieldValues[indicatorsFieldID] ?? "",
+            includeWeight: includeWeight
+        )
+        return [
+            NodeEditorTextFieldSpec(
+                id: indicatorsFieldID,
+                label: S("edu.evaluation.form.indicators"),
+                placeholder: S("edu.evaluation.form.indicators.placeholder"),
+                value: normalizedValue,
+                isMultiline: true,
+                minVisibleLines: 4,
+                editorKind: .keyValueTable,
+                tableColumnTitles: includeWeight
+                    ? [
+                        S("edu.evaluation.table.indicator"),
+                        S("edu.evaluation.table.type"),
+                        S("edu.evaluation.table.weight")
+                    ]
+                    : [
+                        S("edu.evaluation.table.indicator"),
+                        S("edu.evaluation.table.type")
+                    ]
+            )
+        ]
+    }
+
+    var editorFormOptionFields: [NodeEditorOptionFieldSpec] {
+        [
+            NodeEditorOptionFieldSpec(
+                id: "evaluation_formula",
+                label: S("edu.evaluation.form.formula"),
+                options: formulaChoices.map { localizedChoiceTitle(for: $0) },
+                selectedOption: localizedFormulaTitle(for: resolvedFormulaID())
+            ),
+            NodeEditorOptionFieldSpec(
+                id: "evaluation_grouping",
+                label: S("edu.evaluation.form.grouping"),
+                options: groupingChoices.map { localizedChoiceTitle(for: $0) },
+                selectedOption: localizedGroupingTitle(for: resolvedGroupingID())
+            ),
+            NodeEditorOptionFieldSpec(
+                id: "evaluation_output_scale",
+                label: S("edu.evaluation.form.outputScale"),
+                options: outputScaleChoices.map { localizedChoiceTitle(for: $0) },
+                selectedOption: localizedOutputScaleTitle(for: resolvedOutputScaleID())
+            )
+        ]
+    }
+
+    func setEditorFormTextFieldValue(_ value: String, for fieldID: String) {
+        guard fieldID == indicatorsFieldID else { return }
+        let includeWeight = formulaNeedsWeights(resolvedFormulaID())
+        textFieldValues[fieldID] = normalizedIndicatorTableText(from: value, includeWeight: includeWeight)
+        updateDynamicInputPorts()
+    }
+
+    func setEditorFormOptionValue(_ value: String, for fieldID: String) {
+        var formulaChanged = false
+
+        switch fieldID {
+        case "evaluation_formula":
+            if let choice = choiceID(for: value, in: formulaChoices) {
+                optionFieldValues[fieldID] = choice.id
+                formulaChanged = true
+            }
+        case "evaluation_grouping":
+            if let choice = choiceID(for: value, in: groupingChoices) {
+                optionFieldValues[fieldID] = choice.id
+            }
+        case "evaluation_output_scale":
+            if let choice = choiceID(for: value, in: outputScaleChoices) {
+                optionFieldValues[fieldID] = choice.id
+            }
+        default:
+            break
+        }
+
+        applyOptionDefaultsIfNeeded()
+        if formulaChanged {
+            syncIndicatorRowsForCurrentFormula()
+        }
+        updateDynamicInputPorts()
+    }
+
+    private func parseIndicatorRows() -> [IndicatorRow] {
+        let includeWeight = formulaNeedsWeights(resolvedFormulaID())
+        let currentText = textFieldValues[indicatorsFieldID] ?? ""
+        let rows = parseIndicatorRows(from: currentText, includeWeight: includeWeight)
+        if !rows.isEmpty {
+            return rows
+        }
+        return parseLegacyIndicatorRows(includeWeight: includeWeight)
+    }
+
+    private func parseIndicatorRows(from raw: String, includeWeight: Bool) -> [IndicatorRow] {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        return normalized
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { rawLine -> IndicatorRow? in
+                let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !line.isEmpty else { return nil }
+
+                let normalizedLine = line
+                    .replacingOccurrences(of: "｜", with: "|")
+                    .replacingOccurrences(of: "：", with: ":")
+                var components = normalizedLine
+                    .split(separator: "|", omittingEmptySubsequences: false)
+                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+
+                if components.count == 1 && normalizedLine.contains(":") {
+                    components = normalizedLine
+                        .split(separator: ":", omittingEmptySubsequences: false)
+                        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                }
+
+                guard let nameRaw = components.first else { return nil }
+                let name = nameRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return nil }
+
+                var typeToken = components.count > 1 ? components[1] : "score"
+                var weightToken = components.count > 2 ? components[2] : "1"
+
+                // Backward compatibility: "type/weight"
+                if components.count == 2 && typeToken.contains("/") {
+                    let parts = typeToken
+                        .split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+                        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                    typeToken = parts.first ?? "score"
+                    if parts.count > 1 {
+                        weightToken = parts[1]
+                    }
+                }
+
+                let type = normalizedIndicatorType(from: typeToken)
+                let weight = includeWeight ? normalizedWeightText(from: weightToken) : "1"
+                return IndicatorRow(name: name, type: type, weight: weight)
+            }
+    }
+
+    private func parseLegacyIndicatorRows(includeWeight: Bool) -> [IndicatorRow] {
+        let defs = parseKeyValuePairs(textFieldValues[legacyDefsFieldID] ?? "")
+        let weights = Dictionary(
+            uniqueKeysWithValues: parseKeyValuePairs(textFieldValues[legacyWeightsFieldID] ?? "")
+                .map { ($0.key.lowercased(), normalizedWeightText(from: $0.value)) }
+        )
+        let scoreNames = parseKeyValuePairs(textFieldValues[legacyScoresFieldID] ?? "").map { $0.key }
+
+        if !defs.isEmpty {
+            return defs.map { pair in
+                let normalizedType = normalizedIndicatorType(from: pair.value)
+                let weight = includeWeight ? (weights[pair.key.lowercased()] ?? "1") : "1"
+                return IndicatorRow(name: pair.key, type: normalizedType, weight: weight)
+            }
+        }
+
+        return scoreNames.map { name in
+            IndicatorRow(name: name, type: "score", weight: includeWeight ? (weights[name.lowercased()] ?? "1") : "1")
+        }
+    }
+
+    private func parseKeyValuePairs(_ raw: String) -> [(key: String, value: String)] {
+        raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { rawLine -> (String, String)? in
+                let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !line.isEmpty else { return nil }
+
+                let normalized = line
+                    .replacingOccurrences(of: "｜", with: "|")
+                    .replacingOccurrences(of: "：", with: ":")
+                if let marker = normalized.firstIndex(of: "|") ?? normalized.firstIndex(of: ":") {
+                    let key = String(normalized[..<marker]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    let valueStart = normalized.index(after: marker)
+                    let value = String(normalized[valueStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !key.isEmpty else { return nil }
+                    return (key, value)
+                }
+
+                return (normalized, "")
+            }
+    }
+
+    private func serializedIndicatorRows(_ rows: [IndicatorRow], includeWeight: Bool) -> String {
+        rows
+            .compactMap { row -> String? in
+                let name = row.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return nil }
+                let type = normalizedIndicatorType(from: row.type)
+                if includeWeight {
+                    let weight = normalizedWeightText(from: row.weight)
+                    return "\(name) | \(type) | \(weight)"
+                }
+                return "\(name) | \(type)"
+            }
+            .joined(separator: "\n")
+    }
+
+    private func syncIndicatorRowsForCurrentFormula() {
+        let includeWeight = formulaNeedsWeights(resolvedFormulaID())
+        var rows = parseIndicatorRows(from: textFieldValues[indicatorsFieldID] ?? "", includeWeight: includeWeight)
+        if rows.isEmpty {
+            rows = parseLegacyIndicatorRows(includeWeight: includeWeight)
+        }
+        textFieldValues[indicatorsFieldID] = serializedIndicatorRows(rows, includeWeight: includeWeight)
+    }
+
+    private func normalizeStoredTextFieldValues() {
+        syncIndicatorRowsForCurrentFormula()
+    }
+
+    private func normalizedIndicatorTableText(from raw: String, includeWeight: Bool) -> String {
+        let rows = parseIndicatorRows(from: raw, includeWeight: includeWeight)
+        return serializedIndicatorRows(rows, includeWeight: includeWeight)
+    }
+
+    private func updateDynamicInputPorts() {
+        let existingInputs = inputs
+        var rebuiltInputs: [AnyInputPort] = []
+        let rows = parseIndicatorRows()
+        for (index, row) in rows.enumerated() {
+            let trimmedName = row.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let portName = trimmedName.isEmpty
+                ? "\(S("edu.evaluation.autoIndicatorPrefix")) \(index + 1)"
+                : trimmedName
+
+            if index < existingInputs.count {
+                var reusedPort = existingInputs[index]
+                reusedPort.name = portName
+                rebuiltInputs.append(reusedPort)
+            } else {
+                rebuiltInputs.append(AnyInputPort(name: portName, dataType: "Any"))
+            }
+        }
+        inputs = rebuiltInputs
+    }
+
+    private func connectedIndicatorValue(at index: Int) -> String? {
+        let dynamicStartIndex = 0
+        let portIndex = dynamicStartIndex + index
+        guard inputs.indices.contains(portIndex) else { return nil }
+        guard let raw = stringValue(from: inputs[portIndex]) else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func stringValue(from input: AnyInputPort) -> String? {
+        if let value: StringData = ((try? input.getValue()) ?? nil) {
+            return value.value
+        }
+        if let value: NumData = ((try? input.getValue()) ?? nil) {
+            let number = value.toDouble()
+            return number == number.rounded() ? "\(Int(number))" : "\(number)"
+        }
+        if let value: BoolData = ((try? input.getValue()) ?? nil) {
+            return value.value ? "true" : "false"
+        }
+        if let value: ArrayData = ((try? input.getValue()) ?? nil) {
+            return value.values
+                .map { number in
+                    number == number.rounded() ? "\(Int(number))" : "\(number)"
+                }
+                .joined(separator: ", ")
+        }
+        if let value: ObjectData = ((try? input.getValue()) ?? nil) {
+            let fields = value.keys.map { key -> String in
+                let display = value.get(key)?.displayString() ?? ""
+                return "\(key): \(display)"
+            }
+            return "{\(fields.joined(separator: ", "))}"
+        }
+        return nil
+    }
+
+    private func isCompletionType(_ value: String) -> Bool {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let completionTokens = ["completion", "complete", "done", "yes/no", "binary", "完成", "达成", "是否完成", "完成制"]
+        return completionTokens.contains(where: { normalized.contains($0) })
+    }
+
+    private func parsedScore5(from raw: String, isCompletion: Bool) -> Double {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if isCompletion {
+            if ["yes", "y", "true", "completed", "done", "1", "完成", "已完成", "达成"].contains(trimmed) {
+                return 5
+            }
+            if ["no", "n", "false", "0", "未完成", "未达成"].contains(trimmed) {
+                return 0
+            }
+            if let number = Double(trimmed) {
+                return number > 0 ? 5 : 0
+            }
+            return 0
+        }
+
+        guard let value = Double(trimmed) else { return 0 }
+        return max(0, min(value, 5))
+    }
+
+    private func parsedWeight(_ raw: String) -> Double {
+        let normalized = normalizedWeightText(from: raw)
+        guard let value = Double(normalized), value > 0 else { return 1 }
+        return value
+    }
+
+    private func computeScore5(
+        rows: [(name: String, type: String, score5: Double, weight: Double)],
+        formulaID: String
+    ) -> Double {
+        guard !rows.isEmpty else { return 0 }
+
+        switch formulaID {
+        case "weighted_avg":
+            let totalWeight = rows.reduce(0) { $0 + $1.weight }
+            guard totalWeight > 0 else { return 0 }
+            return rows.reduce(0) { $0 + $1.score5 * $1.weight } / totalWeight
+
+        case "geometric_mean":
+            let normalized = rows.map { max(0.001, min($0.score5 / 5.0, 1.0)) }
+            let product = normalized.reduce(1.0, *)
+            let root = pow(product, 1.0 / Double(normalized.count))
+            return root * 5.0
+
+        case "sigmoid_curve":
+            let mean = rows.reduce(0) { $0 + $1.score5 } / Double(rows.count)
+            let scaled = 1.0 / (1.0 + exp(-2.2 * (mean - 2.5)))
+            return scaled * 5.0
+
+        default:
+            return rows.reduce(0) { $0 + $1.score5 } / Double(rows.count)
+        }
+    }
+
+    private func convertOutputValue(score5: Double, outputScaleID: String) -> EvaluationOutputValue {
+        let clampedScore5 = max(0, min(score5, 5))
+        let score100 = clampedScore5 / 5.0 * 100.0
+        switch outputScaleID {
+        case "grade_abcd":
+            let grade: String
+            switch score100 {
+            case 90...:
+                grade = "A"
+            case 80..<90:
+                grade = "B"
+            case 70..<80:
+                grade = "C"
+            default:
+                grade = "D"
+            }
+            return .text(grade)
+        case "score5":
+            return .number(clampedScore5)
+        default:
+            return .number(score100)
+        }
+    }
+
+    private func normalizedIndicatorType(from raw: String) -> String {
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.contains("completion")
+            || normalized.contains("complete")
+            || normalized.contains("完成")
+            || normalized.contains("达成") {
+            return "completion"
+        }
+        return "score"
+    }
+
+    private func normalizedWeightText(from raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Double(trimmed), value > 0 else { return "1" }
+        if value == value.rounded() {
+            return "\(Int(value))"
+        }
+        return String(value)
+    }
+
+    private func choiceID(for raw: String, in options: [OptionChoice]) -> OptionChoice? {
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return nil }
+
+        if let byID = options.first(where: { $0.id.lowercased() == normalized }) {
+            return byID
+        }
+        return options.first(where: { localizedChoiceTitle(for: $0).lowercased() == normalized })
+    }
+
+    private func applyOptionDefaultsIfNeeded() {
+        if formulaChoices.contains(where: { $0.id == optionFieldValues["evaluation_formula"] }) == false {
+            optionFieldValues["evaluation_formula"] = "average"
+        }
+        if groupingChoices.contains(where: { $0.id == optionFieldValues["evaluation_grouping"] }) == false {
+            optionFieldValues["evaluation_grouping"] = "individual"
+        }
+        if outputScaleChoices.contains(where: { $0.id == optionFieldValues["evaluation_output_scale"] }) == false {
+            optionFieldValues["evaluation_output_scale"] = "score100"
+        }
+    }
+
+    private func resolvedFormulaID() -> String {
+        return optionFieldValues["evaluation_formula"] ?? "average"
+    }
+
+    private func resolvedGroupingID() -> String {
+        return optionFieldValues["evaluation_grouping"] ?? "individual"
+    }
+
+    private func resolvedOutputScaleID() -> String {
+        optionFieldValues["evaluation_output_scale"] ?? "score100"
+    }
+
+    private func formulaNeedsWeights(_ formulaID: String) -> Bool {
+        formulaID == "weighted_avg"
+    }
+
+    private func localizedFormulaTitle(for formulaID: String) -> String {
+        if let choice = formulaChoices.first(where: { $0.id == formulaID }) {
+            return localizedChoiceTitle(for: choice)
+        }
+        return localizedChoiceTitle(for: formulaChoices[0])
+    }
+
+    private func localizedGroupingTitle(for groupingID: String) -> String {
+        if let choice = groupingChoices.first(where: { $0.id == groupingID }) {
+            return localizedChoiceTitle(for: choice)
+        }
+        return localizedChoiceTitle(for: groupingChoices[0])
+    }
+
+    private func localizedOutputScaleTitle(for outputScaleID: String) -> String {
+        if let choice = outputScaleChoices.first(where: { $0.id == outputScaleID }) {
+            return localizedChoiceTitle(for: choice)
+        }
+        return localizedChoiceTitle(for: outputScaleChoices[0])
+    }
+
+    private func localizedChoiceTitle(for choice: OptionChoice) -> String {
+        isChinese ? choice.titleZh : choice.titleEn
+    }
+
+    private var formulaChoices: [OptionChoice] {
+        [
+            OptionChoice(id: "average", titleEn: S("edu.evaluation.formula.average"), titleZh: S("edu.evaluation.formula.average")),
+            OptionChoice(id: "weighted_avg", titleEn: S("edu.evaluation.formula.weightedAverage"), titleZh: S("edu.evaluation.formula.weightedAverage")),
+            OptionChoice(id: "geometric_mean", titleEn: S("edu.evaluation.formula.geometricMean"), titleZh: S("edu.evaluation.formula.geometricMean")),
+            OptionChoice(id: "sigmoid_curve", titleEn: S("edu.evaluation.formula.sigmoidCurve"), titleZh: S("edu.evaluation.formula.sigmoidCurve"))
+        ]
+    }
+
+    private var groupingChoices: [OptionChoice] {
+        [
+            OptionChoice(id: "individual", titleEn: S("edu.evaluation.grouping.individual"), titleZh: S("edu.evaluation.grouping.individual")),
+            OptionChoice(id: "group", titleEn: S("edu.evaluation.grouping.group"), titleZh: S("edu.evaluation.grouping.group")),
+            OptionChoice(id: "auto", titleEn: S("edu.evaluation.grouping.auto"), titleZh: S("edu.evaluation.grouping.auto"))
+        ]
+    }
+
+    private var outputScaleChoices: [OptionChoice] {
+        [
+            OptionChoice(id: "score100", titleEn: S("edu.evaluation.outputScale.score100"), titleZh: S("edu.evaluation.outputScale.score100")),
+            OptionChoice(id: "score5", titleEn: S("edu.evaluation.outputScale.score5"), titleZh: S("edu.evaluation.outputScale.score5")),
+            OptionChoice(id: "grade_abcd", titleEn: S("edu.evaluation.outputScale.gradeABCD"), titleZh: S("edu.evaluation.outputScale.gradeABCD"))
+        ]
+    }
+
+    private var isChinese: Bool {
+        Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
+    }
+}
+
 private func S(_ key: String) -> String {
     NSLocalizedString(key, comment: "")
 }

@@ -6,6 +6,7 @@ enum EduNodeType {
     static let courseInfo = "EduCourseInfo"
     static let knowledge = "EduKnowledge"
     static let goal = "EduGoal"
+    static let evaluation = "EduEvaluation"
     static let toolkit = "EduToolkit" // Legacy compatibility node type.
     static let toolkitPerceptionInquiry = "EduToolkitPerceptionInquiry"
     static let toolkitConstructionPrototype = "EduToolkitConstructionPrototype"
@@ -101,6 +102,17 @@ enum EduNodePluginConfig {
             ),
             for: EduNodeType.toolkit
         )
+
+        NodeVisualStyleRegistry.setStyle(
+            NodeVisualStyle(
+                backgroundColor: Color(red: 0.16, green: 0.16, blue: 0.24),
+                selectedBorderColor: .orange,
+                menuDotColor: .orange,
+                shape: .rounded,
+                topRightSystemImage: "checklist"
+            ),
+            for: EduNodeType.evaluation
+        )
     }
 
     private static func registerNodes(into toolkit: GNodeNodeKit) {
@@ -131,6 +143,19 @@ enum EduNodePluginConfig {
                 sectionTitle: S("menu.section.core"),
                 sectionOrder: 0,
                 itemOrder: 1,
+                isVisibleInCanvas: true
+            )
+        )
+
+        registerEvaluationNode(
+            into: toolkit,
+            type: EduNodeType.evaluation,
+            defaultName: S("menu.node.evaluation"),
+            menu: NodeMenuMetadata(
+                title: S("menu.node.evaluation"),
+                sectionTitle: S("menu.section.core"),
+                sectionOrder: 0,
+                itemOrder: 2,
                 isVisibleInCanvas: true
             )
         )
@@ -236,7 +261,7 @@ enum EduNodePluginConfig {
                 sectionTitle: S("menu.section.evaluation"),
                 sectionOrder: 2,
                 itemOrder: 0,
-                isVisibleInCanvas: true
+                isVisibleInCanvas: false
             )
         )
 
@@ -250,7 +275,7 @@ enum EduNodePluginConfig {
                 sectionTitle: S("menu.section.evaluation"),
                 sectionOrder: 2,
                 itemOrder: 1,
-                isVisibleInCanvas: true
+                isVisibleInCanvas: false
             )
         )
 
@@ -264,7 +289,7 @@ enum EduNodePluginConfig {
                 sectionTitle: S("menu.section.evaluation"),
                 sectionOrder: 2,
                 itemOrder: 2,
-                isVisibleInCanvas: true
+                isVisibleInCanvas: false
             )
         )
 
@@ -354,6 +379,40 @@ enum EduNodePluginConfig {
                 let content = serialized.nodeData["content"] ?? defaultContent
                 let level = serialized.nodeData["level"] ?? EduKnowledgeNode.defaultLevel
                 let node = EduKnowledgeNode(name: serialized.attributes.name, content: content, level: level)
+                node.attributes = serialized.attributes
+                return node
+            }
+        )
+    }
+
+    private static func registerEvaluationNode(
+        into toolkit: GNodeNodeKit,
+        type: String,
+        defaultName: String,
+        menu: NodeMenuMetadata
+    ) {
+        toolkit.register(
+            type: type,
+            nodeClass: EduEvaluationNode.self,
+            menu: menu,
+            create: {
+                return EduEvaluationNode(name: defaultName)
+            },
+            encode: { node in
+                guard let node = node as? EduEvaluationNode else { return [:] }
+                return [
+                    "evaluationTextFields": encodeJSONStringDictionary(node.serializedTextFieldValues),
+                    "evaluationOptionFields": encodeJSONStringDictionary(node.serializedOptionFieldValues)
+                ]
+            },
+            decode: { serialized in
+                let textFieldValues = decodeJSONStringDictionary(serialized.nodeData["evaluationTextFields"])
+                let optionFieldValues = decodeJSONStringDictionary(serialized.nodeData["evaluationOptionFields"])
+                let node = EduEvaluationNode(
+                    name: serialized.attributes.name,
+                    textFieldValues: textFieldValues,
+                    optionFieldValues: optionFieldValues
+                )
                 node.attributes = serialized.attributes
                 return node
             }
@@ -521,11 +580,11 @@ enum EduNodePluginConfig {
 
     private static func eduDocs() -> [NodeDoc] {
         let tutorialTitle = Bilingual.text(en: "Tutorial", zh: "教程")
+        let modelTitle = Bilingual.text(en: "Education Models", zh: "教育模型")
         let coreTitle = S("menu.section.core")
         let toolkitTitle = S("menu.section.toolkit")
-        let evalTitle = S("menu.section.evaluation")
 
-        return tutorialDocs(categoryTitle: tutorialTitle) + [
+        return tutorialDocs(categoryTitle: tutorialTitle) + modelTemplateDocs(categoryTitle: modelTitle) + [
             NodeDoc(
                 type: EduNodeType.knowledge,
                 name: S("menu.node.knowledge"),
@@ -685,37 +744,39 @@ enum EduNodePluginConfig {
                 )
             ),
             NodeDoc(
-                type: EduNodeType.metricValue,
-                name: S("menu.node.metricValue"),
-                categoryKey: "evaluation",
-                categoryTitle: evalTitle,
-                description: Bilingual.text(en: "Numeric evidence input for evaluation metrics.", zh: "用于评价指标的数值证据输入。"),
-                inputs: [PortDoc(name: Bilingual.text(en: "Input", zh: "输入"), type: "Any", desc: Bilingual.text(en: "Accepts connected values with automatic conversion.", zh: "接收连接值并自动转换为数值。"))],
-                outputs: [PortDoc(name: Bilingual.text(en: "Value", zh: "数值"), type: "Num", desc: Bilingual.text(en: "Numeric output for metric scripts.", zh: "输出给评价脚本的数值。"))],
-                processDesc: Bilingual.text(en: "Holds a metric number and outputs Num data.", zh: "存储评价数值并输出 Num 数据。"),
-                exampleScenario: metricValueExampleScenario()
-            ),
-            NodeDoc(
-                type: EduNodeType.evaluationMetric,
-                name: S("menu.node.evalMetric"),
-                categoryKey: "evaluation",
-                categoryTitle: evalTitle,
-                description: Bilingual.text(en: "Computes evaluation indicators from multiple evidence inputs.", zh: "基于多路证据输入计算评价指标。"),
-                inputs: [PortDoc(name: Bilingual.text(en: "Inputs", zh: "输入"), type: "Any", desc: Bilingual.text(en: "Script parameters are exposed as input ports.", zh: "脚本参数会自动映射为输入端口。"))],
-                outputs: [PortDoc(name: Bilingual.text(en: "Outputs", zh: "输出"), type: "Any", desc: Bilingual.text(en: "Returns score/level or custom fields.", zh: "输出得分、等级或自定义字段。"))],
-                processDesc: Bilingual.text(en: "Runs script logic to generate metric results.", zh: "运行脚本逻辑生成评价结果。"),
-                exampleScenario: evaluationMetricExampleScenario()
-            ),
-            NodeDoc(
-                type: EduNodeType.evaluationSummary,
-                name: S("menu.node.evalSummary"),
-                categoryKey: "evaluation",
-                categoryTitle: evalTitle,
-                description: Bilingual.text(en: "Aggregates metric results into a final summary.", zh: "将多项评价结果汇总为最终结论。"),
-                inputs: [PortDoc(name: Bilingual.text(en: "Inputs", zh: "输入"), type: "Any", desc: Bilingual.text(en: "Consumes metric outputs and context values.", zh: "接收指标输出与上下文数据。"))],
-                outputs: [PortDoc(name: Bilingual.text(en: "Summary", zh: "汇总"), type: "Any", desc: Bilingual.text(en: "Final score/level style output.", zh: "输出最终分数或等级。"))],
-                processDesc: Bilingual.text(en: "Combines indicators into final evaluation output.", zh: "将指标合成为最终评价输出。"),
-                exampleScenario: evaluationSummaryExampleScenario()
+                type: EduNodeType.evaluation,
+                name: S("menu.node.evaluation"),
+                categoryKey: "core",
+                categoryTitle: coreTitle,
+                description: Bilingual.text(
+                    en: "One unified evaluation node for indicator setup, formula selection, and score output.",
+                    zh: "统一成绩节点：在同一节点完成指标配置、公式选择与得分输出。"
+                ),
+                inputs: [
+                    PortDoc(
+                        name: Bilingual.text(en: "Indicator Inputs (Dynamic)", zh: "指标输入（动态）"),
+                        type: "Any",
+                        desc: Bilingual.text(
+                            en: "The node creates one input port for each indicator row in the table. Connect one Knowledge/Toolkit source per row.",
+                            zh: "节点会根据指标表每一行自动生成一个输入端口。每行连接一个 Knowledge/Toolkit 来源。"
+                        )
+                    )
+                ],
+                outputs: [
+                    PortDoc(
+                        name: S("edu.evaluation.output.score"),
+                        type: "Any",
+                        desc: Bilingual.text(
+                            en: "Final score output. Supports 100-point, 5-point, and ABCD level scales from the same node.",
+                            zh: "最终成绩输出。可在同一节点选择百分制、五分制或 ABCD 等级制。"
+                        )
+                    )
+                ],
+                processDesc: Bilingual.text(
+                    en: "Supports score-type (0-5) and completion-type (0/5) indicators. Weighted Average shows an extra Weight column in the indicator table.",
+                    zh: "支持分数制（0-5）与完成制（0/5）指标。选择加权平均时，指标表会新增权重列。"
+                ),
+                exampleScenario: tutorialPhysicsMicroLessonScenario()
             )
         ]
     }
@@ -834,6 +895,398 @@ enum EduNodePluginConfig {
         ]
     }
 
+    private static func modelTemplateDocs(categoryTitle: String) -> [NodeDoc] {
+        [
+            NodeDoc(
+                type: "EduModelTemplateUbD",
+                name: Bilingual.text(en: "Understanding by Design (UbD)", zh: "逆向设计（UbD）"),
+                categoryKey: "model",
+                categoryTitle: categoryTitle,
+                description: Bilingual.text(
+                    en: "A backward-design model centered on desired results, evidence, and aligned learning experiences.",
+                    zh: "以“预期结果-证据-学习体验”逆向设计为核心的教育模型。"
+                ),
+                inputs: modelTemplateInputs(),
+                outputs: modelTemplateOutputs(),
+                processDesc: Bilingual.text(
+                    en: "Build a results-first chain (K1-K3), then connect Toolkit execution (T1-T4) to evidence criteria.",
+                    zh: "先构建结果导向链路（K1-K3），再把 Toolkit 执行链（T1-T4）与证据标准对齐。"
+                ),
+                detailSections: [
+                    detailSection(
+                        id: "ipo_overview",
+                        enTitle: "IPO Overview",
+                        zhTitle: "IPO 概览",
+                        enBody: "Input: course context + core objective.\nProcess: Desired Results -> Acceptable Evidence -> Learning Plan, then Hook/Task/Discussion/Reflection execution.\nOutput: an evidence-aligned lesson chain for planning and PPT generation.",
+                        zhBody: "Input：课程背景 + 核心目标。\nProcess：预期结果 -> 可接受证据 -> 学习体验规划，再进入导入/任务/讨论/反思执行链。\nOutput：得到证据对齐的课堂链路，可直接用于讲义与 PPT 生成。",
+                        initiallyExpanded: true
+                    ),
+                    detailSection(
+                        id: "node_sequence",
+                        enTitle: "Node Sequence (L->R / T->B)",
+                        zhTitle: "节点序列（左到右 / 上到下）",
+                        enBody: "1) K1 Desired Results\n2) K2 Acceptable Evidence\n3) K3 Learning Plan\n4) T1 Hook & Diagnose\n5) T2 Build Through Task\n6) T3 Discussion & Expression\n7) T4 Reflect & Close",
+                        zhBody: "1）K1 预期结果\n2）K2 可接受证据\n3）K3 学习体验规划\n4）T1 导入与诊断\n5）T2 任务建构\n6）T3 讨论表达\n7）T4 收束反思"
+                    ),
+                    detailSection(
+                        id: "fit_case",
+                        enTitle: "When To Use",
+                        zhTitle: "适用场景",
+                        enBody: "Use when objectives and evidence standards must be explicit before activity design.",
+                        zhBody: "适用于需要先明确目标与证据标准，再设计活动链路的课程。"
+                    )
+                ],
+                exampleScenario: ubdModelTemplateScenario()
+            ),
+            NodeDoc(
+                type: "EduModelTemplate5E",
+                name: Bilingual.text(en: "5E Instructional Model", zh: "5E 探究模型"),
+                categoryKey: "model",
+                categoryTitle: categoryTitle,
+                description: Bilingual.text(
+                    en: "An inquiry-sequence model: Engage, Explore, Explain, Elaborate, Evaluate.",
+                    zh: "探究序列教育模型：Engage、Explore、Explain、Elaborate、Evaluate。"
+                ),
+                inputs: modelTemplateInputs(),
+                outputs: modelTemplateOutputs(),
+                processDesc: Bilingual.text(
+                    en: "Alternate Knowledge and Toolkit nodes by stage to form a complete inquiry progression.",
+                    zh: "按阶段交替组织 Knowledge 与 Toolkit 节点，形成完整探究推进链。"
+                ),
+                detailSections: [
+                    detailSection(
+                        id: "ipo_overview",
+                        enTitle: "IPO Overview",
+                        zhTitle: "IPO 概览",
+                        enBody: "Input: driving question + class context.\nProcess: K/T stage alternation across Engage -> Explore -> Explain -> Elaborate -> Evaluate.\nOutput: a stable inquiry teaching flow with direct slide ordering.",
+                        zhBody: "Input：驱动问题 + 课堂背景。\nProcess：按 Engage -> Explore -> Explain -> Elaborate -> Evaluate 进行 K/T 交替推进。\nOutput：得到完整探究教学流，并保持稳定的幻灯片顺序。",
+                        initiallyExpanded: true
+                    ),
+                    detailSection(
+                        id: "node_sequence",
+                        enTitle: "Node Sequence (L->R / T->B)",
+                        zhTitle: "节点序列（左到右 / 上到下）",
+                        enBody: "K1 Engage -> T1 Engage -> K2 Explore -> T2 Explore -> K3 Explain -> T3 Explain -> K4 Elaborate -> T4 Elaborate -> K5 Evaluate -> T5 Evaluate",
+                        zhBody: "K1 Engage -> T1 Engage -> K2 Explore -> T2 Explore -> K3 Explain -> T3 Explain -> K4 Elaborate -> T4 Elaborate -> K5 Evaluate -> T5 Evaluate"
+                    ),
+                    detailSection(
+                        id: "fit_case",
+                        enTitle: "When To Use",
+                        zhTitle: "适用场景",
+                        enBody: "Best for science inquiry and question-driven lessons requiring gradual concept building.",
+                        zhBody: "适用于科学探究与问题驱动课程，强调概念渐进建构。"
+                    )
+                ],
+                exampleScenario: fiveEModelTemplateScenario()
+            ),
+            NodeDoc(
+                type: "EduModelTemplateKolb",
+                name: Bilingual.text(en: "Kolb Experiential Cycle", zh: "Kolb 体验学习循环"),
+                categoryKey: "model",
+                categoryTitle: categoryTitle,
+                description: Bilingual.text(
+                    en: "An experiential-cycle model mapped to a non-cyclic execution graph for safe runtime.",
+                    zh: "体验学习循环教育模型（执行图为无环结构，保证运行安全）。"
+                ),
+                inputs: modelTemplateInputs(),
+                outputs: modelTemplateOutputs(),
+                processDesc: Bilingual.text(
+                    en: "Map the four Kolb stages into a left-to-right DAG: Experience -> Reflection -> Conceptualization -> Experimentation.",
+                    zh: "将 Kolb 四阶段映射为左到右无环链：体验 -> 反思 -> 概念化 -> 主动实验。"
+                ),
+                detailSections: [
+                    detailSection(
+                        id: "ipo_overview",
+                        enTitle: "IPO Overview",
+                        zhTitle: "IPO 概览",
+                        enBody: "Input: initial experience trigger + objective.\nProcess: each stage has a paired Toolkit action, but graph remains acyclic for execution.\nOutput: one completed cycle that can be manually iterated in the next lesson.",
+                        zhBody: "Input：起始体验触发点 + 教学目标。\nProcess：每阶段配一类 Toolkit 行动，但整体保持无环执行图。\nOutput：得到可落地的一轮体验学习闭环（下一轮由教师手动续接）。",
+                        initiallyExpanded: true
+                    ),
+                    detailSection(
+                        id: "node_sequence",
+                        enTitle: "Node Sequence (L->R / T->B)",
+                        zhTitle: "节点序列（左到右 / 上到下）",
+                        enBody: "K1 Concrete Experience -> T1 Experience Capture -> K2 Reflective Observation -> T2 Reflection -> K3 Abstract Conceptualization -> T3 Concept Build -> K4 Active Experimentation -> T4 Experiment & Share",
+                        zhBody: "K1 具体体验 -> T1 体验采集 -> K2 反思观察 -> T2 反思工具 -> K3 抽象概念化 -> T3 建构工具 -> K4 主动实验 -> T4 实验沟通"
+                    ),
+                    detailSection(
+                        id: "fit_case",
+                        enTitle: "When To Use",
+                        zhTitle: "适用场景",
+                        enBody: "Suitable for project-based and practice-heavy lessons where reflection quality matters.",
+                        zhBody: "适用于项目实践类课程，强调“体验后反思”的学习质量。"
+                    )
+                ],
+                exampleScenario: kolbModelTemplateScenario()
+            ),
+            NodeDoc(
+                type: "EduModelTemplateBOPPPS",
+                name: Bilingual.text(en: "BOPPPS Model", zh: "BOPPPS 模型"),
+                categoryKey: "model",
+                categoryTitle: categoryTitle,
+                description: Bilingual.text(
+                    en: "A compact lesson model with Bridge-in, Objective, Pre-assessment, Participatory, Post-assessment, Summary.",
+                    zh: "紧凑型单课时教育模型：Bridge-in、Objective、Pre-assessment、Participatory、Post-assessment、Summary。"
+                ),
+                inputs: modelTemplateInputs(),
+                outputs: modelTemplateOutputs(),
+                processDesc: Bilingual.text(
+                    en: "Run a concise lesson with a branching participatory segment and a merged assessment/summary closure.",
+                    zh: "以紧凑节奏推进课堂，中段参与环节分支，后段汇合到检核与总结。"
+                ),
+                detailSections: [
+                    detailSection(
+                        id: "ipo_overview",
+                        enTitle: "IPO Overview",
+                        zhTitle: "IPO 概览",
+                        enBody: "Input: lesson objective + baseline assumptions.\nProcess: Bridge-in -> Objective -> Pre-assessment -> Participatory (Path A/B) -> Post-assessment -> Summary.\nOutput: a complete short-lesson chain with explicit opening and closure.",
+                        zhBody: "Input：课时目标 + 起点假设。\nProcess：Bridge-in -> Objective -> Pre-assessment -> Participatory（A/B 路径）-> Post-assessment -> Summary。\nOutput：得到“有导入、有参与、有收束”的完整短课链路。",
+                        initiallyExpanded: true
+                    ),
+                    detailSection(
+                        id: "node_sequence",
+                        enTitle: "Node Sequence (L->R / T->B)",
+                        zhTitle: "节点序列（左到右 / 上到下）",
+                        enBody: "K1 Bridge-in -> T1 Bridge-in -> K2 Objective -> K3 Pre-assessment -> T2 Pre-assessment -> K4 Participatory -> T3 Path A / T4 Path B -> K5 Post-assessment -> T5 Summary -> K6 Summary",
+                        zhBody: "K1 Bridge-in -> T1 Bridge-in -> K2 Objective -> K3 Pre-assessment -> T2 Pre-assessment -> K4 Participatory -> T3 路径A / T4 路径B -> K5 Post-assessment -> T5 Summary -> K6 Summary"
+                    ),
+                    detailSection(
+                        id: "fit_case",
+                        enTitle: "When To Use",
+                        zhTitle: "适用场景",
+                        enBody: "Use for 20-45 minute classes requiring clear rhythm and participation checkpoints.",
+                        zhBody: "适用于 20-45 分钟的课时，强调节奏清晰与参与检查点。"
+                    )
+                ],
+                exampleScenario: bopppsModelTemplateScenario()
+            ),
+            NodeDoc(
+                type: "EduModelTemplateGagne9",
+                name: Bilingual.text(en: "Gagne's Nine Events", zh: "Gagné 九事件教学模型"),
+                categoryKey: "model",
+                categoryTitle: categoryTitle,
+                description: Bilingual.text(
+                    en: "A highly structured nine-event model from attention to retention and transfer.",
+                    zh: "高结构化九事件教育模型：从引起注意到保持与迁移。"
+                ),
+                inputs: modelTemplateInputs(),
+                outputs: modelTemplateOutputs(),
+                processDesc: Bilingual.text(
+                    en: "Builds a long left-to-right instructional chain with explicit event checkpoints and toolkit supports.",
+                    zh: "构建长链式左到右教学流程，事件节点与 Toolkit 支撑点一一对应。"
+                ),
+                detailSections: [
+                    detailSection(
+                        id: "ipo_overview",
+                        enTitle: "IPO Overview",
+                        zhTitle: "IPO 概览",
+                        enBody: "Input: objective + prerequisite knowledge assumptions.\nProcess: nine events are sequenced with toolkit supports at key execution events.\nOutput: an explicit, auditable teaching flow suitable for structured instruction.",
+                        zhBody: "Input：教学目标 + 先修知识假设。\nProcess：九事件按序推进，关键执行事件插入 Toolkit 支撑。\nOutput：得到结构明确、可追踪的课堂流程，适配结构化教学。",
+                        initiallyExpanded: true
+                    ),
+                    detailSection(
+                        id: "node_sequence",
+                        enTitle: "Node Sequence (L->R / T->B)",
+                        zhTitle: "节点序列（左到右 / 上到下）",
+                        enBody: "K1 Attention -> T1 Hook -> K2 Objectives -> K3 Recall -> K4 Present -> T2 Content Support -> K5 Guidance -> T3 Guided Discussion -> K6 Performance -> T4 Practice -> K7 Feedback -> T5 Peer Feedback -> K8 Assess -> K9 Transfer -> T6 Reflection",
+                        zhBody: "K1 引起注意 -> T1 导入 -> K2 告知目标 -> K3 唤醒旧知 -> K4 呈现内容 -> T2 内容支撑 -> K5 提供指导 -> T3 引导讨论 -> K6 引出表现 -> T4 练习任务 -> K7 提供反馈 -> T5 同伴反馈 -> K8 检核表现 -> K9 促进迁移 -> T6 反思收束"
+                    ),
+                    detailSection(
+                        id: "fit_case",
+                        enTitle: "When To Use",
+                        zhTitle: "适用场景",
+                        enBody: "Suitable for larger classes and topics requiring explicit step-by-step instruction.",
+                        zhBody: "适用于人数较多、步骤化讲授要求高的课堂。"
+                    )
+                ],
+                exampleScenario: gagne9ModelTemplateScenario()
+            )
+        ]
+    }
+
+    private static func modelTemplateInputs() -> [PortDoc] {
+        [
+            guideInput(
+                enName: "Course Context (Global)",
+                zhName: "课程上下文（全局）",
+                type: "Any",
+                enDesc: "Subject, grade, duration, and constraints from course setup.",
+                zhDesc: "来自课程设置的学科、学段、课时和约束信息。",
+                isOptional: true
+            ),
+            guideInput(
+                enName: "Teaching Goal (Global)",
+                zhName: "教学目标（全局）",
+                type: "Any",
+                enDesc: "Core objective used to anchor the template sequence.",
+                zhDesc: "用于锚定模板链路的核心教学目标。",
+                isOptional: true
+            )
+        ]
+    }
+
+    private static func modelTemplateOutputs() -> [PortDoc] {
+        [
+            PortDoc(
+                name: Bilingual.text(en: "Knowledge Chain", zh: "Knowledge 链路"),
+                type: "Any",
+                desc: Bilingual.text(en: "Ordered knowledge-stage sequence for instruction.", zh: "面向授课顺序的知识阶段链。")
+            ),
+            PortDoc(
+                name: Bilingual.text(en: "Toolkit Chain", zh: "Toolkit 链路"),
+                type: "Any",
+                desc: Bilingual.text(en: "Method execution sequence attached to each stage.", zh: "与各阶段配套的方法执行链。")
+            )
+        ]
+    }
+
+    private static func ubdModelTemplateScenario() -> NodeDocExampleScenario {
+        NodeDocExampleScenario(
+            nodes: [
+                NodeDocExampleNode(id: "k1", type: EduNodeType.knowledge, x: -1200, y: -220, customTitle: Bilingual.text(en: "K1 Desired Results", zh: "K1 预期结果"), textValue: Bilingual.text(en: "Clarify transfer goals and success criteria.", zh: "明确可迁移目标与达成标准。"), selectedOption: S("edu.knowledge.type.analyze")),
+                NodeDocExampleNode(id: "k2", type: EduNodeType.knowledge, x: -760, y: -220, customTitle: Bilingual.text(en: "K2 Acceptable Evidence", zh: "K2 可接受证据"), textValue: Bilingual.text(en: "Define evidence and performance tasks.", zh: "定义证据与表现任务。"), selectedOption: S("edu.knowledge.type.evaluate")),
+                NodeDocExampleNode(id: "k3", type: EduNodeType.knowledge, x: -320, y: -220, customTitle: Bilingual.text(en: "K3 Learning Plan", zh: "K3 学习体验规划"), textValue: Bilingual.text(en: "Back-design lesson activities from evidence.", zh: "从证据倒推课堂活动。"), selectedOption: S("edu.knowledge.type.apply")),
+                NodeDocExampleNode(id: "t1", type: EduNodeType.toolkitPerceptionInquiry, x: 120, y: 220, customTitle: Bilingual.text(en: "T1 Hook & Diagnose", zh: "T1 导入与诊断"), selectedMethodID: "context_hook"),
+                NodeDocExampleNode(id: "t2", type: EduNodeType.toolkitConstructionPrototype, x: 560, y: 220, customTitle: Bilingual.text(en: "T2 Build Through Task", zh: "T2 任务建构"), selectedMethodID: "low_fidelity_prototype"),
+                NodeDocExampleNode(id: "t3", type: EduNodeType.toolkitCommunicationNegotiation, x: 1000, y: 220, customTitle: Bilingual.text(en: "T3 Discussion & Expression", zh: "T3 讨论表达"), selectedMethodID: "structured_debate"),
+                NodeDocExampleNode(id: "t4", type: EduNodeType.toolkitRegulationMetacognition, x: 1440, y: 220, customTitle: Bilingual.text(en: "T4 Reflect & Close", zh: "T4 收束反思"), selectedMethodID: "reflection_protocol")
+            ],
+            connections: [
+                NodeDocExampleConnection(sourceNodeID: "k1", targetNodeID: "k2"),
+                NodeDocExampleConnection(sourceNodeID: "k2", targetNodeID: "k3"),
+                NodeDocExampleConnection(sourceNodeID: "k3", targetNodeID: "t1"),
+                NodeDocExampleConnection(sourceNodeID: "t1", targetNodeID: "t2"),
+                NodeDocExampleConnection(sourceNodeID: "t2", targetNodeID: "t3"),
+                NodeDocExampleConnection(sourceNodeID: "t3", targetNodeID: "t4"),
+                NodeDocExampleConnection(sourceNodeID: "k2", targetNodeID: "t2"),
+                NodeDocExampleConnection(sourceNodeID: "k2", targetNodeID: "t3"),
+                NodeDocExampleConnection(sourceNodeID: "k2", targetNodeID: "t4")
+            ]
+        )
+    }
+
+    private static func fiveEModelTemplateScenario() -> NodeDocExampleScenario {
+        NodeDocExampleScenario(
+            nodes: [
+                NodeDocExampleNode(id: "k1", type: EduNodeType.knowledge, x: -1080, y: -220, customTitle: "K1 Engage", textValue: Bilingual.text(en: "Raise a driving question.", zh: "提出驱动问题。"), selectedOption: S("edu.knowledge.type.remember")),
+                NodeDocExampleNode(id: "t1", type: EduNodeType.toolkitPerceptionInquiry, x: -1080, y: 220, customTitle: Bilingual.text(en: "T1 Engage Toolkit", zh: "T1 Engage 工具"), selectedMethodID: "context_hook"),
+                NodeDocExampleNode(id: "k2", type: EduNodeType.knowledge, x: -620, y: -220, customTitle: "K2 Explore", textValue: Bilingual.text(en: "Collect evidence through exploration.", zh: "通过探究采集证据。"), selectedOption: S("edu.knowledge.type.analyze")),
+                NodeDocExampleNode(id: "t2", type: EduNodeType.toolkitPerceptionInquiry, x: -620, y: 220, customTitle: Bilingual.text(en: "T2 Explore Toolkit", zh: "T2 Explore 工具"), selectedMethodID: "field_observation"),
+                NodeDocExampleNode(id: "k3", type: EduNodeType.knowledge, x: -160, y: -220, customTitle: "K3 Explain", textValue: Bilingual.text(en: "Build concept explanations from evidence.", zh: "基于证据形成概念解释。"), selectedOption: S("edu.knowledge.type.understand")),
+                NodeDocExampleNode(id: "t3", type: EduNodeType.toolkitCommunicationNegotiation, x: -160, y: 220, customTitle: Bilingual.text(en: "T3 Explain Toolkit", zh: "T3 Explain 工具"), selectedMethodID: "structured_debate"),
+                NodeDocExampleNode(id: "k4", type: EduNodeType.knowledge, x: 300, y: -220, customTitle: "K4 Elaborate", textValue: Bilingual.text(en: "Transfer to a new context.", zh: "迁移到新情境。"), selectedOption: S("edu.knowledge.type.apply")),
+                NodeDocExampleNode(id: "t4", type: EduNodeType.toolkitConstructionPrototype, x: 300, y: 220, customTitle: Bilingual.text(en: "T4 Elaborate Toolkit", zh: "T4 Elaborate 工具"), selectedMethodID: "story_construction"),
+                NodeDocExampleNode(id: "k5", type: EduNodeType.knowledge, x: 760, y: -220, customTitle: "K5 Evaluate", textValue: Bilingual.text(en: "Check achievement and next step.", zh: "检核达成并规划下一步。"), selectedOption: S("edu.knowledge.type.evaluate")),
+                NodeDocExampleNode(id: "t5", type: EduNodeType.toolkitRegulationMetacognition, x: 760, y: 220, customTitle: Bilingual.text(en: "T5 Evaluate Toolkit", zh: "T5 Evaluate 工具"), selectedMethodID: "reflection_protocol")
+            ],
+            connections: [
+                NodeDocExampleConnection(sourceNodeID: "k1", targetNodeID: "t1"),
+                NodeDocExampleConnection(sourceNodeID: "t1", targetNodeID: "k2"),
+                NodeDocExampleConnection(sourceNodeID: "k2", targetNodeID: "t2"),
+                NodeDocExampleConnection(sourceNodeID: "t2", targetNodeID: "k3"),
+                NodeDocExampleConnection(sourceNodeID: "k3", targetNodeID: "t3"),
+                NodeDocExampleConnection(sourceNodeID: "t3", targetNodeID: "k4"),
+                NodeDocExampleConnection(sourceNodeID: "k4", targetNodeID: "t4"),
+                NodeDocExampleConnection(sourceNodeID: "t4", targetNodeID: "k5"),
+                NodeDocExampleConnection(sourceNodeID: "k5", targetNodeID: "t5")
+            ]
+        )
+    }
+
+    private static func kolbModelTemplateScenario() -> NodeDocExampleScenario {
+        NodeDocExampleScenario(
+            nodes: [
+                NodeDocExampleNode(id: "k1", type: EduNodeType.knowledge, x: -1080, y: -220, customTitle: Bilingual.text(en: "K1 Concrete Experience", zh: "K1 具体体验"), textValue: Bilingual.text(en: "Start with concrete experience.", zh: "从具体体验切入。"), selectedOption: S("edu.knowledge.type.remember")),
+                NodeDocExampleNode(id: "t1", type: EduNodeType.toolkitPerceptionInquiry, x: -1080, y: 220, customTitle: Bilingual.text(en: "T1 Experience Capture", zh: "T1 体验采集"), selectedMethodID: "field_observation"),
+                NodeDocExampleNode(id: "k2", type: EduNodeType.knowledge, x: -620, y: -220, customTitle: Bilingual.text(en: "K2 Reflective Observation", zh: "K2 反思观察"), textValue: Bilingual.text(en: "Capture patterns and confusion points.", zh: "记录规律与疑难点。"), selectedOption: S("edu.knowledge.type.analyze")),
+                NodeDocExampleNode(id: "t2", type: EduNodeType.toolkitRegulationMetacognition, x: -620, y: 220, customTitle: Bilingual.text(en: "T2 Reflection Toolkit", zh: "T2 反思工具"), selectedMethodID: "metacognitive_routine"),
+                NodeDocExampleNode(id: "k3", type: EduNodeType.knowledge, x: -160, y: -220, customTitle: Bilingual.text(en: "K3 Abstract Conceptualization", zh: "K3 抽象概念化"), textValue: Bilingual.text(en: "Generalize rules and concept model.", zh: "抽象出规则与概念模型。"), selectedOption: S("edu.knowledge.type.understand")),
+                NodeDocExampleNode(id: "t3", type: EduNodeType.toolkitConstructionPrototype, x: -160, y: 220, customTitle: Bilingual.text(en: "T3 Concept Build", zh: "T3 建构工具"), selectedMethodID: "story_construction"),
+                NodeDocExampleNode(id: "k4", type: EduNodeType.knowledge, x: 300, y: -220, customTitle: Bilingual.text(en: "K4 Active Experimentation", zh: "K4 主动实验"), textValue: Bilingual.text(en: "Apply concept in a new task.", zh: "在新任务中验证概念。"), selectedOption: S("edu.knowledge.type.apply")),
+                NodeDocExampleNode(id: "t4", type: EduNodeType.toolkitCommunicationNegotiation, x: 300, y: 220, customTitle: Bilingual.text(en: "T4 Experiment & Share", zh: "T4 实验沟通"), selectedMethodID: "pogil")
+            ],
+            connections: [
+                NodeDocExampleConnection(sourceNodeID: "k1", targetNodeID: "t1"),
+                NodeDocExampleConnection(sourceNodeID: "t1", targetNodeID: "k2"),
+                NodeDocExampleConnection(sourceNodeID: "k2", targetNodeID: "t2"),
+                NodeDocExampleConnection(sourceNodeID: "t2", targetNodeID: "k3"),
+                NodeDocExampleConnection(sourceNodeID: "k3", targetNodeID: "t3"),
+                NodeDocExampleConnection(sourceNodeID: "t3", targetNodeID: "k4"),
+                NodeDocExampleConnection(sourceNodeID: "k4", targetNodeID: "t4")
+            ]
+        )
+    }
+
+    private static func bopppsModelTemplateScenario() -> NodeDocExampleScenario {
+        NodeDocExampleScenario(
+            nodes: [
+                NodeDocExampleNode(id: "k1", type: EduNodeType.knowledge, x: -1260, y: -220, customTitle: "K1 Bridge-in", textValue: Bilingual.text(en: "Open with a concise bridge-in.", zh: "用简短导入聚焦课堂。"), selectedOption: S("edu.knowledge.type.remember")),
+                NodeDocExampleNode(id: "t1", type: EduNodeType.toolkitPerceptionInquiry, x: -1260, y: 220, customTitle: Bilingual.text(en: "T1 Bridge-in Toolkit", zh: "T1 Bridge-in 工具"), selectedMethodID: "context_hook"),
+                NodeDocExampleNode(id: "k2", type: EduNodeType.knowledge, x: -820, y: -220, customTitle: "K2 Objective", textValue: Bilingual.text(en: "State lesson objective.", zh: "明确本课目标。"), selectedOption: S("edu.knowledge.type.understand")),
+                NodeDocExampleNode(id: "k3", type: EduNodeType.knowledge, x: -380, y: -220, customTitle: "K3 Pre-assessment", textValue: Bilingual.text(en: "Identify baseline understanding.", zh: "识别学生起点。"), selectedOption: S("edu.knowledge.type.analyze")),
+                NodeDocExampleNode(id: "t2", type: EduNodeType.toolkitRegulationMetacognition, x: -380, y: 220, customTitle: Bilingual.text(en: "T2 Pre-assessment Toolkit", zh: "T2 Pre-assessment 工具"), selectedMethodID: "rubric_checklist"),
+                NodeDocExampleNode(id: "k4", type: EduNodeType.knowledge, x: 60, y: 0, customTitle: "K4 Participatory", textValue: Bilingual.text(en: "Run participatory learning.", zh: "进入参与式学习主活动。"), selectedOption: S("edu.knowledge.type.apply")),
+                NodeDocExampleNode(id: "t3", type: EduNodeType.toolkitCommunicationNegotiation, x: 500, y: -220, customTitle: Bilingual.text(en: "T3 Path A", zh: "T3 路径A"), selectedMethodID: "world_cafe"),
+                NodeDocExampleNode(id: "t4", type: EduNodeType.toolkitConstructionPrototype, x: 500, y: 220, customTitle: Bilingual.text(en: "T4 Path B", zh: "T4 路径B"), selectedMethodID: "low_fidelity_prototype"),
+                NodeDocExampleNode(id: "k5", type: EduNodeType.knowledge, x: 940, y: 0, customTitle: "K5 Post-assessment", textValue: Bilingual.text(en: "Check learning outcomes.", zh: "检核学习达成。"), selectedOption: S("edu.knowledge.type.evaluate")),
+                NodeDocExampleNode(id: "k6", type: EduNodeType.knowledge, x: 1380, y: -220, customTitle: "K6 Summary", textValue: Bilingual.text(en: "Capture key takeaways.", zh: "沉淀关键结论。"), selectedOption: S("edu.knowledge.type.create")),
+                NodeDocExampleNode(id: "t5", type: EduNodeType.toolkitRegulationMetacognition, x: 1380, y: 220, customTitle: Bilingual.text(en: "T5 Summary Toolkit", zh: "T5 Summary 工具"), selectedMethodID: "reflection_protocol")
+            ],
+            connections: [
+                NodeDocExampleConnection(sourceNodeID: "k1", targetNodeID: "t1"),
+                NodeDocExampleConnection(sourceNodeID: "t1", targetNodeID: "k2"),
+                NodeDocExampleConnection(sourceNodeID: "k2", targetNodeID: "k3"),
+                NodeDocExampleConnection(sourceNodeID: "k3", targetNodeID: "t2"),
+                NodeDocExampleConnection(sourceNodeID: "t2", targetNodeID: "k4"),
+                NodeDocExampleConnection(sourceNodeID: "k4", targetNodeID: "t3"),
+                NodeDocExampleConnection(sourceNodeID: "k4", targetNodeID: "t4"),
+                NodeDocExampleConnection(sourceNodeID: "t3", targetNodeID: "k5"),
+                NodeDocExampleConnection(sourceNodeID: "t4", targetNodeID: "k5"),
+                NodeDocExampleConnection(sourceNodeID: "k5", targetNodeID: "t5"),
+                NodeDocExampleConnection(sourceNodeID: "t5", targetNodeID: "k6")
+            ]
+        )
+    }
+
+    private static func gagne9ModelTemplateScenario() -> NodeDocExampleScenario {
+        NodeDocExampleScenario(
+            nodes: [
+                NodeDocExampleNode(id: "k1", type: EduNodeType.knowledge, x: -1640, y: -220, customTitle: Bilingual.text(en: "K1 Gain Attention", zh: "K1 引起注意"), textValue: Bilingual.text(en: "Use a concise attention stimulus.", zh: "使用简短刺激引起注意。"), selectedOption: S("edu.knowledge.type.remember")),
+                NodeDocExampleNode(id: "t1", type: EduNodeType.toolkitPerceptionInquiry, x: -1640, y: 220, customTitle: Bilingual.text(en: "T1 Hook", zh: "T1 导入工具"), selectedMethodID: "context_hook"),
+                NodeDocExampleNode(id: "k2", type: EduNodeType.knowledge, x: -1240, y: -220, customTitle: Bilingual.text(en: "K2 Inform Objectives", zh: "K2 告知目标"), textValue: Bilingual.text(en: "Clarify objective and success criteria.", zh: "明确目标与达成标准。"), selectedOption: S("edu.knowledge.type.understand")),
+                NodeDocExampleNode(id: "k3", type: EduNodeType.knowledge, x: -840, y: -220, customTitle: Bilingual.text(en: "K3 Stimulate Recall", zh: "K3 唤醒旧知"), textValue: Bilingual.text(en: "Recall prerequisite knowledge.", zh: "唤醒先修知识。"), selectedOption: S("edu.knowledge.type.understand")),
+                NodeDocExampleNode(id: "k4", type: EduNodeType.knowledge, x: -440, y: -220, customTitle: Bilingual.text(en: "K4 Present Content", zh: "K4 呈现内容"), textValue: Bilingual.text(en: "Present key concept and examples.", zh: "呈现关键概念与案例。"), selectedOption: S("edu.knowledge.type.analyze")),
+                NodeDocExampleNode(id: "t2", type: EduNodeType.toolkitPerceptionInquiry, x: -440, y: 220, customTitle: Bilingual.text(en: "T2 Content Support", zh: "T2 内容支撑"), selectedMethodID: "source_analysis"),
+                NodeDocExampleNode(id: "k5", type: EduNodeType.knowledge, x: -40, y: -220, customTitle: Bilingual.text(en: "K5 Provide Guidance", zh: "K5 提供指导"), textValue: Bilingual.text(en: "Provide scaffolds and strategy hints.", zh: "提供策略支架与提示。"), selectedOption: S("edu.knowledge.type.apply")),
+                NodeDocExampleNode(id: "t3", type: EduNodeType.toolkitCommunicationNegotiation, x: -40, y: 220, customTitle: Bilingual.text(en: "T3 Guided Discussion", zh: "T3 引导讨论"), selectedMethodID: "structured_debate"),
+                NodeDocExampleNode(id: "k6", type: EduNodeType.knowledge, x: 360, y: -220, customTitle: Bilingual.text(en: "K6 Elicit Performance", zh: "K6 引出表现"), textValue: Bilingual.text(en: "Run practice and capture output.", zh: "组织练习并收集表现。"), selectedOption: S("edu.knowledge.type.apply")),
+                NodeDocExampleNode(id: "t4", type: EduNodeType.toolkitConstructionPrototype, x: 360, y: 220, customTitle: Bilingual.text(en: "T4 Practice Toolkit", zh: "T4 练习工具"), selectedMethodID: "low_fidelity_prototype"),
+                NodeDocExampleNode(id: "k7", type: EduNodeType.knowledge, x: 760, y: -220, customTitle: Bilingual.text(en: "K7 Provide Feedback", zh: "K7 提供反馈"), textValue: Bilingual.text(en: "Give actionable feedback.", zh: "给出可执行反馈。"), selectedOption: S("edu.knowledge.type.evaluate")),
+                NodeDocExampleNode(id: "t5", type: EduNodeType.toolkitCommunicationNegotiation, x: 760, y: 220, customTitle: Bilingual.text(en: "T5 Peer Feedback", zh: "T5 同伴反馈"), selectedMethodID: "world_cafe"),
+                NodeDocExampleNode(id: "k8", type: EduNodeType.knowledge, x: 1160, y: -220, customTitle: Bilingual.text(en: "K8 Assess Performance", zh: "K8 检核表现"), textValue: Bilingual.text(en: "Assess mastery and completion.", zh: "检核掌握与完成度。"), selectedOption: S("edu.knowledge.type.evaluate")),
+                NodeDocExampleNode(id: "k9", type: EduNodeType.knowledge, x: 1560, y: -220, customTitle: Bilingual.text(en: "K9 Retention & Transfer", zh: "K9 保持与迁移"), textValue: Bilingual.text(en: "Consolidate and transfer to new task.", zh: "巩固并迁移到新任务。"), selectedOption: S("edu.knowledge.type.create")),
+                NodeDocExampleNode(id: "t6", type: EduNodeType.toolkitRegulationMetacognition, x: 1560, y: 220, customTitle: Bilingual.text(en: "T6 Reflection Closure", zh: "T6 反思收束"), selectedMethodID: "reflection_protocol")
+            ],
+            connections: [
+                NodeDocExampleConnection(sourceNodeID: "k1", targetNodeID: "t1"),
+                NodeDocExampleConnection(sourceNodeID: "t1", targetNodeID: "k2"),
+                NodeDocExampleConnection(sourceNodeID: "k2", targetNodeID: "k3"),
+                NodeDocExampleConnection(sourceNodeID: "k3", targetNodeID: "k4"),
+                NodeDocExampleConnection(sourceNodeID: "k4", targetNodeID: "t2"),
+                NodeDocExampleConnection(sourceNodeID: "t2", targetNodeID: "k5"),
+                NodeDocExampleConnection(sourceNodeID: "k5", targetNodeID: "t3"),
+                NodeDocExampleConnection(sourceNodeID: "t3", targetNodeID: "k6"),
+                NodeDocExampleConnection(sourceNodeID: "k6", targetNodeID: "t4"),
+                NodeDocExampleConnection(sourceNodeID: "t4", targetNodeID: "k7"),
+                NodeDocExampleConnection(sourceNodeID: "k7", targetNodeID: "t5"),
+                NodeDocExampleConnection(sourceNodeID: "t5", targetNodeID: "k8"),
+                NodeDocExampleConnection(sourceNodeID: "k8", targetNodeID: "k9"),
+                NodeDocExampleConnection(sourceNodeID: "k9", targetNodeID: "t6")
+            ]
+        )
+    }
+
     private static func detailSection(
         id: String,
         enTitle: String,
@@ -929,52 +1382,31 @@ enum EduNodePluginConfig {
                     selectedOption: S("edu.knowledge.type.apply")
                 ),
                 NodeDocExampleNode(
-                    id: "metric_k",
-                    type: EduNodeType.metricValue,
-                    x: -230,
-                    y: 110,
-                    customTitle: Bilingual.text(en: "Knowledge", zh: "知识掌握"),
-                    textValue: "84"
-                ),
-                NodeDocExampleNode(
-                    id: "metric_e",
-                    type: EduNodeType.metricValue,
-                    x: -230,
+                    id: "evaluation",
+                    type: EduNodeType.evaluation,
+                    x: 260,
                     y: 240,
-                    customTitle: Bilingual.text(en: "Engagement", zh: "课堂参与"),
-                    textValue: "79"
-                ),
-                NodeDocExampleNode(
-                    id: "metric_p",
-                    type: EduNodeType.metricValue,
-                    x: -230,
-                    y: 370,
-                    customTitle: Bilingual.text(en: "Practice", zh: "实验执行"),
-                    textValue: "81"
-                ),
-                NodeDocExampleNode(
-                    id: "metric_main",
-                    type: EduNodeType.evaluationMetric,
-                    x: 210,
-                    y: 240,
-                    customTitle: Bilingual.text(en: "Metric", zh: "指标计算")
-                ),
-                NodeDocExampleNode(
-                    id: "summary",
-                    type: EduNodeType.evaluationSummary,
-                    x: 620,
-                    y: 240,
-                    customTitle: Bilingual.text(en: "Summary", zh: "评价汇总")
+                    customTitle: Bilingual.text(en: "Evaluation Score", zh: "成绩节点"),
+                    formTextFields: [
+                        "evaluation_indicators": Bilingual.text(
+                            en: "Knowledge Understanding | score | 0.4\nExperiment Completion | completion | 0.3\nTeam Explanation | score | 0.3",
+                            zh: "知识理解 | score | 0.4\n实验完成 | completion | 0.3\n小组讲解 | score | 0.3"
+                        )
+                    ],
+                    formOptionFields: [
+                        "evaluation_formula": "weighted_avg",
+                        "evaluation_grouping": "group",
+                        "evaluation_output_scale": "score100"
+                    ]
                 )
             ],
             connections: [
                 NodeDocExampleConnection(sourceNodeID: "k1", sourcePortIndex: 0, targetNodeID: "tk_probe", targetPortIndex: 0),
                 NodeDocExampleConnection(sourceNodeID: "tk_probe", sourcePortIndex: 0, targetNodeID: "tk_phy", targetPortIndex: 0),
                 NodeDocExampleConnection(sourceNodeID: "tk_phy", sourcePortIndex: 0, targetNodeID: "k2", targetPortIndex: 0),
-                NodeDocExampleConnection(sourceNodeID: "metric_k", sourcePortIndex: 0, targetNodeID: "metric_main", targetPortIndex: 0),
-                NodeDocExampleConnection(sourceNodeID: "metric_e", sourcePortIndex: 0, targetNodeID: "metric_main", targetPortIndex: 1),
-                NodeDocExampleConnection(sourceNodeID: "metric_p", sourcePortIndex: 0, targetNodeID: "metric_main", targetPortIndex: 2),
-                NodeDocExampleConnection(sourceNodeID: "metric_main", sourcePortIndex: 0, targetNodeID: "summary", targetPortIndex: 0)
+                NodeDocExampleConnection(sourceNodeID: "k1", sourcePortIndex: 0, targetNodeID: "evaluation", targetPortIndex: 0),
+                NodeDocExampleConnection(sourceNodeID: "tk_phy", sourcePortIndex: 0, targetNodeID: "evaluation", targetPortIndex: 1),
+                NodeDocExampleConnection(sourceNodeID: "k2", sourcePortIndex: 0, targetNodeID: "evaluation", targetPortIndex: 2)
             ]
         )
     }

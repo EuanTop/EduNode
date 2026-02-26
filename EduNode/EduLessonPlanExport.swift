@@ -861,7 +861,8 @@ private struct ParsedGraphNode {
     }
 
     var isEvaluationLike: Bool {
-        nodeType == EduNodeType.metricValue
+        nodeType == EduNodeType.evaluation
+            || nodeType == EduNodeType.metricValue
             || nodeType == EduNodeType.evaluationMetric
             || nodeType == EduNodeType.evaluationSummary
             || (role?.contains("evaluation") == true)
@@ -920,6 +921,24 @@ private struct ParsedGraphNode {
                 return "\(firstFilled.label): \(value)"
             }
             return isChinese ? "（未填写活动说明）" : "(Activity details not filled)"
+        }
+
+        if isEvaluationLike {
+            let primary = textValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !primary.isEmpty { return Self.compact(primary, maxLength: 88) }
+
+            if let firstFilledOption = formOptionFields.first(where: {
+                !$0.selectedOption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }) {
+                return "\(firstFilledOption.label): \(Self.compact(firstFilledOption.selectedOption, maxLength: 60))"
+            }
+            if let firstFilledField = formTextFields.first(where: {
+                !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }) {
+                let value = Self.compact(firstFilledField.value, maxLength: 70)
+                return "\(firstFilledField.label): \(value)"
+            }
+            return isChinese ? "（未填写评价说明）" : "(Evaluation details not filled)"
         }
 
         let value = textValue.trimmingCharacters(in: .whitespacesAndNewlines)

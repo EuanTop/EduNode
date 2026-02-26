@@ -7,19 +7,54 @@ enum GradeInputMode: String, CaseIterable {
     case age
 }
 
+enum CourseLessonType: String, CaseIterable {
+    case singleLesson
+    case unitSeries
+}
+
+enum LearningOrganizationMode: String, CaseIterable {
+    case individual
+    case group
+    case mixed
+}
+
+enum TeachingStyleMode: String, CaseIterable {
+    case lectureDriven
+    case inquiryDriven
+    case experientialReflective
+    case taskDriven
+}
+
+enum FormativeCheckIntensity: String, CaseIterable {
+    case low
+    case medium
+    case high
+}
+
 struct CourseCreationDraft {
     var courseName: String = ""
     var gradeInputMode: GradeInputMode = .grade
     var gradeMinText: String = "1"
     var gradeMaxText: String = "1"
     var subject: String = ""
+    var lessonType: CourseLessonType = .singleLesson
     var lessonDurationMinutesText: String = "45"
+    var totalSessionsText: String = "1"
     var periodRange: String = ""
     var studentCountText: String = "30"
     var priorAssessmentScoreText: String = "70"
     var assignmentCompletionRateText: String = "75"
     var supportNeedCountText: String = "0"
     var studentSupportNotes: String = ""
+    var studentRosterText: String = ""
+    var learningOrganization: LearningOrganizationMode = .mixed
+    var teachingStyle: TeachingStyleMode = .inquiryDriven
+    var emphasizeInquiryExperiment: Bool = false
+    var emphasizeExperienceReflection: Bool = false
+    var requireStructuredFlow: Bool = false
+    var formativeCheckIntensity: FormativeCheckIntensity = .medium
+    var expectedOutputIDs: [String] = []
+    var expectedOutputCustomText: String = ""
     var goals: [String] = []
     var modelID: String = ""
     var leadTeacherCountText: String = "1"
@@ -29,6 +64,10 @@ struct CourseCreationDraft {
 
     var lessonDurationMinutes: Int {
         max(1, Int(lessonDurationMinutesText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 45)
+    }
+
+    var totalSessions: Int {
+        max(1, Int(totalSessionsText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 1)
     }
 
     var studentCount: Int {
@@ -81,7 +120,8 @@ struct CourseCreationDraft {
     }
 
     var studentProfileSummary: String {
-        "priorScore=\(priorAssessmentScore), completion=\(assignmentCompletionRate), supportNeed=\(supportNeedCount), notes=\(studentSupportNotes)"
+        let outputs = expectedOutputSummary
+        return "priorScore=\(priorAssessmentScore), completion=\(assignmentCompletionRate), supportNeed=\(supportNeedCount), notes=\(studentSupportNotes), roster=\(studentRosterText), organization=\(learningOrganization.rawValue), outputs=\(outputs)"
     }
 
     var teacherTeamSummary: String {
@@ -106,12 +146,21 @@ struct CourseCreationDraft {
         }
     }
 
+    var expectedOutputSummary: String {
+        let normalizedIDs = expectedOutputIDs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        let custom = expectedOutputCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ([normalizedIDs.joined(separator: ","), custom].filter { !$0.isEmpty }).joined(separator: " | ")
+    }
+
     var isValid: Bool {
         !courseName.trimmed.isEmpty &&
         normalizedGradeRange.0 > 0 &&
         normalizedGradeRange.1 >= normalizedGradeRange.0 &&
         !subject.trimmed.isEmpty &&
         lessonDurationMinutes > 0 &&
+        totalSessions > 0 &&
         studentCount > 0 &&
         priorAssessmentScore >= 0 &&
         priorAssessmentScore <= 100 &&
@@ -251,42 +300,148 @@ enum EduPlanning {
     static func recommendedModels(for draft: CourseCreationDraft, rules: [EduModelRule]) -> [EduModelRule] {
         let grade = draft.gradeLevelSummary.lowercased()
         let subject = draft.subject.lowercased()
+        let outputs = draft.expectedOutputSummary.lowercased()
+        let scenarioContext = [
+            draft.periodRange,
+            draft.studentSupportNotes,
+            draft.goalsText,
+            draft.resourceConstraints,
+            outputs
+        ]
+            .joined(separator: " ")
+            .lowercased()
+
         var bonusByModelID: [String: Int] = [:]
 
-        if draft.priorAssessmentScore < 55 {
-            bonusByModelID["constructivism", default: 0] += 3
-            bonusByModelID["collaborative", default: 0] += 1
-        } else if draft.priorAssessmentScore < 75 {
-            bonusByModelID["constructivism", default: 0] += 1
+        // SOP 1: Hard preference by lesson type (Kolb also supports unit-series).
+        switch draft.lessonType {
+        case .singleLesson:
+            bonusByModelID["boppps", default: 0] += 3
+            bonusByModelID["gagne9", default: 0] += 3
+            bonusByModelID["fivee", default: 0] += 2
             bonusByModelID["ubd", default: 0] += 1
-        } else {
-            bonusByModelID["inquiry", default: 0] += 3
+        case .unitSeries:
+            bonusByModelID["ubd", default: 0] += 4
+            bonusByModelID["kolb", default: 0] += 4
+            bonusByModelID["fivee", default: 0] += 2
+            bonusByModelID["gagne9", default: 0] += 1
+            bonusByModelID["boppps", default: 0] += 1
+        }
+
+        // SOP 2: Teaching style.
+        switch draft.teachingStyle {
+        case .lectureDriven:
+            bonusByModelID["gagne9", default: 0] += 3
+            bonusByModelID["boppps", default: 0] += 2
+            bonusByModelID["ubd", default: 0] += 1
+        case .inquiryDriven:
+            bonusByModelID["fivee", default: 0] += 4
             bonusByModelID["ubd", default: 0] += 2
+            bonusByModelID["kolb", default: 0] += 1
+        case .experientialReflective:
+            bonusByModelID["kolb", default: 0] += 5
+            bonusByModelID["fivee", default: 0] += 1
+        case .taskDriven:
+            bonusByModelID["ubd", default: 0] += 3
+            bonusByModelID["boppps", default: 0] += 2
+            bonusByModelID["fivee", default: 0] += 1
         }
 
-        if draft.assignmentCompletionRate < 60 {
-            bonusByModelID["collaborative", default: 0] += 2
-            bonusByModelID["constructivism", default: 0] += 1
-        } else if draft.assignmentCompletionRate < 85 {
+        // SOP 3: Core preference toggles.
+        if draft.emphasizeInquiryExperiment {
+            bonusByModelID["fivee", default: 0] += 4
+            bonusByModelID["kolb", default: 0] += 1
             bonusByModelID["ubd", default: 0] += 1
+        }
+
+        if draft.emphasizeExperienceReflection {
+            bonusByModelID["kolb", default: 0] += 5
+            bonusByModelID["fivee", default: 0] += 1
+        }
+
+        if draft.requireStructuredFlow {
+            bonusByModelID["gagne9", default: 0] += 4
+            bonusByModelID["boppps", default: 0] += 4
+        }
+
+        switch draft.formativeCheckIntensity {
+        case .high:
+            bonusByModelID["boppps", default: 0] += 3
+            bonusByModelID["gagne9", default: 0] += 2
+            bonusByModelID["ubd", default: 0] += 1
+        case .medium:
+            bonusByModelID["boppps", default: 0] += 1
+            bonusByModelID["gagne9", default: 0] += 1
+        case .low:
+            bonusByModelID["kolb", default: 0] += 1
+            bonusByModelID["fivee", default: 0] += 1
+        }
+
+        // SOP 4: Organization only fine-tunes.
+        switch draft.learningOrganization {
+        case .individual:
+            bonusByModelID["gagne9", default: 0] += 2
+            bonusByModelID["boppps", default: 0] += 1
+        case .group:
+            bonusByModelID["fivee", default: 0] += 2
+            bonusByModelID["kolb", default: 0] += 2
+        case .mixed:
+            bonusByModelID["ubd", default: 0] += 1
+            bonusByModelID["fivee", default: 0] += 1
+            bonusByModelID["kolb", default: 0] += 1
+        }
+
+        // SOP 5: Session count preference.
+        if draft.totalSessions >= 4 {
+            bonusByModelID["ubd", default: 0] += 3
+            bonusByModelID["kolb", default: 0] += 2
+        } else if draft.totalSessions >= 2 {
+            bonusByModelID["ubd", default: 0] += 2
+            bonusByModelID["kolb", default: 0] += 1
+            bonusByModelID["fivee", default: 0] += 1
         } else {
-            bonusByModelID["inquiry", default: 0] += 2
+            bonusByModelID["boppps", default: 0] += 2
+            bonusByModelID["gagne9", default: 0] += 2
+            bonusByModelID["fivee", default: 0] += 1
         }
 
-        if draft.supportNeedCount > max(3, draft.studentCount / 5) {
-            bonusByModelID["collaborative", default: 0] += 2
+        func containsAny(_ candidates: [String]) -> Bool {
+            candidates.contains { token in
+                let needle = token.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                return !needle.isEmpty && scenarioContext.contains(needle)
+            }
         }
 
-        if draft.studentCount >= 36 {
-            bonusByModelID["collaborative", default: 0] += 2
-        } else if draft.studentCount <= 20 {
-            bonusByModelID["inquiry", default: 0] += 1
+        // SOP 6: Goal/output semantics.
+        if containsAny(["探究", "实验", "question", "inquiry", "hypothesis", "experiment"]) {
+            bonusByModelID["fivee", default: 0] += 3
+            bonusByModelID["kolb", default: 0] += 1
+        }
+        if containsAny(["目标", "证据", "标准", "outcome", "evidence", "rubric", "transfer"]) {
+            bonusByModelID["ubd", default: 0] += 3
+            bonusByModelID["gagne9", default: 0] += 1
+        }
+        if containsAny(["循环", "反思", "迭代", "cycle", "iterate", "reflection"]) {
+            bonusByModelID["kolb", default: 0] += 3
+        }
+        if containsAny(["讲授", "结构化", "direct instruction", "step-by-step"]) {
+            bonusByModelID["gagne9", default: 0] += 2
+            bonusByModelID["boppps", default: 0] += 1
+        }
+        if outputs.contains("artifact") || outputs.contains("作品") || outputs.contains("project") || outputs.contains("项目") {
+            bonusByModelID["kolb", default: 0] += 2
+            bonusByModelID["ubd", default: 0] += 1
+        }
+        if outputs.contains("quiz") || outputs.contains("测验") || outputs.contains("worksheet") || outputs.contains("练习") {
+            bonusByModelID["boppps", default: 0] += 1
+            bonusByModelID["gagne9", default: 0] += 1
         }
 
         let scored = rules.map { rule in
             var score = 0
             score += keywordScore(input: grade, hints: rule.gradeHints) * 2
             score += keywordScore(input: subject, hints: rule.subjectHints) * 3
+            score += keywordScore(input: scenarioContext, hints: rule.scenarioHints) * 2
             score += bonusByModelID[rule.id, default: 0]
             return (rule, score)
         }
@@ -296,7 +451,7 @@ enum EduPlanning {
                 if lhs.1 == rhs.1 { return lhs.0.id < rhs.0.id }
                 return lhs.1 > rhs.1
             }
-            .map { $0.0 }
+            .map(\.0)
             .prefix(3)
             .map { $0 }
     }
@@ -335,225 +490,531 @@ enum EduPlanning {
                 )
             )
         }
+        func L(_ zh: String, _ en: String) -> String {
+            isChinese ? zh : en
+        }
 
-        let templateConfig = modelTemplateConfig(for: modelRule.id, isChinese: isChinese)
-        let courseContextSummary: String = {
-            let gradeLabel: String
-            switch draft.gradeInputMode {
-            case .grade:
-                gradeLabel = isChinese ? "年级" : "Grade"
-            case .age:
-                gradeLabel = isChinese ? "年龄" : "Age"
+        let goals = draft.goals
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let primaryGoal = goals.first ?? L("教学目标待补充", "Teaching goal to be refined")
+        let focusText = modelRule.templateFocus(isChinese: isChinese)
+
+        let levelRemember = S("edu.knowledge.type.remember")
+        let levelUnderstand = S("edu.knowledge.type.understand")
+        let levelApply = S("edu.knowledge.type.apply")
+        let levelAnalyze = S("edu.knowledge.type.analyze")
+        let levelEvaluate = S("edu.knowledge.type.evaluate")
+        let levelCreate = S("edu.knowledge.type.create")
+
+        func toolkitNodeType(for category: EduToolkitCategory) -> String {
+            switch category {
+            case .perceptionInquiry:
+                return EduNodeType.toolkitPerceptionInquiry
+            case .constructionPrototype:
+                return EduNodeType.toolkitConstructionPrototype
+            case .communicationNegotiation:
+                return EduNodeType.toolkitCommunicationNegotiation
+            case .regulationMetacognition:
+                return EduNodeType.toolkitRegulationMetacognition
             }
+        }
 
-            let durationLabel = isChinese ? "时长" : "Duration"
-            let countLabel = isChinese ? "人数" : "Students"
-            let subjectLabel = isChinese ? "学科" : "Subject"
-            let periodLabel = isChinese ? "节次" : "Period"
-
-            var lines: [String] = [
-                "\(subjectLabel): \(draft.subject)",
-                "\(gradeLabel): \(draft.gradeLevelSummary)",
-                "\(durationLabel): \(draft.lessonDurationMinutes)\(isChinese ? " 分钟" : " min")",
-                "\(countLabel): \(draft.studentCount)"
-            ]
-
-            let periodText = draft.periodRange.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !periodText.isEmpty {
-                lines.append("\(periodLabel): \(periodText)")
-            }
-            return lines.joined(separator: "\n")
-        }()
-
-        let goalsSummary: String = {
-            let goals = draft.goals
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-            if goals.isEmpty {
-                return isChinese ? "待补充教学目标" : "Teaching goals to be defined"
-            }
-            return goals.enumerated().map { idx, goal in
-                "\(idx + 1). \(goal)"
-            }.joined(separator: "\n")
-        }()
-
-        let courseInfoNode: any GNode = {
-            if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: EduNodeType.courseInfo) {
-                registered.attributes.name = S("menu.node.courseInfo")
-                if let node = registered as? any NodeTextEditable {
-                    node.editorTextValue = courseContextSummary
-                }
-                return registered
-            }
-            return EduTextNode(
-                name: S("menu.node.courseInfo"),
-                value: courseContextSummary,
-                outputName: S("edu.output.courseInfo"),
-                placeholder: S("edu.courseInfo.placeholder")
-            )
-        }()
-        add(courseInfoNode, type: EduNodeType.courseInfo, x: 0, y: 0, role: "course_info")
-        markLayout(courseInfoNode, type: EduNodeType.courseInfo, column: 0, preferredY: -220)
-
-        let goalsNode: any GNode = {
-            if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: EduNodeType.goal) {
-                registered.attributes.name = S("menu.node.goal")
-                if let node = registered as? any NodeTextEditable {
-                    node.editorTextValue = goalsSummary
-                }
-                return registered
-            }
-            return EduTextNode(
-                name: S("menu.node.goal"),
-                value: goalsSummary,
-                outputName: S("edu.output.goal"),
-                placeholder: S("edu.goal.placeholder")
-            )
-        }()
-        add(goalsNode, type: EduNodeType.goal, x: 0, y: 0, role: "goals")
-        markLayout(goalsNode, type: EduNodeType.goal, column: 0, preferredY: 70)
-
-        let knowledgeNode: any GNode = {
+        func makeKnowledgeNode(title: String, content: String, level: String) -> any GNode {
             if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: EduNodeType.knowledge) {
-                registered.attributes.name = S("template.knowledge")
+                registered.attributes.name = title
                 if let node = registered as? EduKnowledgeNode {
-                    node.editorTextValue = modelRule.templateFocus(isChinese: isChinese)
-                    node.editorSelectedOption = templateConfig.knowledgeLevel
+                    node.editorTextValue = content
+                    node.editorSelectedOption = level
                 }
                 return registered
             }
-            return EduKnowledgeNode(
-                name: S("template.knowledge"),
-                content: modelRule.templateFocus(isChinese: isChinese),
-                level: templateConfig.knowledgeLevel
-            )
-        }()
-        add(knowledgeNode, type: EduNodeType.knowledge, x: 0, y: 0, role: "knowledge")
-        markLayout(knowledgeNode, type: EduNodeType.knowledge, column: 1, preferredY: -70)
+            return EduKnowledgeNode(name: title, content: content, level: level)
+        }
 
-        let presets = modelRule.toolkitPresetIDs
-            .compactMap { presetID in
-                toolkitPresets().first(where: { $0.id == presetID })
-            }
-        let selectedPresets = presets.isEmpty
-            ? Array(toolkitPresets().prefix(templateConfig.toolkitCount))
-            : Array(presets.prefix(templateConfig.toolkitCount))
-
-        var toolkitNodes: [any GNode] = []
-        for (index, preset) in selectedPresets.enumerated() {
-            let placement = toolkitPlacement(forPresetID: preset.id)
-            let toolkitNode: any GNode = {
-                if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: placement.nodeType) {
-                    registered.attributes.name = "\(S("template.toolkit")): \(preset.title(isChinese: isChinese))"
-                    if let node = registered as? any NodeTextEditable {
-                        node.editorTextValue = preset.intent(isChinese: isChinese)
-                    }
-                    if let node = registered as? EduToolkitNode {
-                        node.editorSelectedMethodID = placement.methodID
-                    }
-                    return registered
+        func makeToolkitNode(
+            title: String,
+            content: String,
+            category: EduToolkitCategory,
+            methodID: String
+        ) -> (any GNode, String) {
+            let nodeType = toolkitNodeType(for: category)
+            if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: nodeType) {
+                registered.attributes.name = title
+                if let node = registered as? any NodeTextEditable {
+                    node.editorTextValue = content
                 }
-                return EduToolkitNode(
-                    name: "\(S("template.toolkit")): \(preset.title(isChinese: isChinese))",
-                    category: placement.category,
-                    value: preset.intent(isChinese: isChinese),
-                    selectedMethodID: placement.methodID
-                )
-            }()
-            add(toolkitNode, type: placement.nodeType, x: 0, y: 0, role: "toolkit")
-            markLayout(
-                toolkitNode,
-                type: placement.nodeType,
+                if let node = registered as? EduToolkitNode {
+                    node.editorSelectedMethodID = methodID
+                }
+                return (registered, nodeType)
+            }
+            let fallback = EduToolkitNode(
+                name: title,
+                category: category,
+                value: content,
+                selectedMethodID: methodID
+            )
+            return (fallback, nodeType)
+        }
+
+        var nodesByID: [String: any GNode] = [:]
+
+        func addKnowledge(
+            id: String,
+            title: String,
+            content: String,
+            level: String,
+            column: Int,
+            preferredY: Double
+        ) {
+            let node = makeKnowledgeNode(title: title, content: content, level: level)
+            nodesByID[id] = node
+            add(node, type: EduNodeType.knowledge, x: 0, y: 0, role: "knowledge")
+            markLayout(node, type: EduNodeType.knowledge, column: column, preferredY: preferredY)
+        }
+
+        func addToolkit(
+            id: String,
+            title: String,
+            content: String,
+            category: EduToolkitCategory,
+            methodID: String,
+            column: Int,
+            preferredY: Double
+        ) {
+            let (node, nodeType) = makeToolkitNode(
+                title: title,
+                content: content,
+                category: category,
+                methodID: methodID
+            )
+            nodesByID[id] = node
+            add(node, type: nodeType, x: 0, y: 0, role: "toolkit")
+            markLayout(node, type: nodeType, column: column, preferredY: preferredY)
+        }
+
+        func connect(_ sourceID: String, _ targetID: String) {
+            guard let source = nodesByID[sourceID], let target = nodesByID[targetID] else { return }
+            connectFirstOutput(from: source, to: target, inputIndex: 0, in: graph)
+        }
+
+        switch modelRule.id {
+        case "ubd":
+            addKnowledge(
+                id: "k1",
+                title: L("UbD 阶段1：预期结果", "UbD Stage 1: Desired Results"),
+                content: "\(focusText)\n\(L("聚焦可迁移的大概念与关键表现。", "Focus on transfer goals and key performances."))\n\(L("核心目标：", "Core objective:")) \(primaryGoal)",
+                level: levelAnalyze,
+                column: 0,
+                preferredY: -320
+            )
+            addKnowledge(
+                id: "k2",
+                title: L("UbD 阶段2：可接受证据", "UbD Stage 2: Acceptable Evidence"),
+                content: L("明确可观察证据、表现任务与达成标准。", "Define observable evidence, performance tasks, and success criteria."),
+                level: levelEvaluate,
+                column: 1,
+                preferredY: -320
+            )
+            addKnowledge(
+                id: "k3",
+                title: L("UbD 阶段3：学习体验规划", "UbD Stage 3: Learning Plan"),
+                content: L("围绕证据倒推课堂活动与知识顺序。", "Back-design learning experiences from evidence."),
+                level: levelApply,
                 column: 2,
-                preferredY: -250 + Double(index) * 230
+                preferredY: -320
             )
-            toolkitNodes.append(toolkitNode)
-        }
-
-        var metricNodes: [any GNode] = []
-        for (index, input) in templateConfig.metricInputs.enumerated() {
-            let metricNode: any GNode = {
-                if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: EduNodeType.metricValue) {
-                    registered.attributes.name = input.displayName
-                    if let node = registered as? NumNode {
-                        node.setValue(NumData(input.defaultValue))
-                    }
-                    return registered
-                }
-                return NumNode(name: input.displayName, value: NumData(input.defaultValue))
-            }()
-            add(metricNode, type: EduNodeType.metricValue, x: 0, y: 0, role: "metric_value")
-            markLayout(
-                metricNode,
-                type: EduNodeType.metricValue,
+            addToolkit(
+                id: "t1",
+                title: L("导入与诊断", "Hook & Diagnose"),
+                content: L("激活先验知识，明确学习挑战。", "Activate prior knowledge and surface learning challenges."),
+                category: .perceptionInquiry,
+                methodID: "context_hook",
                 column: 3,
-                preferredY: -260 + Double(index) * 180
+                preferredY: 320
             )
-            metricNodes.append(metricNode)
-        }
+            addToolkit(
+                id: "t2",
+                title: L("任务建构", "Build Through Task"),
+                content: L("以任务驱动产出学习证据。", "Use task-driven activities to generate evidence."),
+                category: .constructionPrototype,
+                methodID: "low_fidelity_prototype",
+                column: 4,
+                preferredY: 320
+            )
+            addToolkit(
+                id: "t3",
+                title: L("讨论表达", "Discussion & Expression"),
+                content: L("通过结构化讨论解释理解。", "Explain understanding through structured discussion."),
+                category: .communicationNegotiation,
+                methodID: "structured_debate",
+                column: 5,
+                preferredY: 320
+            )
+            addToolkit(
+                id: "t4",
+                title: L("收束反思", "Reflect & Close"),
+                content: L("课堂收束，形成下一步改进。", "Close the lesson and capture next-step improvements."),
+                category: .regulationMetacognition,
+                methodID: "reflection_protocol",
+                column: 6,
+                preferredY: 320
+            )
 
-        let metricExpression = metricExpression(
-            for: templateConfig.metricInputs,
-            modelID: modelRule.id
-        )
-        let metricScript: any GNode = {
-            if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: EduNodeType.evaluationMetric) {
-                registered.attributes.name = S("template.evaluationMetric")
-                if let node = registered as? ScriptNode {
-                    node.setExpression(metricExpression)
-                }
-                return registered
-            }
-            return ScriptNode(name: S("template.evaluationMetric"), expression: metricExpression)
-        }()
-        add(metricScript, type: EduNodeType.evaluationMetric, x: 0, y: 0, role: "evaluation_metric")
-        markLayout(metricScript, type: EduNodeType.evaluationMetric, column: 4, preferredY: -80)
+            connect("k1", "k2")
+            connect("k2", "k3")
+            connect("k3", "t1")
+            connect("t1", "t2")
+            connect("t2", "t3")
+            connect("t3", "t4")
+            connect("k2", "t2")
+            connect("k2", "t3")
+            connect("k2", "t4")
 
-        let summaryExpression = """
-		function process(metricScore, metricFocus) {
-		    var m = Number(metricScore) || 0;
-		    var focusText = String(metricFocus || "");
-		    var overall = m;
-		    var level = overall >= 85 ? "A" : (overall >= 70 ? "B" : "C");
-		    var modelHint = \(jsQuoted(modelRule.templateFocus(isChinese: isChinese)));
-		    var summary = modelHint + " | " + focusText;
-		    return { overall: overall, level: level, summary: summary };
-		}
-		"""
-        let summaryScript: any GNode = {
-            if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: EduNodeType.evaluationSummary) {
-                registered.attributes.name = S("template.evaluationSummary")
-                if let node = registered as? ScriptNode {
-                    node.setExpression(summaryExpression)
-                }
-                return registered
-            }
-            return ScriptNode(name: S("template.evaluationSummary"), expression: summaryExpression)
-        }()
-        add(summaryScript, type: EduNodeType.evaluationSummary, x: 0, y: 0, role: "evaluation_summary")
-        markLayout(summaryScript, type: EduNodeType.evaluationSummary, column: 5, preferredY: -80)
+        case "fivee":
+            addKnowledge(
+                id: "k1",
+                title: "5E Engage",
+                content: L("用现象或冲突问题激发兴趣，并提出驱动问题。", "Spark curiosity with a puzzling phenomenon and frame a driving question."),
+                level: levelRemember,
+                column: 0,
+                preferredY: -320
+            )
+            addToolkit(
+                id: "t1",
+                title: L("Engage 工具", "Engage Toolkit"),
+                content: L("情境导入与兴趣激活。", "Context hook for motivation."),
+                category: .perceptionInquiry,
+                methodID: "context_hook",
+                column: 0,
+                preferredY: 320
+            )
+            addKnowledge(
+                id: "k2",
+                title: "5E Explore",
+                content: L("围绕问题开展观察、实验与证据采集。", "Run exploration and evidence collection."),
+                level: levelAnalyze,
+                column: 1,
+                preferredY: -320
+            )
+            addToolkit(
+                id: "t2",
+                title: L("Explore 工具", "Explore Toolkit"),
+                content: L("观察记录与数据采集。", "Field observation and data capture."),
+                category: .perceptionInquiry,
+                methodID: "field_observation",
+                column: 1,
+                preferredY: 320
+            )
+            addKnowledge(
+                id: "k3",
+                title: "5E Explain",
+                content: L("组织证据并构建概念解释。", "Organize evidence and build explanations."),
+                level: levelUnderstand,
+                column: 2,
+                preferredY: -320
+            )
+            addToolkit(
+                id: "t3",
+                title: L("Explain 工具", "Explain Toolkit"),
+                content: L("同伴讨论与观点澄清。", "Peer discussion for conceptual clarification."),
+                category: .communicationNegotiation,
+                methodID: "structured_debate",
+                column: 2,
+                preferredY: 320
+            )
+            addKnowledge(
+                id: "k4",
+                title: "5E Elaborate",
+                content: L("迁移应用到新情境。", "Transfer learning to new situations."),
+                level: levelApply,
+                column: 3,
+                preferredY: -320
+            )
+            addToolkit(
+                id: "t4",
+                title: L("Elaborate 工具", "Elaborate Toolkit"),
+                content: L("通过原型/任务强化迁移。", "Use task/prototype activities for transfer."),
+                category: .constructionPrototype,
+                methodID: "story_construction",
+                column: 3,
+                preferredY: 320
+            )
+            addKnowledge(
+                id: "k5",
+                title: "5E Evaluate",
+                content: L("总结本课达成与下一步。", "Summarize achievement and next steps."),
+                level: levelEvaluate,
+                column: 4,
+                preferredY: -320
+            )
+            addToolkit(
+                id: "t5",
+                title: L("Evaluate 工具", "Evaluate Toolkit"),
+                content: L("反思与自我监控。", "Reflection and self-monitoring."),
+                category: .regulationMetacognition,
+                methodID: "reflection_protocol",
+                column: 4,
+                preferredY: 320
+            )
 
-        connectFirstOutput(from: courseInfoNode, to: knowledgeNode, inputIndex: 0, in: graph)
-        connectFirstOutput(from: goalsNode, to: knowledgeNode, inputIndex: 0, in: graph)
-        if let firstToolkit = toolkitNodes.first {
-            connectOutput(from: knowledgeNode, outputIndex: 0, to: firstToolkit, inputIndex: 0, in: graph)
-            connectFirstOutput(from: courseInfoNode, to: firstToolkit, inputIndex: 0, in: graph)
-        }
-        if toolkitNodes.count > 1 {
-            for index in 0..<(toolkitNodes.count - 1) {
-                connectFirstOutput(from: toolkitNodes[index], to: toolkitNodes[index + 1], inputIndex: 0, in: graph)
-            }
-        }
+            connect("k1", "t1")
+            connect("t1", "k2")
+            connect("k2", "t2")
+            connect("t2", "k3")
+            connect("k3", "t3")
+            connect("t3", "k4")
+            connect("k4", "t4")
+            connect("t4", "k5")
+            connect("k5", "t5")
 
-        for (index, node) in metricNodes.enumerated() {
-            connectFirstOutput(from: node, to: metricScript, inputIndex: index, in: graph)
-        }
+        case "kolb":
+            addKnowledge(
+                id: "k1",
+                title: L("Kolb 具体体验", "Kolb: Concrete Experience"),
+                content: L("从真实体验切入，形成可观察的学习起点。", "Begin with a concrete experience that creates an observable learning entry point."),
+                level: levelRemember,
+                column: 0,
+                preferredY: -300
+            )
+            addToolkit(
+                id: "t1",
+                title: L("体验采集工具", "Experience Capture Toolkit"),
+                content: L("通过观察或情境任务采集第一手体验证据。", "Capture first-hand experience evidence from observation/context tasks."),
+                category: .perceptionInquiry,
+                methodID: "field_observation",
+                column: 0,
+                preferredY: 300
+            )
+            addKnowledge(
+                id: "k2",
+                title: L("Kolb 反思观察", "Kolb: Reflective Observation"),
+                content: L("记录关键现象与疑问。", "Capture patterns and reflective questions."),
+                level: levelAnalyze,
+                column: 1,
+                preferredY: -300
+            )
+            addToolkit(
+                id: "t2",
+                title: L("反思工具", "Reflection Toolkit"),
+                content: L("结构化反思与监控。", "Structured reflection and monitoring."),
+                category: .regulationMetacognition,
+                methodID: "metacognitive_routine",
+                column: 1,
+                preferredY: 300
+            )
+            addKnowledge(
+                id: "k3",
+                title: L("Kolb 抽象概念化", "Kolb: Abstract Conceptualization"),
+                content: L("形成概念模型与解释框架。", "Form abstract models and conceptual frameworks."),
+                level: levelUnderstand,
+                column: 2,
+                preferredY: -300
+            )
+            addToolkit(
+                id: "t3",
+                title: L("建构工具", "Concept Build Toolkit"),
+                content: L("用可视化产出表达概念。", "Externalize concepts via construction."),
+                category: .constructionPrototype,
+                methodID: "story_construction",
+                column: 2,
+                preferredY: 300
+            )
+            addKnowledge(
+                id: "k4",
+                title: L("Kolb 主动实验", "Kolb: Active Experimentation"),
+                content: L("在新任务中验证概念并形成下一轮体验入口。", "Test concepts in new tasks and produce the entry point for the next cycle."),
+                level: levelApply,
+                column: 3,
+                preferredY: -300
+            )
+            addToolkit(
+                id: "t4",
+                title: L("实验沟通工具", "Experiment & Share Toolkit"),
+                content: L("协商改进方案并沉淀下一轮起始任务。", "Collaboratively refine and package the next-round starting task."),
+                category: .communicationNegotiation,
+                methodID: "pogil",
+                column: 3,
+                preferredY: 300
+            )
 
-        connectOutput(from: metricScript, outputIndex: 0, to: summaryScript, inputIndex: 0, in: graph)
-        if let lastToolkit = toolkitNodes.last {
-            connectOutput(from: lastToolkit, outputIndex: 0, to: summaryScript, inputIndex: 1, in: graph)
-        } else {
-            connectOutput(from: metricScript, outputIndex: 2, to: summaryScript, inputIndex: 1, in: graph)
+            connect("k1", "t1")
+            connect("t1", "k2")
+            connect("k2", "t2")
+            connect("t2", "k3")
+            connect("k3", "t3")
+            connect("t3", "k4")
+            connect("k4", "t4")
+
+        case "boppps":
+            addKnowledge(
+                id: "k1",
+                title: "BOPPPS Bridge-in",
+                content: L("通过简短导入快速进入问题情境。", "Use a short bridge-in to enter the lesson problem quickly."),
+                level: levelRemember,
+                column: 0,
+                preferredY: -300
+            )
+            addToolkit(
+                id: "t1",
+                title: L("Bridge-in 工具", "Bridge-in Toolkit"),
+                content: L("导入与注意力聚焦。", "Attention and context activation."),
+                category: .perceptionInquiry,
+                methodID: "context_hook",
+                column: 0,
+                preferredY: 300
+            )
+            addKnowledge(
+                id: "k2",
+                title: "BOPPPS Objective",
+                content: "\(L("本课核心目标：", "Core lesson objective:")) \(primaryGoal)",
+                level: levelUnderstand,
+                column: 1,
+                preferredY: -300
+            )
+            addKnowledge(
+                id: "k3",
+                title: "BOPPPS Pre-assessment",
+                content: L("明确起点与已有认知。", "Clarify baseline understanding."),
+                level: levelAnalyze,
+                column: 2,
+                preferredY: -300
+            )
+            addToolkit(
+                id: "t2",
+                title: L("Pre-assessment 工具", "Pre-assessment Toolkit"),
+                content: L("使用量规/核查快速诊断。", "Use checklist/rubric for quick diagnosis."),
+                category: .regulationMetacognition,
+                methodID: "rubric_checklist",
+                column: 2,
+                preferredY: 300
+            )
+            addKnowledge(
+                id: "k4",
+                title: "BOPPPS Participatory",
+                content: L("进入参与式学习主活动。", "Run the participatory learning core."),
+                level: levelApply,
+                column: 3,
+                preferredY: 0
+            )
+            addToolkit(
+                id: "t3",
+                title: L("参与路径A", "Participatory Path A"),
+                content: L("讨论协商路径。", "Discussion-driven participatory path."),
+                category: .communicationNegotiation,
+                methodID: "world_cafe",
+                column: 4,
+                preferredY: -300
+            )
+            addToolkit(
+                id: "t4",
+                title: L("参与路径B", "Participatory Path B"),
+                content: L("建构产出路径。", "Construction/prototype participatory path."),
+                category: .constructionPrototype,
+                methodID: "low_fidelity_prototype",
+                column: 4,
+                preferredY: 300
+            )
+            addKnowledge(
+                id: "k5",
+                title: "BOPPPS Post-assessment",
+                content: L("汇总学习结果并确认达成。", "Post-assess performance and outcomes."),
+                level: levelEvaluate,
+                column: 5,
+                preferredY: 0
+            )
+            addToolkit(
+                id: "t5",
+                title: L("Summary 工具", "Summary Toolkit"),
+                content: L("反思收束并迁移到下一课。", "Reflection and transfer for next lesson."),
+                category: .regulationMetacognition,
+                methodID: "reflection_protocol",
+                column: 6,
+                preferredY: 300
+            )
+            addKnowledge(
+                id: "k6",
+                title: "BOPPPS Summary",
+                content: L("沉淀关键结论与课后行动。", "Capture key takeaways and follow-up actions."),
+                level: levelCreate,
+                column: 6,
+                preferredY: -300
+            )
+
+            connect("k1", "t1")
+            connect("t1", "k2")
+            connect("k2", "k3")
+            connect("k3", "t2")
+            connect("t2", "k4")
+            connect("k4", "t3")
+            connect("k4", "t4")
+            connect("t3", "k5")
+            connect("t4", "k5")
+            connect("k5", "t5")
+            connect("t5", "k6")
+
+        case "gagne9":
+            addKnowledge(id: "k1", title: L("Gagné 事件1：引起注意", "Gagné 1: Gain Attention"), content: L("用简短刺激引发注意并建立任务期待。", "Use a concise stimulus to gain attention and set task expectation."), level: levelRemember, column: 0, preferredY: -300)
+            addToolkit(id: "t1", title: L("事件1工具", "Event 1 Toolkit"), content: L("快速导入与注意力聚焦。", "Hook and focus attention."), category: .perceptionInquiry, methodID: "context_hook", column: 0, preferredY: 300)
+            addKnowledge(id: "k2", title: L("Gagné 事件2：告知目标", "Gagné 2: Inform Objectives"), content: "\(L("本课核心目标：", "Core lesson objective:")) \(primaryGoal)", level: levelUnderstand, column: 1, preferredY: -300)
+            addKnowledge(id: "k3", title: L("Gagné 事件3：唤醒旧知", "Gagné 3: Stimulate Recall"), content: L("连接先修知识与本课重点。", "Activate prior knowledge linked to this lesson."), level: levelUnderstand, column: 2, preferredY: -300)
+            addKnowledge(id: "k4", title: L("Gagné 事件4：呈现内容", "Gagné 4: Present Content"), content: focusText, level: levelAnalyze, column: 3, preferredY: -300)
+            addToolkit(id: "t2", title: L("事件4工具", "Event 4 Toolkit"), content: L("多源资料呈现关键知识。", "Present key content through source analysis."), category: .perceptionInquiry, methodID: "source_analysis", column: 3, preferredY: 300)
+            addKnowledge(id: "k5", title: L("Gagné 事件5：提供指导", "Gagné 5: Provide Guidance"), content: L("给出策略与思维支架。", "Provide strategy and cognitive scaffolds."), level: levelApply, column: 4, preferredY: -300)
+            addToolkit(id: "t3", title: L("事件5工具", "Event 5 Toolkit"), content: L("通过讨论组织指导。", "Use guided discussion for scaffolding."), category: .communicationNegotiation, methodID: "structured_debate", column: 4, preferredY: 300)
+            addKnowledge(id: "k6", title: L("Gagné 事件6：引出表现", "Gagné 6: Elicit Performance"), content: L("组织练习并产出表现。", "Elicit learner performance through practice."), level: levelApply, column: 5, preferredY: -300)
+            addToolkit(id: "t4", title: L("事件6工具", "Event 6 Toolkit"), content: L("任务驱动练习与建构输出。", "Task-driven practice with tangible output."), category: .constructionPrototype, methodID: "low_fidelity_prototype", column: 5, preferredY: 300)
+            addKnowledge(id: "k7", title: L("Gagné 事件7：提供反馈", "Gagné 7: Provide Feedback"), content: L("面向表现给出可操作反馈。", "Provide actionable feedback on performance."), level: levelEvaluate, column: 6, preferredY: -300)
+            addToolkit(id: "t5", title: L("事件7工具", "Event 7 Toolkit"), content: L("同伴协商反馈与修正。", "Peer feedback and collaborative refinement."), category: .communicationNegotiation, methodID: "world_cafe", column: 6, preferredY: 300)
+            addKnowledge(id: "k8", title: L("Gagné 事件8：检核表现", "Gagné 8: Assess Performance"), content: L("检核学习表现和完成度。", "Assess mastery and performance quality."), level: levelEvaluate, column: 7, preferredY: -300)
+            addKnowledge(id: "k9", title: L("Gagné 事件9：促进迁移保持", "Gagné 9: Retention & Transfer"), content: L("巩固要点并迁移到新任务。", "Consolidate and transfer to new tasks."), level: levelCreate, column: 8, preferredY: -300)
+            addToolkit(id: "t6", title: L("事件9工具", "Event 9 Toolkit"), content: L("反思收束与迁移计划。", "Reflection closure with transfer planning."), category: .regulationMetacognition, methodID: "reflection_protocol", column: 8, preferredY: 300)
+
+            connect("k1", "t1")
+            connect("t1", "k2")
+            connect("k2", "k3")
+            connect("k3", "k4")
+            connect("k4", "t2")
+            connect("t2", "k5")
+            connect("k5", "t3")
+            connect("t3", "k6")
+            connect("k6", "t4")
+            connect("t4", "k7")
+            connect("k7", "t5")
+            connect("t5", "k8")
+            connect("k8", "k9")
+            connect("k9", "t6")
+
+        default:
+            addKnowledge(
+                id: "k1",
+                title: S("template.knowledge"),
+                content: "\(focusText)\n\(L("核心目标：", "Core objective:")) \(primaryGoal)",
+                level: levelUnderstand,
+                column: 0,
+                preferredY: -260
+            )
+            addToolkit(
+                id: "t1",
+                title: "\(S("template.toolkit")) 1",
+                content: L("先完成导入与观察。", "Start with context and observation."),
+                category: .perceptionInquiry,
+                methodID: "context_hook",
+                column: 1,
+                preferredY: 260
+            )
+            addToolkit(
+                id: "t2",
+                title: "\(S("template.toolkit")) 2",
+                content: L("再进行产出与表达。", "Then move to construction and expression."),
+                category: .constructionPrototype,
+                methodID: "story_construction",
+                column: 2,
+                preferredY: 260
+            )
+            connect("k1", "t1")
+            connect("t1", "t2")
         }
 
         let resolvedLayout = resolveTemplateLayout(for: templateLayoutNodes)
@@ -1206,6 +1667,25 @@ enum EduPlanning {
         roles(in: data).contains(role)
     }
 
+    static func hasEvaluationDesign(in data: Data) -> Bool {
+        guard let document = try? decodeDocument(from: data) else { return false }
+
+        if document.nodes.contains(where: { node in
+            node.nodeType == EduNodeType.evaluation
+        }) {
+            return true
+        }
+
+        // Backward compatibility for legacy evaluation chain and sample roles.
+        let roleSet = Set(document.nodes.compactMap { node in
+            parseRole(from: node.attributes.description)
+        })
+        if roleSet.contains("evaluation") {
+            return true
+        }
+        return roleSet.contains("evaluation_metric") && roleSet.contains("evaluation_summary")
+    }
+
     static func isZhuhaiSampleData(_ data: Data) -> Bool {
         guard let document = try? decodeDocument(from: data) else { return false }
         return isZhuhaiSample(document)
@@ -1347,151 +1827,6 @@ enum EduPlanning {
         connectOutput(from: source, outputIndex: 0, to: target, inputIndex: inputIndex, in: graph)
     }
 
-    private static func modelTemplateConfig(for modelID: String, isChinese: Bool) -> ModelTemplateConfig {
-        switch modelID {
-        case "collaborative":
-            return ModelTemplateConfig(
-                toolkitCount: 3,
-                knowledgeLevel: S("edu.knowledge.type.apply"),
-                metricInputs: [
-                    ModelMetricInput(key: "knowledge", displayName: S("template.metricKnowledge"), defaultValue: 74),
-                    ModelMetricInput(key: "engagement", displayName: S("template.metricEngagement"), defaultValue: 81),
-                    ModelMetricInput(key: "participation", displayName: S("template.metricParticipation"), defaultValue: 83),
-                    ModelMetricInput(key: "collaboration", displayName: S("template.metricCollaboration"), defaultValue: 80)
-                ]
-            )
-
-        case "inquiry":
-            return ModelTemplateConfig(
-                toolkitCount: 3,
-                knowledgeLevel: S("edu.knowledge.type.analyze"),
-                metricInputs: [
-                    ModelMetricInput(key: "knowledge", displayName: S("template.metricKnowledge"), defaultValue: 76),
-                    ModelMetricInput(key: "engagement", displayName: S("template.metricEngagement"), defaultValue: 78),
-                    ModelMetricInput(key: "participation", displayName: S("template.metricParticipation"), defaultValue: 79),
-                    ModelMetricInput(key: "questioning", displayName: S("template.metricQuestioning"), defaultValue: 82)
-                ]
-            )
-
-        case "constructivism":
-            return ModelTemplateConfig(
-                toolkitCount: 3,
-                knowledgeLevel: S("edu.knowledge.type.understand"),
-                metricInputs: [
-                    ModelMetricInput(key: "knowledge", displayName: S("template.metricKnowledge"), defaultValue: 72),
-                    ModelMetricInput(key: "engagement", displayName: S("template.metricEngagement"), defaultValue: 79),
-                    ModelMetricInput(key: "participation", displayName: S("template.metricParticipation"), defaultValue: 77)
-                ]
-            )
-
-        default:
-            return ModelTemplateConfig(
-                toolkitCount: 3,
-                knowledgeLevel: S("edu.knowledge.type.apply"),
-                metricInputs: [
-                    ModelMetricInput(key: "knowledge", displayName: S("template.metricKnowledge"), defaultValue: 78),
-                    ModelMetricInput(key: "engagement", displayName: S("template.metricEngagement"), defaultValue: 82),
-                    ModelMetricInput(key: "participation", displayName: S("template.metricParticipation"), defaultValue: 75)
-                ]
-            )
-        }
-    }
-
-    private static func toolkitPlacement(forPresetID presetID: String) -> ToolkitPlacement {
-        switch presetID {
-        case "context-hook":
-            return ToolkitPlacement(
-                nodeType: EduNodeType.toolkitPerceptionInquiry,
-                category: .perceptionInquiry,
-                methodID: "context_hook"
-            )
-        case "experiment-observe":
-            return ToolkitPlacement(
-                nodeType: EduNodeType.toolkitPerceptionInquiry,
-                category: .perceptionInquiry,
-                methodID: "field_observation"
-            )
-        case "peer-discussion":
-            return ToolkitPlacement(
-                nodeType: EduNodeType.toolkitCommunicationNegotiation,
-                category: .communicationNegotiation,
-                methodID: "structured_debate"
-            )
-        case "task-driven":
-            return ToolkitPlacement(
-                nodeType: EduNodeType.toolkitConstructionPrototype,
-                category: .constructionPrototype,
-                methodID: "low_fidelity_prototype"
-            )
-        case "contrast-analysis":
-            return ToolkitPlacement(
-                nodeType: EduNodeType.toolkitPerceptionInquiry,
-                category: .perceptionInquiry,
-                methodID: "source_analysis"
-            )
-        case "exit-ticket":
-            return ToolkitPlacement(
-                nodeType: EduNodeType.toolkitRegulationMetacognition,
-                category: .regulationMetacognition,
-                methodID: "reflection_protocol"
-            )
-        default:
-            return ToolkitPlacement(
-                nodeType: EduNodeType.toolkitCommunicationNegotiation,
-                category: .communicationNegotiation,
-                methodID: "role_play"
-            )
-        }
-    }
-
-    private static func metricExpression(for inputs: [ModelMetricInput], modelID: String) -> String {
-        let parameterList = inputs.map(\.key).joined(separator: ", ")
-        let valueLines = inputs.map { input in
-            "    var \(input.key)Value = Number(\(input.key)) || 0;"
-        }.joined(separator: "\n")
-
-        let weights: [Double]
-        switch modelID {
-        case "collaborative":
-            weights = [0.30, 0.20, 0.25, 0.25]
-        case "inquiry":
-            weights = [0.35, 0.20, 0.25, 0.20]
-        case "constructivism":
-            weights = [0.45, 0.35, 0.20]
-        default:
-            weights = [0.55, 0.25, 0.20]
-        }
-
-        let normalizedWeights: [Double]
-        if weights.count == inputs.count {
-            normalizedWeights = weights
-        } else {
-            normalizedWeights = Array(repeating: 1.0 / Double(max(1, inputs.count)), count: inputs.count)
-        }
-
-        let scoreExpr = zip(inputs, normalizedWeights)
-            .map { input, weight in "\(input.key)Value * \(String(format: "%.4f", weight))" }
-            .joined(separator: " + ")
-        let labelsArray = "[\(inputs.map { jsQuoted($0.displayName) }.joined(separator: ", "))]"
-        let valuesArray = "[\(inputs.map { "\($0.key)Value" }.joined(separator: ", "))]"
-
-        return """
-function process(\(parameterList)) {
-\(valueLines)
-    var score = \(scoreExpr);
-    var level = score >= 85 ? "A" : (score >= 70 ? "B" : "C");
-    var labels = \(labelsArray);
-    var values = \(valuesArray);
-    var weakIndex = 0;
-    for (var i = 1; i < values.length; i++) {
-        if (values[i] < values[weakIndex]) weakIndex = i;
-    }
-    var focus = labels.length > 0 ? labels[weakIndex] : "General";
-    return { score: score, level: level, focus: focus };
-}
-"""
-    }
-
     private static func connectOutput(
         from source: any GNode,
         outputIndex: Int,
@@ -1530,74 +1865,69 @@ function process(\(parameterList)) {
     "id": "ubd",
     "name_en": "Understanding by Design (UbD)",
     "name_zh": "逆向设计（UbD）",
-    "description_en": "Start from outcomes and evidence, then design learning activities.",
-    "description_zh": "先确定目标和证据，再反推教学活动。",
+    "description_en": "Design backward from outcomes and evidence, then plan learning experiences.",
+    "description_zh": "从目标与证据逆向规划学习体验。",
     "grade_hints": ["middle", "high", "初中", "高中"],
     "subject_hints": ["science", "math", "history", "理", "文"],
-    "scenario_hints": ["formal", "class", "课堂"],
-    "toolkit_preset_ids": ["context-hook", "contrast-analysis", "exit-ticket"],
-    "template_focus_en": "Core understanding and transfer evidence",
-    "template_focus_zh": "核心理解与迁移证据"
+    "scenario_hints": ["outcome", "evidence", "标准", "目标", "unit"],
+    "toolkit_preset_ids": ["context-hook", "task-driven", "exit-ticket"],
+    "template_focus_en": "Desired results, evidence, and aligned learning plan",
+    "template_focus_zh": "预期结果、证据与对齐的学习规划"
   },
   {
-    "id": "constructivism",
-    "name_en": "Constructivism",
-    "name_zh": "建构主义",
-    "description_en": "Build new knowledge from prior ideas through interaction.",
-    "description_zh": "通过互动在原有认知上建构新知识。",
+    "id": "fivee",
+    "name_en": "5E Instructional Model",
+    "name_zh": "5E 探究模型",
+    "description_en": "Use Engage-Explore-Explain-Elaborate-Evaluate as an inquiry sequence.",
+    "description_zh": "以 Engage-Explore-Explain-Elaborate-Evaluate 形成探究序列。",
     "grade_hints": ["elementary", "middle", "小学", "初中"],
-    "subject_hints": ["language", "social", "语文", "社会"],
-    "scenario_hints": ["workshop", "discussion", "研讨", "讨论"],
-    "toolkit_preset_ids": ["context-hook", "peer-discussion", "task-driven"],
-    "template_focus_en": "Activate prior concept and reconstruct understanding",
-    "template_focus_zh": "激活旧知并重构新概念"
+    "subject_hints": ["science", "physics", "chemistry", "科学", "实验"],
+    "scenario_hints": ["inquiry", "experiment", "探究", "实验", "question"],
+    "toolkit_preset_ids": ["context-hook", "experiment-observe", "peer-discussion"],
+    "template_focus_en": "Question-driven inquiry with progressive explanation and transfer",
+    "template_focus_zh": "问题驱动探究并逐步解释与迁移"
   },
   {
-    "id": "inquiry",
-    "name_en": "Inquiry-Based Learning",
-    "name_zh": "探究式学习",
-    "description_en": "Use questions and investigation cycles to drive learning.",
-    "description_zh": "以问题和探究循环驱动学习。",
+    "id": "kolb",
+    "name_en": "Kolb Experiential Cycle",
+    "name_zh": "Kolb 体验学习循环",
+    "description_en": "Learn through a cycle of experience, reflection, conceptualization, and experimentation.",
+    "description_zh": "通过体验、反思、概念化与实验形成学习循环。",
     "grade_hints": ["middle", "high", "初中", "高中"],
-    "subject_hints": ["science", "lab", "physics", "chemistry", "科学", "实验"],
-    "scenario_hints": ["lab", "project", "实验", "项目"],
-    "toolkit_preset_ids": ["experiment-observe", "peer-discussion", "exit-ticket"],
-    "template_focus_en": "Question formation and evidence-based explanation",
-    "template_focus_zh": "问题提出与证据解释"
+    "subject_hints": ["project", "practice", "engineering", "综合", "实践"],
+    "scenario_hints": ["cycle", "reflection", "iterate", "反思", "迭代"],
+    "toolkit_preset_ids": ["experiment-observe", "task-driven", "peer-discussion"],
+    "template_focus_en": "Experience-reflection-concept-experiment closed loop",
+    "template_focus_zh": "体验-反思-概念-实验闭环"
   },
   {
-    "id": "collaborative",
-    "name_en": "Collaborative Learning",
-    "name_zh": "合作学习",
-    "description_en": "Improve outcomes with structured collaboration and peer support.",
-    "description_zh": "通过结构化协作与互助提升学习成效。",
+    "id": "boppps",
+    "name_en": "BOPPPS",
+    "name_zh": "BOPPPS 模型",
+    "description_en": "Bridge-in, Objective, Pre-assessment, Participatory learning, Post-assessment, and Summary.",
+    "description_zh": "Bridge-in、Objective、Pre-assessment、Participatory、Post-assessment、Summary 六段短课结构。",
     "grade_hints": ["all", "全学段"],
-    "subject_hints": ["language", "project", "综合", "语文"],
-    "scenario_hints": ["class", "workshop", "课堂", "workshop"],
-    "toolkit_preset_ids": ["peer-discussion", "task-driven", "exit-ticket"],
-    "template_focus_en": "Shared task and peer feedback loop",
-    "template_focus_zh": "共同任务与同伴反馈闭环"
+    "subject_hints": ["language", "math", "science", "语文", "综合"],
+    "scenario_hints": ["micro", "short", "workshop", "短课", "微课"],
+    "toolkit_preset_ids": ["context-hook", "peer-discussion", "exit-ticket"],
+    "template_focus_en": "Concise lesson flow with strong participation and closure",
+    "template_focus_zh": "强调参与和收束的单课时流程"
+  },
+  {
+    "id": "gagne9",
+    "name_en": "Gagne's Nine Events",
+    "name_zh": "加涅九事件教学",
+    "description_en": "A highly structured sequence of nine instructional events.",
+    "description_zh": "九个教学事件组成的高结构化教学序列。",
+    "grade_hints": ["middle", "high", "初中", "高中"],
+    "subject_hints": ["math", "science", "technology", "理", "工"],
+    "scenario_hints": ["structured", "lecture", "step", "结构化", "讲授"],
+    "toolkit_preset_ids": ["context-hook", "contrast-analysis", "exit-ticket"],
+    "template_focus_en": "Stepwise event design from attention to transfer",
+    "template_focus_zh": "从注意到迁移的步骤化事件设计"
   }
 ]
 """
-}
-
-private struct ModelMetricInput {
-    let key: String
-    let displayName: String
-    let defaultValue: Double
-}
-
-private struct ModelTemplateConfig {
-    let toolkitCount: Int
-    let knowledgeLevel: String
-    let metricInputs: [ModelMetricInput]
-}
-
-private struct ToolkitPlacement {
-    let nodeType: String
-    let category: EduToolkitCategory
-    let methodID: String
 }
 
 private struct TemplateLayoutNode {

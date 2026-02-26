@@ -57,6 +57,8 @@ struct ContentView: View {
     @State private var isSidebarBasicInfoExpanded = false
     @State private var editorStatsByFileID: [UUID: NodeEditorCanvasStats] = [:]
     @State private var initialCameraFocusToken: UUID?
+    @State private var modelTemplatePreviewByID: [String: ModelTemplatePreview] = [:]
+    @State private var selectedModelTemplatePreviewID: String?
     private let presentationPersistenceDebugEnabled = true
 
     private let modelRules = EduPlanning.loadModelRules()
@@ -73,6 +75,14 @@ struct ContentView: View {
     private struct ResolvedPresentationSelection {
         let group: EduPresentationSlideGroup
         let slide: EduPresentationComposedSlide
+    }
+
+    private struct ModelTemplatePreview: Identifiable {
+        let id: String
+        let modelRuleID: String
+        let displayName: String
+        let documentID: UUID
+        var data: Data
     }
 
     var body: some View {
@@ -144,6 +154,7 @@ struct ContentView: View {
         }
         .onChange(of: selectedFileID) { _, _ in
             isSidebarBasicInfoExpanded = false
+            selectedModelTemplatePreviewID = nil
             requestCameraFocusOnFirstNodeForSelectedFile()
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -248,6 +259,7 @@ struct ContentView: View {
                     }
                 }
             }
+
         }
         .navigationTitle(S("app.files.title"))
         .toolbar {
@@ -284,7 +296,9 @@ struct ContentView: View {
 
     @ViewBuilder
     private func detailView(toolbarTopPadding: CGFloat, bottomSafeInset: CGFloat) -> some View {
-        if let file = selectedWorkspaceFile {
+        if let preview = selectedModelTemplatePreview {
+            modelTemplatePreviewDetailView(preview, toolbarTopPadding: toolbarTopPadding)
+        } else if let file = selectedWorkspaceFile {
             let rawDeck = EduPresentationPlanner.makeDeck(graphData: file.data)
             let deck = filteredPresentationDeck(for: file.id, from: rawDeck)
             let slideGroups = presentationGroups(for: file.id, deck: deck)
@@ -587,9 +601,172 @@ struct ContentView: View {
         return workspaceFiles.first
     }
 
+    private var selectedModelTemplatePreview: ModelTemplatePreview? {
+        guard let selectedModelTemplatePreviewID else { return nil }
+        return modelTemplatePreviewByID[selectedModelTemplatePreviewID]
+    }
+
     private func presentCreateCourseSheet() {
         creationDraft = CourseCreationDraft()
         showingCreateCourseSheet = true
+    }
+
+    private func showModelTemplatePreview(_ rule: EduModelRule) {
+        let chinese = isChineseUI()
+        if modelTemplatePreviewByID[rule.id] == nil {
+            let draft = modelTemplatePreviewDraft(for: rule, isChinese: chinese)
+            let data = EduPlanning.makeInitialDocumentData(
+                draft: draft,
+                modelRule: rule,
+                isChinese: chinese
+            )
+            modelTemplatePreviewByID[rule.id] = ModelTemplatePreview(
+                id: rule.id,
+                modelRuleID: rule.id,
+                displayName: rule.displayName(isChinese: chinese),
+                documentID: UUID(),
+                data: data
+            )
+        }
+
+        selectedModelTemplatePreviewID = rule.id
+        activePresentationModeFileID = nil
+        activePresentationStylingFileID = nil
+        presentationModeLoadingFileID = nil
+    }
+
+    private func modelTemplatePreviewDraft(for rule: EduModelRule, isChinese: Bool) -> CourseCreationDraft {
+        var draft = CourseCreationDraft()
+        let hintText = rule.gradeHints.joined(separator: " ").lowercased()
+        if hintText.contains("elementary") || hintText.contains("小学") {
+            draft.gradeMinText = "3"
+            draft.gradeMaxText = "5"
+        } else if hintText.contains("high") || hintText.contains("高中") {
+            draft.gradeMinText = "10"
+            draft.gradeMaxText = "11"
+        } else {
+            draft.gradeMinText = "7"
+            draft.gradeMaxText = "9"
+        }
+
+        draft.courseName = isChinese
+            ? "\(rule.displayName(isChinese: true)) 模板预览"
+            : "\(rule.displayName(isChinese: false)) Template Preview"
+        draft.subject = previewSubject(for: rule, isChinese: isChinese)
+        draft.lessonDurationMinutesText = "45"
+        draft.studentCountText = "30"
+        draft.priorAssessmentScoreText = "70"
+        draft.assignmentCompletionRateText = "75"
+        draft.supportNeedCountText = "4"
+        draft.studentSupportNotes = isChinese
+            ? "用于查看该模型的默认节点结构与连线。"
+            : "Used to inspect default node structure and connections for this model."
+        draft.goals = [
+            rule.templateFocus(isChinese: isChinese),
+            isChinese ? "检查每个节点输入输出与串联关系。" : "Review each node's IO and chaining."
+        ]
+        draft.modelID = rule.id
+        draft.leadTeacherCountText = "1"
+        draft.assistantTeacherCountText = "1"
+        draft.teacherRolePlan = isChinese
+            ? "主讲：讲解模型结构；助教：记录改进建议。"
+            : "Lead: explain model structure; TA: capture improvement notes."
+        draft.resourceConstraints = isChinese
+            ? "临时预览，不用于正式课堂。"
+            : "Temporary preview only, not a production lesson plan."
+        return draft
+    }
+
+    private func previewSubject(for rule: EduModelRule, isChinese: Bool) -> String {
+        let hints = rule.subjectHints.map { $0.lowercased() }
+        if hints.contains(where: { $0.contains("math") }) {
+            return isChinese ? "数学" : "Mathematics"
+        }
+        if hints.contains(where: { $0.contains("history") || $0 == "文" }) {
+            return isChinese ? "历史" : "History"
+        }
+        if hints.contains(where: { $0.contains("language") || $0.contains("语文") }) {
+            return isChinese ? "语文" : "Language Arts"
+        }
+        if hints.contains(where: { $0.contains("science") || $0.contains("lab") || $0.contains("理") }) {
+            return isChinese ? "科学" : "Science"
+        }
+        return isChinese ? "综合实践" : "Integrated Practice"
+    }
+
+    @ViewBuilder
+    private func sidebarModelTemplatePreviewRow(rule: EduModelRule) -> some View {
+        let chinese = isChineseUI()
+        let isSelected = selectedModelTemplatePreviewID == rule.id
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: isSelected ? "square.grid.3x3.fill" : "square.grid.3x3")
+                .foregroundStyle(isSelected ? .cyan : .secondary)
+                .font(.body.weight(.semibold))
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(rule.displayName(isChinese: chinese))
+                    .font(isSelected ? .body.weight(.semibold) : .body)
+                    .lineLimit(1)
+                Text(rule.templateFocus(isChinese: chinese))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if isSelected {
+                Text(chinese ? "预览中" : "Preview")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.cyan)
+            }
+        }
+        .contentShape(Rectangle())
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func modelTemplatePreviewDetailView(
+        _ preview: ModelTemplatePreview,
+        toolbarTopPadding: CGFloat
+    ) -> some View {
+        NodeEditorView(
+            documentID: preview.documentID,
+            documentData: preview.data,
+            toolbarLeadingPadding: 20 + topToolbarLeadingReservedWidth,
+            toolbarTrailingPadding: 20,
+            toolbarTopPadding: toolbarTopPadding,
+            showImportButton: false,
+            showStatsOverlay: false,
+            exportActions: [],
+            toolbarActions: [],
+            cameraRequest: cameraRequest,
+            customNodeMenuSections: eduNodeMenuSections,
+            topCenterOverlay: AnyView(
+                HStack(spacing: 8) {
+                    Image(systemName: "square.grid.3x3.fill")
+                    Text(
+                        isChineseUI()
+                        ? "模型模板预览：\(preview.displayName)"
+                        : "Template Preview: \(preview.displayName)"
+                    )
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+            ),
+            onDocumentDataChange: { data in
+                guard var cached = modelTemplatePreviewByID[preview.modelRuleID] else { return }
+                cached.data = data
+                modelTemplatePreviewByID[preview.modelRuleID] = cached
+            }
+        )
+        .id(preview.documentID)
+        .ignoresSafeArea(edges: [.top, .bottom])
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .background(Color(white: 0.1))
     }
 
     private func createWorkspaceFileFromDraft() {
@@ -682,7 +859,7 @@ struct ContentView: View {
                 "Explain observations using collected data.",
                 "Build one classroom chain: Knowledge -> Toolkit -> Knowledge."
             ]
-        draft.modelID = modelRules.first(where: { $0.id == "inquiry" })?.id ?? (modelRules.first?.id ?? "")
+        draft.modelID = modelRules.first(where: { $0.id == "fivee" })?.id ?? (modelRules.first?.id ?? "")
         draft.leadTeacherCountText = "1"
         draft.assistantTeacherCountText = "1"
         draft.teacherRolePlan = chinese
@@ -727,7 +904,7 @@ struct ContentView: View {
             studentMotivationLevel: "85",
             studentSupportNotes: isChinese ? "低龄组增加助教支持与结构示范。" : "Provide extra TA support and structure demo for younger groups.",
             goalsText: goals,
-            modelID: "inquiry",
+            modelID: "fivee",
             teacherTeam: isChinese ? "主讲1 + 助教4" : "Lead teacher 1 + TAs 4",
             leadTeacherCount: 1,
             assistantTeacherCount: 4,
@@ -1617,13 +1794,10 @@ struct ContentView: View {
     }
 
     private func flowStates(for file: GNodeWorkspaceFile) -> [EduFlowStepState] {
-        let roles = EduPlanning.roles(in: file.data)
-
         let basicInfoDone = isBasicInfoComplete(file)
         let modelDone = !file.modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let knowledgeToolkitDone = file.knowledgeToolkitMarkedDone
-        let evaluationDesignDone = roles.contains("evaluation_metric")
-            && roles.contains("evaluation_summary")
+        let evaluationDesignDone = EduPlanning.hasEvaluationDesign(in: file.data)
 
         let canMarkKnowledgeToolkit = true
         let canMarkLesson = knowledgeToolkitDone && evaluationDesignDone
@@ -1642,10 +1816,8 @@ struct ContentView: View {
     }
 
     private func toggleManualStep(_ step: EduFlowStep, for file: GNodeWorkspaceFile) {
-        let roles = EduPlanning.roles(in: file.data)
         let knowledgeToolkitDone = file.knowledgeToolkitMarkedDone
-        let evaluationDesignDone = roles.contains("evaluation_metric")
-            && roles.contains("evaluation_summary")
+        let evaluationDesignDone = EduPlanning.hasEvaluationDesign(in: file.data)
 
         switch step {
         case .knowledgeToolkit:
