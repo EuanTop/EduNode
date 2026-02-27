@@ -122,6 +122,8 @@ struct CourseCreationSheet: View {
     @State private var isSubjectDropdownExpanded = false
     @State private var expandedGoalRowID: UUID?
     @State private var expandedRoleRowID: UUID?
+    @State private var expandedStudentGroupRowID: UUID?
+    @State private var pendingStudentGroupTextByRowID: [UUID: String] = [:]
     @State private var showingStudentCSVImporter = false
 
     private let customSubjectTag = "__custom__"
@@ -365,7 +367,7 @@ struct CourseCreationSheet: View {
     }
 
     private var isAnyFormDropdownExpanded: Bool {
-        isSubjectDropdownExpanded || expandedGoalRowID != nil || expandedRoleRowID != nil
+        isSubjectDropdownExpanded || expandedGoalRowID != nil || expandedRoleRowID != nil || expandedStudentGroupRowID != nil
     }
 
     private var canGoNext: Bool {
@@ -476,6 +478,10 @@ struct CourseCreationSheet: View {
                 syncDraftExpectedOutputs()
             }
             .onChange(of: studentRows) { _, _ in
+                if let expandedStudentGroupRowID,
+                   !studentRows.contains(where: { $0.id == expandedStudentGroupRowID }) {
+                    self.expandedStudentGroupRowID = nil
+                }
                 syncDraftStudentRosterSummary()
             }
             .overlayPreferenceValue(CourseDropdownFieldAnchorKey.self) { anchors in
@@ -1675,7 +1681,7 @@ struct CourseCreationSheet: View {
                 roleDivisionHeaderText(isChinese ? "姓名" : "Name")
                     .frame(width: 130, alignment: .leading)
                 roleDivisionHeaderText(isChinese ? "分组" : "Group")
-                    .frame(width: 96, alignment: .leading)
+                    .frame(width: 128, alignment: .leading)
                 roleDivisionHeaderText(isChinese ? "年龄" : "Age")
                     .frame(width: 72, alignment: .leading)
                 Color.clear.frame(width: 18)
@@ -1702,23 +1708,10 @@ struct CourseCreationSheet: View {
                             .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
                     )
 
-                    TextField(
-                        isChinese ? "组别" : "Group",
-                        text: Binding(
-                            get: { studentRows[index].group },
-                            set: { studentRows[index].group = $0 }
-                        )
-                    )
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .frame(width: 96)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color.white.opacity(0.08))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
+                    studentGroupTagInput(
+                        rowID: studentRows[index].id,
+                        groupText: studentRows[index].group,
+                        width: 128
                     )
 
                     TextField(
@@ -1753,8 +1746,168 @@ struct CourseCreationSheet: View {
                     .buttonStyle(.plain)
                     .frame(width: 18)
                 }
+                .zIndex(expandedStudentGroupRowID == studentRows[index].id ? 1300 : 0)
             }
         }
+    }
+
+    @ViewBuilder
+    private func studentGroupTagInput(
+        rowID: UUID,
+        groupText: String,
+        width: CGFloat
+    ) -> some View {
+        let normalizedGroup = groupText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suggestions = suggestedStudentGroupTags(for: rowID)
+        let isExpanded = expandedStudentGroupRowID == rowID
+
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    expandedStudentGroupRowID = isExpanded ? nil : rowID
+                    if !isExpanded {
+                        isSubjectDropdownExpanded = false
+                        expandedGoalRowID = nil
+                        expandedRoleRowID = nil
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if normalizedGroup.isEmpty {
+                        Text(isChinese ? "选择分组标签" : "Select tag")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(normalizedGroup)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.95))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                Capsule()
+                                    .fill(Color.cyan.opacity(0.28))
+                            )
+                    }
+
+                    Spacer(minLength: 0)
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 7)
+                .frame(width: width, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(isExpanded ? Color.cyan.opacity(0.55) : Color.cyan.opacity(0.35), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    if !suggestions.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 5) {
+                                ForEach(suggestions, id: \.self) { tag in
+                                    Button {
+                                        setStudentGroup(tag, for: rowID)
+                                    } label: {
+                                        Text(tag)
+                                            .font(.caption2.weight(.semibold))
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 4)
+                                            .background(
+                                                Capsule()
+                                                    .fill(Color.white.opacity(0.12))
+                                            )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.horizontal, 2)
+                        }
+                    }
+
+                    HStack(spacing: 5) {
+                        TextField(
+                            isChinese ? "新标签" : "New tag",
+                            text: pendingStudentGroupBinding(for: rowID)
+                        )
+                        .font(.caption)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            commitPendingStudentGroup(rowID: rowID)
+                        }
+
+                        Button(isChinese ? "添加" : "Add") {
+                            commitPendingStudentGroup(rowID: rowID)
+                        }
+                        .font(.caption2.weight(.semibold))
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.mini)
+                    }
+                }
+                .frame(width: width, alignment: .leading)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .frame(width: width, alignment: .leading)
+    }
+
+    private func pendingStudentGroupBinding(for rowID: UUID) -> Binding<String> {
+        Binding(
+            get: { pendingStudentGroupTextByRowID[rowID] ?? "" },
+            set: { pendingStudentGroupTextByRowID[rowID] = $0 }
+        )
+    }
+
+    private func commitPendingStudentGroup(rowID: UUID) {
+        let pending = pendingStudentGroupTextByRowID[rowID] ?? ""
+        let normalized = normalizedGroupTag(pending)
+        guard !normalized.isEmpty else { return }
+        setStudentGroup(normalized, for: rowID)
+    }
+
+    private func setStudentGroup(_ group: String, for rowID: UUID) {
+        let normalized = normalizedGroupTag(group)
+        guard let index = studentRows.firstIndex(where: { $0.id == rowID }) else { return }
+        studentRows[index].group = normalized
+        pendingStudentGroupTextByRowID[rowID] = ""
+        withAnimation(.easeInOut(duration: 0.16)) {
+            expandedStudentGroupRowID = nil
+        }
+    }
+
+    private func suggestedStudentGroupTags(for rowID: UUID) -> [String] {
+        var tags = studentRows
+            .filter { $0.id != rowID }
+            .map { normalizedGroupTag($0.group) }
+            .filter { !$0.isEmpty }
+        if tags.isEmpty {
+            tags = isChinese ? ["A组", "B组", "C组"] : ["Group A", "Group B", "Group C"]
+        }
+        return Array(NSOrderedSet(array: tags)) as? [String] ?? tags
+    }
+
+    private func normalizedGroupTag(_ raw: String) -> String {
+        raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "|", with: "-")
+            .replacingOccurrences(of: "\n", with: " ")
     }
 
     private func goPrev() {
@@ -2128,6 +2281,7 @@ struct CourseCreationSheet: View {
         isSubjectDropdownExpanded = false
         expandedGoalRowID = nil
         expandedRoleRowID = nil
+        expandedStudentGroupRowID = nil
     }
 
     @ViewBuilder

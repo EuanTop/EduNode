@@ -11,6 +11,7 @@ struct EduLessonPlanPreviewPayload: Identifiable {
     let graphData: Data
     let html: String
     let baseFileName: String
+    let evaluationSnapshot: EduEvaluationScoreSnapshot?
 }
 
 struct EduLessonPlanPreviewSheet: View {
@@ -93,7 +94,8 @@ struct EduLessonPlanPreviewSheet: View {
         guard !isExportingPDF else { return }
         guard let data = EduLessonPlanExporter.markdownData(
             context: payload.context,
-            graphData: payload.graphData
+            graphData: payload.graphData,
+            evaluationSnapshot: payload.evaluationSnapshot
         ) else { return }
         presentExport(
             data: data,
@@ -125,7 +127,8 @@ struct EduLessonPlanPreviewSheet: View {
             let data = await MainActor.run {
                 EduLessonPlanExporter.pdfData(
                     context: context,
-                    graphData: graphData
+                    graphData: graphData,
+                    evaluationSnapshot: payload.evaluationSnapshot
                 )
             }
             await MainActor.run {

@@ -41,17 +41,53 @@ struct EduLessonPlanContext: Sendable {
     }
 }
 
+struct EduEvaluationScoreEntry: Sendable {
+    let evaluationTitle: String
+    let indicatorTitle: String
+    let indicatorKindLabel: String
+    let studentName: String
+    let valueText: String
+}
+
+struct EduEvaluationScoreSnapshot: Sendable {
+    let entries: [EduEvaluationScoreEntry]
+
+    var isEmpty: Bool {
+        entries.isEmpty
+    }
+}
+
 enum EduLessonPlanExporter {
-    static func markdownData(context: EduLessonPlanContext, graphData: Data) -> Data? {
-        markdown(context: context, graphData: graphData).data(using: .utf8)
+    static func markdownData(
+        context: EduLessonPlanContext,
+        graphData: Data,
+        evaluationSnapshot: EduEvaluationScoreSnapshot? = nil
+    ) -> Data? {
+        markdown(
+            context: context,
+            graphData: graphData,
+            evaluationSnapshot: evaluationSnapshot
+        ).data(using: .utf8)
     }
 
-    static func pdfData(context: EduLessonPlanContext, graphData: Data) -> Data? {
-        let renderedHTML = html(context: context, graphData: graphData)
+    static func pdfData(
+        context: EduLessonPlanContext,
+        graphData: Data,
+        evaluationSnapshot: EduEvaluationScoreSnapshot? = nil
+    ) -> Data? {
+        let renderedHTML = html(
+            context: context,
+            graphData: graphData,
+            evaluationSnapshot: evaluationSnapshot
+        )
         return renderPDF(markupHTML: renderedHTML, title: context.name)
     }
 
-    static func html(context: EduLessonPlanContext, graphData: Data) -> String {
+    static func html(
+        context: EduLessonPlanContext,
+        graphData: Data,
+        evaluationSnapshot: EduEvaluationScoreSnapshot? = nil
+    ) -> String {
         let isChinese = prefersChineseUI
         guard let document = try? decodeDocument(from: graphData) else {
             let fallbackTitle = isChinese ? "教案导出失败" : "Lesson Plan Export Failed"
@@ -185,6 +221,40 @@ enum EduLessonPlanExporter {
             return evaluation.map { node in
                 "<tr><td>\(escapeHTML(node.title))</td><td>\(escapeHTML(node.kindLabel))</td><td>\(escapeHTML(node.shortSummary))</td></tr>"
             }.joined()
+        }()
+
+        let evaluationScoreSectionHTML: String = {
+            guard let snapshot = evaluationSnapshot, !snapshot.isEmpty else {
+                return ""
+            }
+            let rows = snapshot.entries.map { entry in
+                """
+                <tr>
+                  <td>\(escapeHTML(entry.evaluationTitle))</td>
+                  <td>\(escapeHTML(entry.indicatorTitle))</td>
+                  <td>\(escapeHTML(entry.indicatorKindLabel))</td>
+                  <td>\(escapeHTML(entry.studentName))</td>
+                  <td>\(escapeHTML(entry.valueText))</td>
+                </tr>
+                """
+            }.joined()
+            return """
+            <div class="subsec">
+              <div class="subsec-title">\(escapeHTML(isChinese ? "Evaluation 打分记录" : "Evaluation Scoring Records"))</div>
+              <table class="flow">
+                <thead>
+                  <tr>
+                    <th>\(escapeHTML(isChinese ? "评价节点" : "Evaluation Node"))</th>
+                    <th>\(escapeHTML(isChinese ? "指标" : "Indicator"))</th>
+                    <th>\(escapeHTML(isChinese ? "类型" : "Type"))</th>
+                    <th>\(escapeHTML(isChinese ? "学生" : "Student"))</th>
+                    <th>\(escapeHTML(isChinese ? "得分" : "Score"))</th>
+                  </tr>
+                </thead>
+                <tbody>\(rows)</tbody>
+              </table>
+            </div>
+            """
         }()
 
         let extensionNodes = mainFlow.filter(\.isAfterClassNode)
@@ -424,6 +494,7 @@ enum EduLessonPlanExporter {
                 </thead>
                 <tbody>\(evalRows)</tbody>
               </table>
+              \(evaluationScoreSectionHTML)
             </section>
 
             <section>
@@ -442,7 +513,11 @@ enum EduLessonPlanExporter {
         return html
     }
 
-    static func markdown(context: EduLessonPlanContext, graphData: Data) -> String {
+    static func markdown(
+        context: EduLessonPlanContext,
+        graphData: Data,
+        evaluationSnapshot: EduEvaluationScoreSnapshot? = nil
+    ) -> String {
         let isChinese = prefersChineseUI
         guard let document = try? decodeDocument(from: graphData) else {
             return isChinese
@@ -563,6 +638,17 @@ enum EduLessonPlanExporter {
             lines.append("|---|---|---|")
             for node in evaluation {
                 lines.append("| \(escapeTable(node.title)) | \(escapeTable(node.kindLabel)) | \(escapeTable(node.shortSummary)) |")
+            }
+        }
+        if let snapshot = evaluationSnapshot, !snapshot.isEmpty {
+            lines.append("")
+            lines.append("### \(isChinese ? "Evaluation 打分记录" : "Evaluation Scoring Records")")
+            lines.append("| \(isChinese ? "评价节点" : "Evaluation Node") | \(isChinese ? "指标" : "Indicator") | \(isChinese ? "类型" : "Type") | \(isChinese ? "学生" : "Student") | \(isChinese ? "得分" : "Score") |")
+            lines.append("|---|---|---|---|---|")
+            for entry in snapshot.entries {
+                lines.append(
+                    "| \(escapeTable(entry.evaluationTitle)) | \(escapeTable(entry.indicatorTitle)) | \(escapeTable(entry.indicatorKindLabel)) | \(escapeTable(entry.studentName)) | \(escapeTable(entry.valueText)) |"
+                )
             }
         }
         lines.append("")
