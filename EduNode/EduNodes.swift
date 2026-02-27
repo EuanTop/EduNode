@@ -114,6 +114,21 @@ final class EduKnowledgeNode: GNode, NodeTextEditable, NodeOptionSelectable {
         Self.levelOptions
     }
 
+    var editorOptionColors: [String: OptionColor] {
+        let colors: [(String, OptionColor)] = zip(Self.levelOptions, Self.bloomColors).map { ($0, $1) }
+        return Dictionary(colors, uniquingKeysWith: { _, b in b })
+    }
+
+    /// Bloom taxonomy accent colors matching BloomLevelChartView.barColors.
+    static let bloomColors: [OptionColor] = [
+        OptionColor(red: 0.35, green: 0.55, blue: 0.95),  // Remember
+        OptionColor(red: 0.20, green: 0.75, blue: 0.65),  // Understand
+        OptionColor(red: 0.92, green: 0.78, blue: 0.22),  // Apply
+        OptionColor(red: 0.95, green: 0.55, blue: 0.22),  // Analyze
+        OptionColor(red: 0.88, green: 0.32, blue: 0.32),  // Evaluate
+        OptionColor(red: 0.72, green: 0.35, blue: 0.92)   // Create
+    ]
+
     static var levelOptions: [String] {
         [
             S("edu.knowledge.type.remember"),
