@@ -24,10 +24,14 @@
 
 "action.cancel" = "Cancel";
 "action.create" = "Create";
+"action.save" = "Save";
 "action.close" = "Close";
 "action.back" = "Back";
 
 "course.createTitle" = "Create Course";
+"course.editTitle" = "Course Settings";
+"course.modelChangeWarningTitle" = "Model Changed";
+"course.modelChangeWarningMessage" = "The teaching model has been changed. This only affects metadata — existing canvas nodes will not be modified. Create a new course if you need a different node structure.";
 "course.section.required" = "Required";
 "course.section.optional" = "Optional";
 "course.section.students" = "Student Info";

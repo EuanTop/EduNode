@@ -24,10 +24,14 @@
 
 "action.cancel" = "取消";
 "action.create" = "创建";
+"action.save" = "保存";
 "action.close" = "关闭";
 "action.back" = "返回";
 
 "course.createTitle" = "新建课程";
+"course.editTitle" = "课程设置";
+"course.modelChangeWarningTitle" = "模型已更改";
+"course.modelChangeWarningMessage" = "教学模型已修改，但仅影响课程元数据——画布上现有的节点不会变化。如需不同的节点结构，请新建课程。";
 "course.section.required" = "必填";
 "course.section.optional" = "可选";
 "course.section.students" = "学生信息";

@@ -32,6 +32,10 @@ struct ContentView: View {
     @State private var creationDraft = CourseCreationDraft()
     @State private var showingStudentRosterEdit = false
     @State private var studentRosterEditFileID: UUID?
+    @State private var showingEditCourseSheet = false
+    @State private var editingCourseFileID: UUID?
+    @State private var editingCourseOriginalModelID: String = ""
+    @State private var showingModelChangeWarning = false
     @State private var showingDocs = false
     @State private var docsPreferredNodeType: String?
     @State private var showingOnboardingGuide = false
@@ -213,7 +217,7 @@ struct ContentView: View {
 
                 // Custom sidebar toggle (system nav bar is fully hidden to avoid
                 // its invisible hit area blocking custom toolbar taps on iPadOS).
-                if splitVisibility == .detailOnly, !isPresentationModeEngaged {
+                if splitVisibility == .detailOnly {
                     VStack(spacing: 0) {
                         HStack(spacing: 0) {
                             sidebarToggleButton
@@ -251,6 +255,7 @@ struct ContentView: View {
                 }
             )
             .presentationDetents([.large])
+            .preferredColorScheme(.dark)
         }
         .sheet(isPresented: $showingStudentRosterEdit) {
             CourseCreationSheet(
@@ -268,6 +273,27 @@ struct ContentView: View {
                 }
             )
             .presentationDetents([.large])
+            .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $showingEditCourseSheet) {
+            CourseCreationSheet(
+                draft: $creationDraft,
+                modelRules: modelRules,
+                onCancel: {
+                    showingEditCourseSheet = false
+                },
+                onCreate: {
+                    saveCourseEdits()
+                },
+                isEditing: true
+            )
+            .presentationDetents([.large])
+            .preferredColorScheme(.dark)
+        }
+        .alert(S("course.modelChangeWarningTitle"), isPresented: $showingModelChangeWarning) {
+            Button(S("action.close"), role: .cancel) {}
+        } message: {
+            Text(S("course.modelChangeWarningMessage"))
         }
         .fileImporter(isPresented: $showingSidebarImporter, allowedContentTypes: [.json, .data]) { result in
             switch result {
@@ -941,7 +967,14 @@ struct ContentView: View {
             resourceConstraints: creationDraft.resourceConstraints,
             knowledgeToolkitMarkedDone: false,
             lessonPlanMarkedDone: false,
-            evaluationMarkedDone: false
+            evaluationMarkedDone: false,
+            totalSessions: creationDraft.totalSessions,
+            lessonType: creationDraft.lessonType.rawValue,
+            teachingStyle: creationDraft.teachingStyle.rawValue,
+            formativeCheckIntensity: creationDraft.formativeCheckIntensity.rawValue,
+            emphasizeInquiryExperiment: creationDraft.emphasizeInquiryExperiment,
+            emphasizeExperienceReflection: creationDraft.emphasizeExperienceReflection,
+            requireStructuredFlow: creationDraft.requireStructuredFlow
         )
 
         modelContext.insert(file)
@@ -1026,24 +1059,31 @@ struct ContentView: View {
             subject: subject,
             lessonDurationMinutes: 120,
             allowOvertime: false,
-            periodRange: isChinese ? "2025-12-20 · 珠海市那洲村" : "2025-12-20 · Nazhou Village, Zhuhai",
+            periodRange: isChinese ? "器材：望远镜6台、鸟类图鉴3套、巢材包28份；需室内 + 户外场地" : "Equipment: 6 binoculars, 3 field guides, 28 nest kits; indoor + outdoor venue needed",
             studentCount: 28,
-            studentProfile: isChinese ? "三年龄段混龄分组（低龄/中龄/高龄）" : "Three mixed age bands (younger/mid/older)",
+            studentProfile: isChinese ? "priorScore=60, completion=85, supportNeed=4, notes=低龄组增加助教支持与结构示范。, roster=, organization=mixed, outputs=学生作品集,课堂展示" : "priorScore=60, completion=85, supportNeed=4, notes=Provide extra TA support and structure demo for younger groups., roster=, organization=mixed, outputs=portfolio,presentation",
             studentPriorKnowledgeLevel: "60",
             studentMotivationLevel: "85",
             studentSupportNotes: isChinese ? "低龄组增加助教支持与结构示范。" : "Provide extra TA support and structure demo for younger groups.",
             goalsText: goals,
             modelID: "fivee",
-            teacherTeam: isChinese ? "主讲1 + 助教4" : "Lead teacher 1 + TAs 4",
+            teacherTeam: isChinese ? "lead=1, assistant=4, plan=主讲负责主线与讲授；助教分组支持搭建、记录与安全。" : "lead=1, assistant=4, plan=Lead teacher drives main instruction; TAs support group build, recording, and safety.",
             leadTeacherCount: 1,
             assistantTeacherCount: 4,
             teacherRolePlan: isChinese ? "主讲负责主线与讲授；助教分组支持搭建、记录与安全。" : "Lead teacher drives main instruction; TAs support group build, recording, and safety.",
             learningScenario: "",
             curriculumStandard: "",
-            resourceConstraints: "",
+            resourceConstraints: isChinese ? "器材：望远镜6台、鸟类图鉴3套、巢材包28份；需室内 + 户外场地" : "Equipment: 6 binoculars, 3 field guides, 28 nest kits; indoor + outdoor venue needed",
             knowledgeToolkitMarkedDone: true,
             lessonPlanMarkedDone: false,
-            evaluationMarkedDone: false
+            evaluationMarkedDone: false,
+            totalSessions: 1,
+            lessonType: "singleLesson",
+            teachingStyle: "experientialReflective",
+            formativeCheckIntensity: "medium",
+            emphasizeInquiryExperiment: true,
+            emphasizeExperienceReflection: true,
+            requireStructuredFlow: true
         )
 
         modelContext.insert(file)
@@ -2022,10 +2062,11 @@ struct ContentView: View {
     @ViewBuilder
     private func sidebarFileRow(_ file: GNodeWorkspaceFile) -> some View {
         let isSelected = selectedFileID == file.id
+        let iconName = subjectIconName(for: file.subject, filled: isSelected)
 
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: isSelected ? "doc.text.fill" : "doc.text")
+                Image(systemName: iconName)
                     .foregroundStyle(isSelected ? .cyan : .secondary)
                     .font(.body.weight(.semibold))
                     .padding(.top, 1)
@@ -2035,6 +2076,19 @@ struct ContentView: View {
                         .font(isSelected ? .body.weight(.semibold) : .body)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if isSelected {
+                    Spacer(minLength: 4)
+                    Button {
+                        openCourseEditor(for: file)
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2046,6 +2100,46 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .padding(.vertical, isSelected ? 4 : 2)
+    }
+
+    private func subjectIconName(for subject: String, filled: Bool) -> String {
+        let key = subject.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch key {
+        case "数学", "mathematics", "math":
+            return "x.squareroot"
+        case "物理", "physics":
+            return "atom"
+        case "化学", "chemistry":
+            return filled ? "flask.fill" : "flask"
+        case "生物", "biology":
+            return filled ? "leaf.fill" : "leaf"
+        case "历史", "history":
+            return "clock.arrow.circlepath"
+        case "地理", "geography":
+            return filled ? "globe.asia.australia.fill" : "globe.asia.australia"
+        case "政治", "civics":
+            return filled ? "person.3.fill" : "person.3"
+        case "信息技术", "computer science":
+            return "desktopcomputer"
+        case "美术", "art":
+            return filled ? "paintpalette.fill" : "paintpalette"
+        case "音乐", "music":
+            return "music.note"
+        case "体育", "physical education", "pe":
+            return "figure.run"
+        case "通识教育", "liberal arts":
+            return filled ? "books.vertical.fill" : "books.vertical"
+        case "工程基础", "engineering":
+            return filled ? "gearshape.2.fill" : "gearshape.2"
+        case "语文", "chinese":
+            return filled ? "character.book.closed.fill" : "character.book.closed"
+        case "英语", "english":
+            return "textformat.abc"
+        case "综合实践（美育）", "综合实践", "integrated practice", "integrated practice (aesthetic education)":
+            return filled ? "paintpalette.fill" : "paintpalette"
+        default:
+            return filled ? "doc.text.fill" : "doc.text"
+        }
     }
 
     private func fileSubtitle(_ file: GNodeWorkspaceFile) -> String {
@@ -2166,17 +2260,15 @@ Extend learning with monthly photo bird identification
         let visibleGoals = Array(goals.prefix(8))
         let model = modelSummary(for: file)
         let subject = file.subject.trimmingCharacters(in: .whitespacesAndNewlines)
-        let periodRange = file.periodRange.trimmingCharacters(in: .whitespacesAndNewlines)
-        let team = file.teacherTeam.trimmingCharacters(in: .whitespacesAndNewlines)
-        let grouping = file.studentProfile.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notes = file.periodRange.trimmingCharacters(in: .whitespacesAndNewlines)
+        let constraints = file.resourceConstraints.trimmingCharacters(in: .whitespacesAndNewlines)
         let subjectDisplay = subject.isEmpty ? S("app.context.none") : subject
-        let periodDisplay = periodRange.isEmpty ? S("app.context.none") : periodRange
-        let teamDisplay = team.isEmpty ? S("app.context.none") : team
-        let groupingDisplay = grouping.isEmpty ? S("app.context.none") : grouping
+        let notesDisplay = notes.isEmpty ? nil : notes
+        let constraintsDisplay = constraints.isEmpty ? nil : constraints
+        let isCN = isChineseUI()
 
         VStack(alignment: .leading, spacing: 8) {
             Button {
-                // Keep row header/icon visually stable by avoiding List row geometry animation here.
                 isSidebarBasicInfoExpanded.toggle()
             } label: {
                 HStack(spacing: 8) {
@@ -2195,14 +2287,29 @@ Extend learning with monthly photo bird identification
 
             if isSidebarBasicInfoExpanded {
                 VStack(alignment: .leading, spacing: 7) {
-                    sidebarContextRow(label: S("course.subject"), value: subjectDisplay)
-                    sidebarContextRow(label: S("course.gradeMode"), value: gradeSummary(for: file))
-                    sidebarContextRow(label: S("course.studentCount"), value: "\(file.studentCount)")
-                    sidebarContextRow(label: S("course.duration"), value: "\(file.lessonDurationMinutes)m")
-                    sidebarContextRow(label: S("app.context.model"), value: model)
-                    sidebarContextRow(label: S("course.teacherTeam"), value: teamDisplay)
-                    sidebarContextRow(label: S("course.section.students"), value: groupingDisplay)
-                    sidebarContextRow(label: S("course.periodRange"), value: periodDisplay)
+                    sidebarContextRow(label: isCN ? "学科" : "Subject", value: subjectDisplay)
+                    sidebarContextRow(label: isCN ? "学段" : "Range", value: gradeSummary(for: file))
+                    sidebarContextRow(label: isCN ? "学生" : "Students", value: "\(file.studentCount)" + (isCN ? "人" : ""))
+                    sidebarContextRow(label: isCN ? "课型" : "Type", value: lessonTypeDisplayName(file.lessonType, isChinese: isCN))
+                    sidebarContextRow(
+                        label: isCN ? "时长" : "Duration",
+                        value: file.totalSessions > 1
+                            ? "\(file.lessonDurationMinutes)min × \(file.totalSessions)"
+                            : "\(file.lessonDurationMinutes)min"
+                    )
+                    sidebarContextRow(label: isCN ? "教学风格" : "Style", value: teachingStyleDisplayName(file.teachingStyle, isChinese: isCN))
+                    sidebarContextRow(label: isCN ? "检查强度" : "Check", value: formativeCheckDisplayName(file.formativeCheckIntensity, isChinese: isCN))
+                    sidebarContextRow(label: isCN ? "模型" : "Model", value: model)
+                    sidebarContextRow(
+                        label: isCN ? "教师" : "Team",
+                        value: "\(file.leadTeacherCount)" + (isCN ? "主讲" : " lead") + " + \(file.assistantTeacherCount)" + (isCN ? "助教" : " TA")
+                    )
+                    if let notesDisplay {
+                        sidebarContextRow(label: isCN ? "备注" : "Notes", value: notesDisplay)
+                    }
+                    if let constraintsDisplay {
+                        sidebarContextRow(label: isCN ? "资源" : "Resources", value: constraintsDisplay)
+                    }
                 }
                 .padding(.top, 2)
             }
@@ -2342,11 +2449,38 @@ Extend learning with monthly photo bird identification
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-                .frame(width: 78, alignment: .leading)
+                .frame(width: 60, alignment: .leading)
             Text(value)
                 .font(.caption2.weight(.semibold))
                 .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func lessonTypeDisplayName(_ raw: String, isChinese: Bool) -> String {
+        switch raw {
+        case "singleLesson": return isChinese ? "单节课" : "Single Lesson"
+        case "unitSeries": return isChinese ? "单元连续课" : "Unit Series"
+        default: return isChinese ? "单节课" : "Single Lesson"
+        }
+    }
+
+    private func teachingStyleDisplayName(_ raw: String, isChinese: Bool) -> String {
+        switch raw {
+        case "lectureDriven": return isChinese ? "讲授驱动" : "Lecture-driven"
+        case "inquiryDriven": return isChinese ? "探究驱动" : "Inquiry-driven"
+        case "experientialReflective": return isChinese ? "体验-反思" : "Experience-reflection"
+        case "taskDriven": return isChinese ? "任务驱动" : "Task-driven"
+        default: return raw
+        }
+    }
+
+    private func formativeCheckDisplayName(_ raw: String, isChinese: Bool) -> String {
+        switch raw {
+        case "low": return isChinese ? "低" : "Low"
+        case "medium": return isChinese ? "中" : "Medium"
+        case "high": return isChinese ? "高" : "High"
+        default: return raw
         }
     }
 
@@ -4418,11 +4552,11 @@ Extend learning with monthly photo bird identification
         graphData: Data
     ) -> some View {
         if let summary = presentationTrackingSummary(file: file, groups: groups) {
-            ZStack(alignment: .topTrailing) {
-                Color.clear
-                    .allowsHitTesting(false)
-
-                VStack(alignment: .leading, spacing: 10) {
+            VStack {
+                HStack {
+                    Spacer(minLength: 0)
+                        .allowsHitTesting(false)
+                    VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Text(summary.isChinese ? "课程追踪" : "Course Tracking")
                             .font(.caption.weight(.semibold))
@@ -4510,16 +4644,19 @@ Extend learning with monthly photo bird identification
                 .padding(.horizontal, 12)
                 .padding(.vertical, 11)
                 .frame(maxWidth: 360, alignment: .leading)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background(Color(white: 0.13), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
                 )
-                .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
-                .padding(.top, topPadding + 82)
+                .shadow(color: .black.opacity(0.22), radius: 8, y: 2)
                 .padding(.trailing, 20)
+                }
+                .padding(.top, topPadding + 52)
+                Spacer(minLength: 0)
+                    .allowsHitTesting(false)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea(edges: .top)
             .ignoresSafeArea(.keyboard, edges: .bottom)
         }
@@ -4532,20 +4669,27 @@ Extend learning with monthly photo bird identification
     ) -> some View {
         let signature = inlineEvaluationSignature(summary: summary)
 
-        ScrollView(.vertical, showsIndicators: true) {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(summary.activeEvaluationNodes) { node in
-                    inlineEvaluationNodeSection(
-                        fileID: fileID,
-                        node: node,
-                        studentRoster: summary.studentRoster,
-                        isChinese: summary.isChinese
-                    )
-                }
+        let tableContent = VStack(alignment: .leading, spacing: 10) {
+            ForEach(summary.activeEvaluationNodes) { node in
+                inlineEvaluationNodeSection(
+                    fileID: fileID,
+                    node: node,
+                    studentRoster: summary.studentRoster,
+                    isChinese: summary.isChinese
+                )
             }
-            .padding(.vertical, 2)
         }
-        .frame(maxWidth: .infinity, maxHeight: 228, alignment: .topLeading)
+        .padding(.vertical, 2)
+
+        ViewThatFits(in: .vertical) {
+            tableContent
+
+            ScrollView(.vertical, showsIndicators: true) {
+                tableContent
+            }
+            .frame(maxHeight: 260)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.top, 2)
         .onAppear {
             ensureInlineEvaluationDefaults(fileID: fileID, summary: summary)
@@ -4562,9 +4706,9 @@ Extend learning with monthly photo bird identification
         studentRoster: [StudentRosterEntry],
         isChinese: Bool
     ) -> some View {
-        let sequenceColumnWidth: CGFloat = 44
-        let nameColumnWidth: CGFloat = 130
-        let metricColumnWidth: CGFloat = 94
+        let sequenceColumnWidth: CGFloat = 36
+        let nameColumnWidth: CGFloat = 110
+        let metricColumnWidth: CGFloat = 120
 
         VStack(alignment: .leading, spacing: 7) {
             Text(trackingEvaluationTitle(for: node.title, isChinese: isChinese))
@@ -4581,19 +4725,18 @@ Extend learning with monthly photo bird identification
                         HStack(spacing: 6) {
                             Text(isChinese ? "序号" : "No.")
                                 .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: sequenceColumnWidth, alignment: .leading)
+                                .foregroundStyle(.primary)
+                                .frame(width: sequenceColumnWidth, alignment: .center)
 
                             Text(isChinese ? "学生" : "Student")
                                 .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: nameColumnWidth, alignment: .leading)
+                                .foregroundStyle(.primary)
+                                .frame(width: nameColumnWidth, alignment: .center)
 
                             ForEach(node.indicators) { indicator in
                                 Text(indicator.name)
                                     .font(.caption2.weight(.semibold))
                                     .lineLimit(1)
-                                    .minimumScaleFactor(0.72)
                                     .frame(width: metricColumnWidth, alignment: .center)
                             }
                         }
@@ -4604,12 +4747,12 @@ Extend learning with monthly photo bird identification
                                     .font(.caption2.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
-                                    .frame(width: sequenceColumnWidth, alignment: .leading)
+                                    .frame(width: sequenceColumnWidth, alignment: .center)
 
                                 Text(studentNameLabel(student))
                                     .font(.caption2.weight(.semibold))
                                     .lineLimit(1)
-                                    .frame(width: nameColumnWidth, alignment: .leading)
+                                    .frame(width: nameColumnWidth, alignment: .center)
 
                                 ForEach(node.indicators) { indicator in
                                     let key = InlineEvaluationScoreKey(
@@ -4623,10 +4766,20 @@ Extend learning with monthly photo bird identification
                                             "0-5",
                                             text: inlineEvaluationScoreBinding(fileID: fileID, key: key)
                                         )
-                                        .textFieldStyle(.roundedBorder)
+                                        .textFieldStyle(.plain)
                                         .keyboardType(.numberPad)
                                         .font(.caption2)
                                         .multilineTextAlignment(.center)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 4)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                                .fill(Color(white: 0.22))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                                .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
+                                        )
                                         .frame(width: metricColumnWidth)
                                     case .completion:
                                         inlineEvaluationCompletionToggle(
@@ -5484,6 +5637,105 @@ Extend learning with monthly photo bird identification
         file.updatedAt = .now
         try? modelContext.save()
         showingStudentRosterEdit = false
+    }
+
+    private func openCourseEditor(for file: GNodeWorkspaceFile) {
+        var draft = CourseCreationDraft()
+        draft.courseName = file.name
+        draft.gradeInputMode = file.gradeMode == "age" ? .age : .grade
+        draft.gradeMinText = "\(file.gradeMin)"
+        draft.gradeMaxText = "\(file.gradeMax)"
+        draft.subject = file.subject
+        draft.lessonDurationMinutesText = "\(file.lessonDurationMinutes)"
+        draft.periodRange = file.periodRange
+        draft.studentCountText = "\(file.studentCount)"
+        draft.priorAssessmentScoreText = file.studentPriorKnowledgeLevel
+        draft.assignmentCompletionRateText = file.studentMotivationLevel
+        draft.studentSupportNotes = file.studentSupportNotes
+        draft.goals = file.goalsText
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        draft.modelID = file.modelID
+        draft.leadTeacherCountText = "\(file.leadTeacherCount)"
+        draft.assistantTeacherCountText = "\(file.assistantTeacherCount)"
+        draft.teacherRolePlan = file.teacherRolePlan
+        draft.resourceConstraints = file.resourceConstraints
+        draft.studentRosterText = extractedRosterText(from: file.studentProfile) ?? ""
+        draft.totalSessionsText = "\(file.totalSessions)"
+        if let lt = CourseLessonType(rawValue: file.lessonType) { draft.lessonType = lt }
+        if let ts = TeachingStyleMode(rawValue: file.teachingStyle) { draft.teachingStyle = ts }
+        if let fc = FormativeCheckIntensity(rawValue: file.formativeCheckIntensity) { draft.formativeCheckIntensity = fc }
+        draft.emphasizeInquiryExperiment = file.emphasizeInquiryExperiment
+        draft.emphasizeExperienceReflection = file.emphasizeExperienceReflection
+        draft.requireStructuredFlow = file.requireStructuredFlow
+
+        // Parse learning organization from studentProfile
+        let profile = file.studentProfile
+        if let orgRange = profile.range(of: "organization=") {
+            let suffix = profile[orgRange.upperBound...]
+            let orgStr = String(suffix.prefix(while: { $0 != "," && $0 != " " }))
+            if let mode = LearningOrganizationMode(rawValue: orgStr) {
+                draft.learningOrganization = mode
+            }
+        }
+        // Parse supportNeed count
+        if let snRange = profile.range(of: "supportNeed=") {
+            let suffix = profile[snRange.upperBound...]
+            let numStr = String(suffix.prefix(while: { $0.isNumber }))
+            draft.supportNeedCountText = numStr
+        }
+
+        creationDraft = draft
+        editingCourseOriginalModelID = file.modelID
+        editingCourseFileID = file.id
+        showingEditCourseSheet = true
+    }
+
+    private func saveCourseEdits() {
+        guard let fileID = editingCourseFileID,
+              let file = workspaceFiles.first(where: { $0.id == fileID }) else {
+            showingEditCourseSheet = false
+            return
+        }
+
+        let modelChanged = creationDraft.modelID != editingCourseOriginalModelID
+
+        file.name = creationDraft.courseName
+        file.gradeMode = creationDraft.gradeInputMode.rawValue
+        file.gradeMin = creationDraft.normalizedGradeRange.0
+        file.gradeMax = creationDraft.normalizedGradeRange.1
+        file.gradeLevel = creationDraft.gradeLevelSummary
+        file.subject = creationDraft.subject
+        file.lessonDurationMinutes = creationDraft.lessonDurationMinutes
+        file.periodRange = creationDraft.periodRange
+        file.studentCount = creationDraft.studentCount
+        file.studentProfile = creationDraft.studentProfileSummary
+        file.studentPriorKnowledgeLevel = "\(creationDraft.priorAssessmentScore)"
+        file.studentMotivationLevel = "\(creationDraft.assignmentCompletionRate)"
+        file.studentSupportNotes = creationDraft.studentSupportNotes
+        file.goalsText = creationDraft.goalsText
+        file.modelID = creationDraft.modelID
+        file.teacherTeam = creationDraft.teacherTeamSummary
+        file.leadTeacherCount = creationDraft.leadTeacherCount
+        file.assistantTeacherCount = creationDraft.assistantTeacherCount
+        file.teacherRolePlan = creationDraft.teacherRolePlan
+        file.resourceConstraints = creationDraft.resourceConstraints
+        file.totalSessions = creationDraft.totalSessions
+        file.lessonType = creationDraft.lessonType.rawValue
+        file.teachingStyle = creationDraft.teachingStyle.rawValue
+        file.formativeCheckIntensity = creationDraft.formativeCheckIntensity.rawValue
+        file.emphasizeInquiryExperiment = creationDraft.emphasizeInquiryExperiment
+        file.emphasizeExperienceReflection = creationDraft.emphasizeExperienceReflection
+        file.requireStructuredFlow = creationDraft.requireStructuredFlow
+        file.updatedAt = .now
+
+        try? modelContext.save()
+        showingEditCourseSheet = false
+
+        if modelChanged {
+            showingModelChangeWarning = true
+        }
     }
 
     private func deduplicatedStudentNames(_ values: [String]) -> [String] {

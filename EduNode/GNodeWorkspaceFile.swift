@@ -35,6 +35,15 @@ final class GNodeWorkspaceFile {
     var evaluationMarkedDone: Bool
     @Attribute(.externalStorage) var presentationStateData: Data
 
+    // New fields from redesigned creation questionnaire
+    var totalSessions: Int = 1
+    var lessonType: String = "singleLesson"
+    var teachingStyle: String = "inquiryDriven"
+    var formativeCheckIntensity: String = "medium"
+    var emphasizeInquiryExperiment: Bool = false
+    var emphasizeExperienceReflection: Bool = false
+    var requireStructuredFlow: Bool = false
+
     init(
         id: UUID = UUID(),
         name: String,
@@ -65,6 +74,13 @@ final class GNodeWorkspaceFile {
         lessonPlanMarkedDone: Bool = false,
         evaluationMarkedDone: Bool = false,
         presentationStateData: Data = Data(),
+        totalSessions: Int = 1,
+        lessonType: String = "singleLesson",
+        teachingStyle: String = "inquiryDriven",
+        formativeCheckIntensity: String = "medium",
+        emphasizeInquiryExperiment: Bool = false,
+        emphasizeExperienceReflection: Bool = false,
+        requireStructuredFlow: Bool = false,
         createdAt: Date = .now,
         updatedAt: Date = .now
     ) {
@@ -97,6 +113,13 @@ final class GNodeWorkspaceFile {
         self.lessonPlanMarkedDone = lessonPlanMarkedDone
         self.evaluationMarkedDone = evaluationMarkedDone
         self.presentationStateData = presentationStateData
+        self.totalSessions = totalSessions
+        self.lessonType = lessonType
+        self.teachingStyle = teachingStyle
+        self.formativeCheckIntensity = formativeCheckIntensity
+        self.emphasizeInquiryExperiment = emphasizeInquiryExperiment
+        self.emphasizeExperienceReflection = emphasizeExperienceReflection
+        self.requireStructuredFlow = requireStructuredFlow
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

@@ -110,6 +110,7 @@ struct CourseCreationSheet: View {
     let onCreate: () -> Void
     var initialPage: CourseFormPage = .basics
     var onSaveRoster: ((String) -> Void)? = nil
+    var isEditing: Bool = false
 
     @State private var page: CourseFormPage = .basics
     @State private var selectedSubjectPreset = "__custom__"
@@ -438,7 +439,7 @@ struct CourseCreationSheet: View {
                 )
                 .ignoresSafeArea()
             )
-            .navigationTitle(S("course.createTitle"))
+            .navigationTitle(S(isEditing ? "course.editTitle" : "course.createTitle"))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(S("action.cancel"), action: onCancel)
@@ -1042,7 +1043,7 @@ struct CourseCreationSheet: View {
                     }
                     .buttonStyle(.borderedProminent)
                 } else {
-                    Button(S("action.create"), action: onCreate)
+                    Button(S(isEditing ? "action.save" : "action.create"), action: onCreate)
                         .disabled(!draft.isValid || !isTeacherTeamValid)
                         .buttonStyle(.borderedProminent)
                 }
