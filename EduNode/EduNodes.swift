@@ -263,9 +263,7 @@ enum EduToolkitCategory: String, CaseIterable {
         case .regulationMetacognition:
             return [
                 Method(id: "kanban_monitoring", titleKey: "edu.toolkit.regulation.method.kanbanMonitoring"),
-                Method(id: "rubric_checklist", titleKey: "edu.toolkit.regulation.method.rubricChecklist"),
                 Method(id: "reflection_protocol", titleKey: "edu.toolkit.regulation.method.reflectionProtocol"),
-                Method(id: "learning_dashboard", titleKey: "edu.toolkit.regulation.method.learningDashboard"),
                 Method(id: "metacognitive_routine", titleKey: "edu.toolkit.regulation.method.metacognitiveRoutine")
             ]
         }

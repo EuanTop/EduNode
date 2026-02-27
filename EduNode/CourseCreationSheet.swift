@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-private enum CourseFormPage: Int, CaseIterable {
+enum CourseFormPage: Int, CaseIterable {
     case basics
     case goalsOutputs
     case modelInputs
@@ -108,6 +108,8 @@ struct CourseCreationSheet: View {
     let modelRules: [EduModelRule]
     let onCancel: () -> Void
     let onCreate: () -> Void
+    var initialPage: CourseFormPage = .basics
+    var onSaveRoster: ((String) -> Void)? = nil
 
     @State private var page: CourseFormPage = .basics
     @State private var selectedSubjectPreset = "__custom__"
@@ -442,6 +444,7 @@ struct CourseCreationSheet: View {
             }
             .toolbarBackground(.hidden, for: .navigationBar)
             .onAppear {
+                page = initialPage
                 if draft.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                    let first = subjectPresets.first {
                     draft.subject = first
@@ -1027,9 +1030,16 @@ struct CourseCreationSheet: View {
             Spacer()
 
             if page == pages.last {
-                Button(S("action.create"), action: onCreate)
-                    .disabled(!draft.isValid || !isTeacherTeamValid)
+                if let onSaveRoster {
+                    Button(isChinese ? "保存名单" : "Save Roster") {
+                        onSaveRoster(draft.studentRosterText)
+                    }
                     .buttonStyle(.borderedProminent)
+                } else {
+                    Button(S("action.create"), action: onCreate)
+                        .disabled(!draft.isValid || !isTeacherTeamValid)
+                        .buttonStyle(.borderedProminent)
+                }
             } else {
                 Button(S("course.next")) {
                     goNext()

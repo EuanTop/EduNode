@@ -30,12 +30,15 @@ struct ContentView: View {
     @State private var splitVisibility: NavigationSplitViewVisibility = .automatic
     @State private var showingCreateCourseSheet = false
     @State private var creationDraft = CourseCreationDraft()
+    @State private var showingStudentRosterEdit = false
+    @State private var studentRosterEditFileID: UUID?
     @State private var showingDocs = false
     @State private var docsPreferredNodeType: String?
     @State private var showingOnboardingGuide = false
     @State private var showingSidebarImporter = false
     @State private var lessonPlanPreviewPayload: EduLessonPlanPreviewPayload?
     @State private var presentationPreviewPayload: EduPresentationPreviewPayload?
+    @State private var presentationEvaluationSheetContext: PresentationEvaluationSheetContext?
     @State private var showingPresentationEmptyAlert = false
     @State private var activePresentationModeFileID: UUID?
     @State private var activePresentationStylingFileID: UUID?
@@ -85,33 +88,288 @@ struct ContentView: View {
         var data: Data
     }
 
-    var body: some View {
-        GeometryReader { rootGeometry in
-            ZStack {
-                NavigationSplitView(columnVisibility: $splitVisibility) {
-                    sidebarView
-                } detail: {
-                    let topToolbarPadding = rootGeometry.safeAreaInsets.top + (splitVisibility == .detailOnly ? 0 : 8)
-                    detailView(
-                        toolbarTopPadding: topToolbarPadding,
-                        bottomSafeInset: rootGeometry.safeAreaInsets.bottom
+    private enum EvaluationIndicatorKind {
+        case score
+        case completion
+    }
+
+    private struct EvaluationIndicatorDescriptor: Identifiable {
+        let id: String
+        let name: String
+        let kind: EvaluationIndicatorKind
+    }
+
+    private struct EvaluationNodeDescriptor: Identifiable {
+        let id: UUID
+        let title: String
+        let indicators: [EvaluationIndicatorDescriptor]
+    }
+
+    private struct KnowledgeLevelCountChip: Identifiable {
+        let id: String
+        let title: String
+        let count: Int
+    }
+
+    private struct PresentationTrackingSummary {
+        let currentPage: Int
+        let totalPages: Int
+        let levelChips: [KnowledgeLevelCountChip]
+        let activeEvaluationNodes: [EvaluationNodeDescriptor]
+        let studentNames: [String]
+        let isChinese: Bool
+    }
+
+    private struct PresentationEvaluationSheetContext: Identifiable {
+        let id = UUID()
+        let fileName: String
+        let evaluationNodes: [EvaluationNodeDescriptor]
+        let studentNames: [String]
+        let isChinese: Bool
+    }
+
+    private struct PresentationEvaluationScoringSheet: View {
+        let context: PresentationEvaluationSheetContext
+
+        @Environment(\.dismiss) private var dismiss
+        @State private var scoreValues: [ScoreCellKey: String] = [:]
+        @State private var completionValues: [ScoreCellKey: Bool] = [:]
+
+        private let nameColumnWidth: CGFloat = 150
+        private let metricColumnWidth: CGFloat = 132
+
+        private struct ScoreCellKey: Hashable {
+            let nodeID: UUID
+            let indicatorID: String
+            let studentName: String
+        }
+
+        var body: some View {
+            NavigationStack {
+                VStack(spacing: 0) {
+                    if context.studentNames.isEmpty {
+                        Text(context.isChinese ? "请先在课程问卷中配置学生名单。" : "Please configure student roster in course form first.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .padding(20)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    } else {
+                        ScrollView([.vertical, .horizontal], showsIndicators: true) {
+                            VStack(alignment: .leading, spacing: 16) {
+                                ForEach(context.evaluationNodes) { node in
+                                    evaluationSection(for: node)
+                                }
+                            }
+                            .padding(16)
+                        }
+                    }
+                }
+                .navigationTitle(context.isChinese ? "课程评价打分" : "Course Evaluation Scoring")
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(context.isChinese ? "关闭" : "Close") {
+                            dismiss()
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.large])
+            .onAppear {
+                initializeCellsIfNeeded()
+            }
+        }
+
+        @ViewBuilder
+        private func evaluationSection(for node: EvaluationNodeDescriptor) -> some View {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(node.title)
+                    .font(.headline.weight(.semibold))
+
+                if node.indicators.isEmpty {
+                    Text(context.isChinese ? "当前 Evaluation 节点没有指标，请先在节点中配置指标行。" : "No indicators found in this Evaluation node. Configure indicators in node form first.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        headerRow(for: node)
+                        ForEach(context.studentNames, id: \.self) { studentName in
+                            scoreRow(for: node, studentName: studentName)
+                        }
+                    }
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.white.opacity(0.05))
                     )
-                }
-                .navigationSplitViewStyle(.balanced)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if presentationModeLoadingFileID != nil {
-                    presentationPreparingOverlay
-                        .zIndex(6000)
-                }
-
-                if showingOnboardingGuide {
-                    onboardingGuideOverlay
-                        .zIndex(6100)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                    )
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+        @ViewBuilder
+        private func headerRow(for node: EvaluationNodeDescriptor) -> some View {
+            HStack(spacing: 8) {
+                Text(context.isChinese ? "学生" : "Student")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: nameColumnWidth, alignment: .leading)
+
+                ForEach(node.indicators) { indicator in
+                    Text(indicatorHeaderTitle(indicator))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .frame(width: metricColumnWidth, alignment: .center)
+                }
+            }
+        }
+
+        @ViewBuilder
+        private func scoreRow(for node: EvaluationNodeDescriptor, studentName: String) -> some View {
+            HStack(spacing: 8) {
+                Text(studentName)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .frame(width: nameColumnWidth, alignment: .leading)
+
+                ForEach(node.indicators) { indicator in
+                    switch indicator.kind {
+                    case .score:
+                        TextField(
+                            context.isChinese ? "0-5" : "0-5",
+                            text: scoreBinding(nodeID: node.id, indicatorID: indicator.id, studentName: studentName)
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.center)
+                        .frame(width: metricColumnWidth)
+
+                    case .completion:
+                        completionCell(
+                            nodeID: node.id,
+                            indicatorID: indicator.id,
+                            studentName: studentName
+                        )
+                        .frame(width: metricColumnWidth)
+                    }
+                }
+            }
+        }
+
+        @ViewBuilder
+        private func completionCell(
+            nodeID: UUID,
+            indicatorID: String,
+            studentName: String
+        ) -> some View {
+            let key = ScoreCellKey(nodeID: nodeID, indicatorID: indicatorID, studentName: studentName)
+            let isComplete = completionValues[key] ?? false
+
+            HStack(spacing: 4) {
+                completionButton(
+                    label: "0",
+                    isSelected: !isComplete
+                ) {
+                    completionValues[key] = false
+                }
+
+                completionButton(
+                    label: "5",
+                    isSelected: isComplete
+                ) {
+                    completionValues[key] = true
+                }
+            }
+        }
+
+        @ViewBuilder
+        private func completionButton(
+            label: String,
+            isSelected: Bool,
+            action: @escaping () -> Void
+        ) -> some View {
+            Button(action: action) {
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isSelected ? Color.black.opacity(0.88) : Color.white.opacity(0.85))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(isSelected ? Color.white.opacity(0.85) : Color.white.opacity(0.08))
+                    )
+            }
+            .buttonStyle(.plain)
+        }
+
+        private func indicatorHeaderTitle(_ indicator: EvaluationIndicatorDescriptor) -> String {
+            let suffix: String
+            switch indicator.kind {
+            case .score:
+                suffix = context.isChinese ? "分数 0-5" : "Score 0-5"
+            case .completion:
+                suffix = context.isChinese ? "完成 0/5" : "Completion 0/5"
+            }
+            return "\(indicator.name)\n\(suffix)"
+        }
+
+        private func scoreBinding(
+            nodeID: UUID,
+            indicatorID: String,
+            studentName: String
+        ) -> Binding<String> {
+            let key = ScoreCellKey(nodeID: nodeID, indicatorID: indicatorID, studentName: studentName)
+            return Binding(
+                get: {
+                    scoreValues[key] ?? ""
+                },
+                set: { newValue in
+                    let allowed = "0123456789."
+                    let filtered = String(newValue.filter { allowed.contains($0) })
+                    guard !filtered.isEmpty else {
+                        scoreValues[key] = ""
+                        return
+                    }
+
+                    guard let parsed = Double(filtered) else { return }
+                    let clamped = min(5, max(0, parsed))
+                    if clamped == floor(clamped) {
+                        scoreValues[key] = String(Int(clamped))
+                    } else {
+                        scoreValues[key] = String(format: "%.1f", clamped)
+                    }
+                }
+            )
+        }
+
+        private func initializeCellsIfNeeded() {
+            guard scoreValues.isEmpty && completionValues.isEmpty else { return }
+
+            for node in context.evaluationNodes {
+                for indicator in node.indicators {
+                    for student in context.studentNames {
+                        let key = ScoreCellKey(
+                            nodeID: node.id,
+                            indicatorID: indicator.id,
+                            studentName: student
+                        )
+                        switch indicator.kind {
+                        case .score:
+                            scoreValues[key] = "0"
+                        case .completion:
+                            completionValues[key] = false
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    var body: some View {
+        coreLayout
         .onAppear {
             persistenceLog("ContentView.onAppear files=\(workspaceFiles.count)", force: true)
             seedDefaultCourseIfNeeded()
@@ -163,6 +421,34 @@ struct ContentView: View {
                 persistAllPresentationStates()
             }
         }
+    }
+
+    private var coreLayout: some View {
+        GeometryReader { rootGeometry in
+            ZStack {
+                NavigationSplitView(columnVisibility: $splitVisibility) {
+                    sidebarView
+                } detail: {
+                    let topToolbarPadding = rootGeometry.safeAreaInsets.top + (splitVisibility == .detailOnly ? 0 : 8)
+                    detailView(
+                        toolbarTopPadding: topToolbarPadding
+                    )
+                }
+                .navigationSplitViewStyle(.balanced)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if presentationModeLoadingFileID != nil {
+                    presentationPreparingOverlay
+                        .zIndex(6000)
+                }
+
+                if showingOnboardingGuide {
+                    onboardingGuideOverlay
+                        .zIndex(6100)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingCreateCourseSheet) {
             CourseCreationSheet(
                 draft: $creationDraft,
@@ -172,6 +458,23 @@ struct ContentView: View {
                 },
                 onCreate: {
                     createWorkspaceFileFromDraft()
+                }
+            )
+            .presentationDetents([.large])
+        }
+        .sheet(isPresented: $showingStudentRosterEdit) {
+            CourseCreationSheet(
+                draft: $creationDraft,
+                modelRules: modelRules,
+                onCancel: {
+                    showingStudentRosterEdit = false
+                },
+                onCreate: {
+                    showingStudentRosterEdit = false
+                },
+                initialPage: .teamStudents,
+                onSaveRoster: { newRoster in
+                    saveStudentRoster(newRoster)
                 }
             )
             .presentationDetents([.large])
@@ -209,6 +512,9 @@ struct ContentView: View {
         }
         .sheet(item: $presentationPreviewPayload) { payload in
             EduPresentationPreviewSheet(payload: payload)
+        }
+        .sheet(item: $presentationEvaluationSheetContext) { context in
+            PresentationEvaluationScoringSheet(context: context)
         }
         .alert(S("app.presentation.emptyTitle"), isPresented: $showingPresentationEmptyAlert) {
             Button(S("action.close"), role: .cancel) {}
@@ -295,7 +601,7 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func detailView(toolbarTopPadding: CGFloat, bottomSafeInset: CGFloat) -> some View {
+    private func detailView(toolbarTopPadding: CGFloat) -> some View {
         if let preview = selectedModelTemplatePreview {
             modelTemplatePreviewDetailView(preview, toolbarTopPadding: toolbarTopPadding)
         } else if let file = selectedWorkspaceFile {
@@ -320,20 +626,40 @@ struct ContentView: View {
                     toolbarActions: editorToolbarActions(for: file),
                     cameraRequest: cameraRequest,
                     customNodeMenuSections: eduNodeMenuSections,
-                    topCenterOverlay: AnyView(
-                        EduFlowProgressView(
-                            states: flowStates(for: file),
-                            onToggleManual: { step in
-                                handleFlowStepTap(step, for: file)
-                            }
-                        )
-                        .padding(.trailing, 6)
-                    ),
+                    topCenterOverlay: isPresentationModeActive
+                        ? nil
+                        : AnyView(
+                            EduFlowProgressView(
+                                states: flowStates(for: file),
+                                onToggleManual: { step in
+                                    handleFlowStepTap(step, for: file)
+                                }
+                            )
+                            .padding(.trailing, 6)
+                        ),
                     onStatsChanged: { stats in
                         editorStatsByFileID[file.id] = stats
                     },
+                    connectionAppearanceProvider: { connection, sourceNodeType, targetNodeType in
+                        editorConnectionAppearance(
+                            for: connection,
+                            sourceNodeType: sourceNodeType,
+                            targetNodeType: targetNodeType
+                        )
+                    },
                     onDocumentDataChange: { data in
                         persistWorkspaceFileData(id: file.id, data: data)
+                    },
+                    onNodeSelected: { nodeID in
+                        guard activePresentationModeFileID == file.id else { return }
+                        let rawDeck = EduPresentationPlanner.makeDeck(graphData: file.data)
+                        let deck = filteredPresentationDeck(for: file.id, from: rawDeck)
+                        let groups = presentationGroups(for: file.id, deck: deck)
+                        if let matched = groups.first(where: { $0.sourceSlides.contains(where: { $0.id == nodeID }) }) {
+                            guard selectedPresentationGroupIDByFile[file.id] != matched.id else { return }
+                            selectedPresentationGroupIDByFile[file.id] = matched.id
+                            persistPresentationState(fileID: file.id)
+                        }
                     }
                 )
                 .id(file.id)
@@ -341,11 +667,17 @@ struct ContentView: View {
                 .toolbarBackground(.hidden, for: .navigationBar)
 
                 if isPresentationModeActive && !slideGroups.isEmpty {
+                    presentationTrackingPanel(
+                        file: file,
+                        groups: slideGroups,
+                        topPadding: toolbarTopPadding
+                    )
+                    .zIndex(2100)
+
                     if activePresentationStylingFileID != file.id {
                         presentationStylingFloatingEntryButton(
                             fileID: file.id,
-                            groups: slideGroups,
-                            bottomSafeInset: bottomSafeInset
+                            groups: slideGroups
                         )
                         .zIndex(2050)
                     }
@@ -361,8 +693,7 @@ struct ContentView: View {
                 }
 
                 editorStatsOverlay(
-                    stats: statsForDisplay(for: file),
-                    bottomSafeInset: bottomSafeInset
+                    stats: statsForDisplay(for: file)
                 )
                 .zIndex(2200)
             }
@@ -757,6 +1088,13 @@ struct ContentView: View {
                 .padding(.vertical, 8)
                 .background(.ultraThinMaterial, in: Capsule())
             ),
+            connectionAppearanceProvider: { connection, sourceNodeType, targetNodeType in
+                editorConnectionAppearance(
+                    for: connection,
+                    sourceNodeType: sourceNodeType,
+                    targetNodeType: targetNodeType
+                )
+            },
             onDocumentDataChange: { data in
                 guard var cached = modelTemplatePreviewByID[preview.modelRuleID] else { return }
                 cached.data = data
@@ -2115,7 +2453,7 @@ Extend learning with monthly photo bird identification
     }
 
     @ViewBuilder
-    private func editorStatsOverlay(stats: NodeEditorCanvasStats, bottomSafeInset: CGFloat) -> some View {
+    private func editorStatsOverlay(stats: NodeEditorCanvasStats) -> some View {
         VStack {
             Spacer(minLength: 0)
             HStack {
@@ -2133,10 +2471,11 @@ Extend learning with monthly photo bird identification
                     )
             }
             .padding(.trailing, 20)
-            .padding(.bottom, max(bottomSafeInset, 12))
+            .padding(.bottom, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .allowsHitTesting(false)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 
     @ViewBuilder
@@ -2236,6 +2575,20 @@ Extend learning with monthly photo bird identification
         ]
     }
 
+    private func editorConnectionAppearance(
+        for _: NodeConnection,
+        sourceNodeType: String?,
+        targetNodeType: String?
+    ) -> NodeEditorConnectionAppearance? {
+        let involvesEvaluation = sourceNodeType == EduNodeType.evaluation || targetNodeType == EduNodeType.evaluation
+        guard involvesEvaluation else { return nil }
+        return NodeEditorConnectionAppearance(
+            color: Color.gray.opacity(0.78),
+            lineWidth: 2.5,
+            dash: [10, 7]
+        )
+    }
+
     private func togglePresentationMode(for file: GNodeWorkspaceFile) {
         if presentationModeLoadingFileID == file.id {
             presentationModeActivationToken = nil
@@ -2291,6 +2644,7 @@ Extend learning with monthly photo bird identification
             let pendingThumbnailIDs = Set(groups.map(\.id))
             pendingPresentationThumbnailIDsByFile[file.id] = pendingThumbnailIDs
             activePresentationModeFileID = file.id
+            splitVisibility = .detailOnly
             if let firstGroup = groups.first {
                 selectPresentationGroup(fileID: file.id, group: firstGroup)
             }
@@ -4100,6 +4454,622 @@ Extend learning with monthly photo bird identification
     }
 
     @ViewBuilder
+    private func presentationTrackingPanel(
+        file: GNodeWorkspaceFile,
+        groups: [EduPresentationSlideGroup],
+        topPadding: CGFloat
+    ) -> some View {
+        if let summary = presentationTrackingSummary(file: file, groups: groups) {
+            VStack {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text(summary.isChinese ? "课程追踪" : "Course Tracking")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Text("\(summary.currentPage)/\(summary.totalPages)")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        BloomLevelChartView(chips: summary.levelChips, isChinese: summary.isChinese)
+
+                        if summary.activeEvaluationNodes.isEmpty {
+                            Text(
+                                summary.isChinese
+                                    ? "当前页面未连接 Evaluation 节点。"
+                                    : "No Evaluation node linked to current page."
+                            )
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        } else if summary.studentNames.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Button {
+                                    openStudentRosterEditor(for: file)
+                                } label: {
+                                    Label(
+                                        summary.isChinese ? "配置学生名单" : "Configure Student Roster",
+                                        systemImage: "person.2.badge.plus"
+                                    )
+                                    .font(.caption2.weight(.semibold))
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .padding(.vertical, 6)
+                                }
+                                .buttonStyle(.plain)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(Color.orange.opacity(0.18))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+                                )
+
+                                Text(
+                                    summary.isChinese
+                                        ? "请配置学生名单才能进行评价功能。"
+                                        : "Configure student roster to enable scoring."
+                                )
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        } else {
+                            Button {
+                                presentationEvaluationSheetContext = PresentationEvaluationSheetContext(
+                                    fileName: file.name,
+                                    evaluationNodes: summary.activeEvaluationNodes,
+                                    studentNames: summary.studentNames,
+                                    isChinese: summary.isChinese
+                                )
+                            } label: {
+                                Label(
+                                    summary.isChinese
+                                        ? "打开评价打分"
+                                        : "Open Scoring",
+                                    systemImage: "checklist"
+                                )
+                                .font(.caption.weight(.semibold))
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.plain)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color.white.opacity(0.18))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 11)
+                    .frame(maxWidth: 360, alignment: .leading)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+                    Spacer(minLength: 0)
+                        .allowsHitTesting(false)
+                }
+                .padding(.top, topPadding)
+                .padding(.leading, splitVisibility == .detailOnly ? 72 : 16)
+                Spacer(minLength: 0)
+                    .allowsHitTesting(false)
+            }
+            .ignoresSafeArea(edges: .top)
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+        }
+    }
+
+    private func presentationTrackingSummary(
+        file: GNodeWorkspaceFile,
+        groups: [EduPresentationSlideGroup]
+    ) -> PresentationTrackingSummary? {
+        guard !groups.isEmpty else { return nil }
+        let index = selectedPresentationGroupIndex(fileID: file.id, groups: groups)
+        let currentGroup = groups[index]
+        let isChinese = isChineseUI()
+        let studentNames = parsedStudentNames(from: file.studentProfile)
+
+        guard let document = try? decodeDocument(from: file.data) else {
+            return PresentationTrackingSummary(
+                currentPage: index + 1,
+                totalPages: groups.count,
+                levelChips: defaultKnowledgeLevelCountChips(),
+                activeEvaluationNodes: [],
+                studentNames: studentNames,
+                isChinese: isChinese
+            )
+        }
+
+        let nodeByID = Dictionary(uniqueKeysWithValues: document.nodes.map { ($0.id, $0) })
+        let stateByNodeID = Dictionary(uniqueKeysWithValues: document.canvasState.map { ($0.nodeID, $0) })
+        let nodeTypeByID = Dictionary(uniqueKeysWithValues: document.nodes.map { ($0.id, $0.nodeType) })
+        var outgoingByNode: [UUID: [UUID]] = [:]
+        for connection in document.connections {
+            outgoingByNode[connection.sourceNodeID, default: []].append(connection.targetNodeID)
+        }
+
+        let startNodeIDs = Set(currentGroup.sourceSlides.map(\.id))
+        let reachableEvaluationIDs = reachableEvaluationNodeIDs(
+            from: startNodeIDs,
+            outgoingByNode: outgoingByNode,
+            nodeTypeByID: nodeTypeByID
+        )
+
+        let sortedEvaluationIDs = reachableEvaluationIDs.sorted { lhs, rhs in
+            let lhsState = stateByNodeID[lhs]
+            let rhsState = stateByNodeID[rhs]
+            let lx = lhsState?.positionX ?? 0
+            let rx = rhsState?.positionX ?? 0
+            if abs(lx - rx) > 0.5 { return lx < rx }
+            let ly = lhsState?.positionY ?? 0
+            let ry = rhsState?.positionY ?? 0
+            if abs(ly - ry) > 0.5 { return ly < ry }
+            return lhs.uuidString < rhs.uuidString
+        }
+
+        let evaluationDescriptors = sortedEvaluationIDs.compactMap { nodeID -> EvaluationNodeDescriptor? in
+            guard let node = nodeByID[nodeID] else { return nil }
+            let customName = stateByNodeID[nodeID]?.customName
+            return evaluationDescriptor(for: node, customName: customName)
+        }
+
+        return PresentationTrackingSummary(
+            currentPage: index + 1,
+            totalPages: groups.count,
+            levelChips: knowledgeLevelCountChips(from: document),
+            activeEvaluationNodes: evaluationDescriptors,
+            studentNames: studentNames,
+            isChinese: isChinese
+        )
+    }
+
+    private func selectedPresentationGroupIndex(
+        fileID: UUID,
+        groups: [EduPresentationSlideGroup]
+    ) -> Int {
+        guard !groups.isEmpty else { return 0 }
+        let selectedGroupID = selectedPresentationGroupIDByFile[fileID]
+        if let selectedGroupID,
+           let index = groups.firstIndex(where: { $0.id == selectedGroupID }) {
+            return index
+        }
+        return 0
+    }
+
+    private func knowledgeLevelCountChips(from document: GNodeDocument) -> [KnowledgeLevelCountChip] {
+        var counts: [String: Int] = [:]
+        let orderedLevels: [(id: String, title: String)] = [
+            ("remember", S("edu.knowledge.type.remember")),
+            ("understand", S("edu.knowledge.type.understand")),
+            ("apply", S("edu.knowledge.type.apply")),
+            ("analyze", S("edu.knowledge.type.analyze")),
+            ("evaluate", S("edu.knowledge.type.evaluate")),
+            ("create", S("edu.knowledge.type.create"))
+        ]
+
+        for node in document.nodes where node.nodeType == EduNodeType.knowledge {
+            let rawLevel = node.nodeData["level"] ?? ""
+            let canonical = canonicalKnowledgeLevelID(from: rawLevel) ?? "remember"
+            counts[canonical, default: 0] += 1
+        }
+
+        return orderedLevels.map { level in
+            KnowledgeLevelCountChip(
+                id: level.id,
+                title: level.title,
+                count: counts[level.id, default: 0]
+            )
+        }
+    }
+
+    private func defaultKnowledgeLevelCountChips() -> [KnowledgeLevelCountChip] {
+        [
+            KnowledgeLevelCountChip(id: "remember", title: S("edu.knowledge.type.remember"), count: 0),
+            KnowledgeLevelCountChip(id: "understand", title: S("edu.knowledge.type.understand"), count: 0),
+            KnowledgeLevelCountChip(id: "apply", title: S("edu.knowledge.type.apply"), count: 0),
+            KnowledgeLevelCountChip(id: "analyze", title: S("edu.knowledge.type.analyze"), count: 0),
+            KnowledgeLevelCountChip(id: "evaluate", title: S("edu.knowledge.type.evaluate"), count: 0),
+            KnowledgeLevelCountChip(id: "create", title: S("edu.knowledge.type.create"), count: 0)
+        ]
+    }
+
+    private struct BloomLevelChartView: View {
+        let chips: [KnowledgeLevelCountChip]
+        let isChinese: Bool
+
+        @State private var tooltipIndex: Int? = nil
+
+        private let barColors: [Color] = [
+            Color(red: 0.35, green: 0.55, blue: 0.95),
+            Color(red: 0.20, green: 0.75, blue: 0.65),
+            Color(red: 0.92, green: 0.78, blue: 0.22),
+            Color(red: 0.95, green: 0.55, blue: 0.22),
+            Color(red: 0.88, green: 0.32, blue: 0.32),
+            Color(red: 0.72, green: 0.35, blue: 0.92)
+        ]
+
+        var body: some View {
+            let pairs = Array(zip(chips, barColors))
+            let total = chips.reduce(0) { $0 + $1.count }
+            let gap: CGFloat = 2
+            let minSegWidth: CGFloat = 6
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(isChinese ? "知识层级" : "Knowledge Hierarchy")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                GeometryReader { geo in
+                    let totalGaps = gap * CGFloat(pairs.count - 1)
+                    let availableWidth = max(geo.size.width - totalGaps, 0)
+                    let zeroCount = CGFloat(pairs.filter { $0.0.count == 0 }.count)
+                    let reservedForZero = zeroCount * minSegWidth
+                    let availableForNonZero = max(availableWidth - reservedForZero, 0)
+                    let nonZeroTotal = CGFloat(pairs.filter { $0.0.count > 0 }.reduce(0) { $0 + $1.0.count })
+                    let widths: [CGFloat] = pairs.map { chip, _ in
+                        if total == 0 { return availableWidth / CGFloat(chips.count) }
+                        if chip.count == 0 { return minSegWidth }
+                        return nonZeroTotal > 0
+                            ? (CGFloat(chip.count) / nonZeroTotal) * availableForNonZero
+                            : minSegWidth
+                    }
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        // Bar: numbers only inside, consistent font size
+                        HStack(spacing: gap) {
+                            ForEach(Array(pairs.enumerated()), id: \.offset) { i, pair in
+                                let (chip, color) = pair
+                                let w = widths[i]
+                                ZStack {
+                                    Rectangle()
+                                        .fill(chip.count > 0 ? color : color.opacity(0.15))
+                                    if w > 10 {
+                                        Text("\(chip.count)")
+                                            .font(.system(size: 8, weight: .bold).monospacedDigit())
+                                            .foregroundStyle(.white.opacity(chip.count > 0 ? 0.92 : 0.35))
+                                    }
+                                }
+                                .frame(width: w, height: 14)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    withAnimation(.easeInOut(duration: 0.18)) {
+                                        tooltipIndex = tooltipIndex == i ? nil : i
+                                    }
+                                }
+                            }
+                        }
+                        .clipShape(Capsule())
+
+                        // Dot legend row aligned to bar segments
+                        HStack(spacing: gap) {
+                            ForEach(Array(pairs.enumerated()), id: \.offset) { i, pair in
+                                let (_, color) = pair
+                                let w = widths[i]
+                                Circle()
+                                    .fill(chips[i].count > 0 ? color : color.opacity(0.22))
+                                    .frame(width: 4, height: 4)
+                                    .frame(width: w)
+                            }
+                        }
+                    }
+                }
+                .frame(height: 21)
+
+                // Tap-to-reveal level name tooltip
+                if let idx = tooltipIndex, chips.indices.contains(idx) {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(barColors.indices.contains(idx) ? barColors[idx] : .secondary)
+                            .frame(width: 5, height: 5)
+                        Text(chips[idx].title)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(barColors.indices.contains(idx) ? barColors[idx] : .primary)
+                        Spacer(minLength: 0)
+                        Text("\(chips[idx].count)")
+                            .font(.caption2.weight(.bold).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .leading)))
+                }
+            }
+        }
+    }
+
+    private func canonicalKnowledgeLevelID(from raw: String) -> String? {
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return nil }
+
+        if normalized.contains("remember")
+            || normalized.contains("recall")
+            || normalized.contains("记忆")
+            || normalized.contains("识记")
+            || normalized.contains(S("edu.knowledge.type.remember").lowercased()) {
+            return "remember"
+        }
+        if normalized.contains("understand")
+            || normalized.contains("理解")
+            || normalized.contains(S("edu.knowledge.type.understand").lowercased()) {
+            return "understand"
+        }
+        if normalized.contains("apply")
+            || normalized.contains("应用")
+            || normalized.contains("实践")
+            || normalized.contains(S("edu.knowledge.type.apply").lowercased()) {
+            return "apply"
+        }
+        if normalized.contains("analyze")
+            || normalized.contains("analyse")
+            || normalized.contains("分析")
+            || normalized.contains(S("edu.knowledge.type.analyze").lowercased()) {
+            return "analyze"
+        }
+        if normalized.contains("evaluate")
+            || normalized.contains("assessment")
+            || normalized.contains("评价")
+            || normalized.contains("评估")
+            || normalized.contains(S("edu.knowledge.type.evaluate").lowercased()) {
+            return "evaluate"
+        }
+        if normalized.contains("create")
+            || normalized.contains("创造")
+            || normalized.contains("创作")
+            || normalized.contains(S("edu.knowledge.type.create").lowercased()) {
+            return "create"
+        }
+        return nil
+    }
+
+    private func reachableEvaluationNodeIDs(
+        from startNodeIDs: Set<UUID>,
+        outgoingByNode: [UUID: [UUID]],
+        nodeTypeByID: [UUID: String]
+    ) -> Set<UUID> {
+        guard !startNodeIDs.isEmpty else { return [] }
+
+        var queue: [UUID] = Array(startNodeIDs)
+        var head = 0
+        var visited: Set<UUID> = startNodeIDs
+        var evaluationIDs: Set<UUID> = []
+
+        while head < queue.count {
+            let current = queue[head]
+            head += 1
+
+            if nodeTypeByID[current] == EduNodeType.evaluation {
+                evaluationIDs.insert(current)
+            }
+
+            for next in outgoingByNode[current] ?? [] {
+                guard !visited.contains(next) else { continue }
+                visited.insert(next)
+                queue.append(next)
+            }
+        }
+
+        return evaluationIDs
+    }
+
+    private func evaluationDescriptor(
+        for node: SerializableNode,
+        customName: String?
+    ) -> EvaluationNodeDescriptor {
+        let custom = (customName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = custom.isEmpty ? node.attributes.name : custom
+        let textFields = parseJSONStringDictionary(node.nodeData["evaluationTextFields"])
+        let indicatorsRaw = textFields["evaluation_indicators"] ?? node.nodeData["evaluation_indicators"] ?? ""
+        let indicators = parseEvaluationIndicators(
+            from: indicatorsRaw,
+            fallbackInputPorts: node.inputPorts
+        )
+        return EvaluationNodeDescriptor(
+            id: node.id,
+            title: title,
+            indicators: indicators
+        )
+    }
+
+    private func parseEvaluationIndicators(
+        from raw: String,
+        fallbackInputPorts: [SerializablePort]
+    ) -> [EvaluationIndicatorDescriptor] {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        var descriptors: [EvaluationIndicatorDescriptor] = []
+
+        for line in normalized.split(separator: "\n", omittingEmptySubsequences: true) {
+            let trimmed = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+
+            let normalizedLine = trimmed
+                .replacingOccurrences(of: "｜", with: "|")
+                .replacingOccurrences(of: "：", with: ":")
+            var components = normalizedLine
+                .split(separator: "|", omittingEmptySubsequences: false)
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+
+            if components.count == 1 && normalizedLine.contains(":") {
+                components = normalizedLine
+                    .split(separator: ":", omittingEmptySubsequences: false)
+                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            }
+
+            guard let first = components.first else { continue }
+            let name = first.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { continue }
+
+            var typeToken = components.count > 1 ? components[1] : "score"
+            if components.count == 2 && typeToken.contains("/") {
+                typeToken = typeToken
+                    .split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .first ?? "score"
+            }
+
+            descriptors.append(
+                EvaluationIndicatorDescriptor(
+                    id: "\(name.lowercased())-\(descriptors.count)",
+                    name: name,
+                    kind: isCompletionIndicatorType(typeToken) ? .completion : .score
+                )
+            )
+        }
+
+        if descriptors.isEmpty {
+            descriptors = fallbackInputPorts.enumerated().map { index, port in
+                let title = port.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                return EvaluationIndicatorDescriptor(
+                    id: "input-\(index)",
+                    name: title.isEmpty ? "\(S("edu.evaluation.autoIndicatorPrefix")) \(index + 1)" : title,
+                    kind: .score
+                )
+            }
+        }
+
+        return descriptors
+    }
+
+    private func isCompletionIndicatorType(_ raw: String) -> Bool {
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return false }
+        let tokens = ["completion", "complete", "done", "binary", "yes/no", "完成", "达成", "完成制"]
+        return tokens.contains(where: { normalized.contains($0) })
+    }
+
+    private func parseJSONStringDictionary(_ raw: String?) -> [String: String] {
+        guard let raw, !raw.isEmpty, let data = raw.data(using: .utf8) else { return [:] }
+        return (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+    }
+
+    private func parsedStudentNames(from studentProfile: String) -> [String] {
+        let text: String
+        if let extracted = extractedRosterText(from: studentProfile) {
+            text = extracted
+        } else if studentProfile.contains("|") {
+            text = studentProfile
+        } else {
+            return []
+        }
+
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let textToParse = trimmedText
+        guard !textToParse.isEmpty else { return [] }
+
+        let lines = textToParse
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        var names: [String] = []
+
+        for line in lines {
+            if line.contains("="), !line.contains("|"), !line.contains(",") {
+                continue
+            }
+
+            let name: String
+            if line.contains("|") {
+                name = line
+                    .split(separator: "|", omittingEmptySubsequences: false)
+                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .first ?? ""
+            } else if line.contains(",") {
+                name = line
+                    .split(separator: ",", omittingEmptySubsequences: false)
+                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .first ?? ""
+            } else {
+                name = line
+            }
+
+            let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lowered = normalizedName.lowercased()
+            if normalizedName.isEmpty || lowered == "name" || normalizedName == "姓名" {
+                continue
+            }
+            names.append(normalizedName)
+        }
+
+        return deduplicatedStudentNames(names)
+    }
+
+    private func extractedRosterText(from studentProfile: String) -> String? {
+        let trimmed = studentProfile.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        guard let range = trimmed.range(of: "roster=") else {
+            return trimmed.contains("|") ? trimmed : nil
+        }
+
+        let start = range.upperBound
+        let suffix = trimmed[start...]
+        var end = suffix.endIndex
+        for marker in [", organization=", ",organization=", ", outputs=", ",outputs="] {
+            if let markerRange = suffix.range(of: marker), markerRange.lowerBound < end {
+                end = markerRange.lowerBound
+            }
+        }
+
+        let roster = String(suffix[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return roster.isEmpty ? nil : roster
+    }
+
+    private func openStudentRosterEditor(for file: GNodeWorkspaceFile) {
+        creationDraft = CourseCreationDraft()
+        creationDraft.studentRosterText = extractedRosterText(from: file.studentProfile) ?? ""
+        studentRosterEditFileID = file.id
+        showingStudentRosterEdit = true
+    }
+
+    private func saveStudentRoster(_ newRoster: String) {
+        guard let fileID = studentRosterEditFileID,
+              let file = workspaceFiles.first(where: { $0.id == fileID }) else {
+            showingStudentRosterEdit = false
+            return
+        }
+
+        let existing = file.studentProfile
+        if let rosterRange = existing.range(of: "roster=") {
+            let suffix = existing[rosterRange.upperBound...]
+            var endIdx = suffix.endIndex
+            for marker in [", organization=", ",organization=", ", outputs=", ",outputs="] {
+                if let r = suffix.range(of: marker), r.lowerBound < endIdx {
+                    endIdx = r.lowerBound
+                }
+            }
+            let trailing = endIdx < suffix.endIndex ? String(suffix[endIdx...]) : ""
+            let prefix = String(existing[..<rosterRange.lowerBound])
+            file.studentProfile = "\(prefix)roster=\(newRoster)\(trailing)"
+        } else if existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            file.studentProfile = "roster=\(newRoster)"
+        } else {
+            file.studentProfile = "\(existing), roster=\(newRoster)"
+        }
+
+        file.updatedAt = .now
+        try? modelContext.save()
+        showingStudentRosterEdit = false
+    }
+
+    private func deduplicatedStudentNames(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for value in values {
+            if seen.insert(value).inserted {
+                result.append(value)
+            }
+        }
+        return result
+    }
+
+    @ViewBuilder
     private func presentationFilmstrip(
         fileID: UUID,
         courseName: String,
@@ -4115,10 +5085,12 @@ Extend learning with monthly photo bird identification
             return groups.first?.id
         }()
         let stripHeight: CGFloat = presentationFilmstripHeight
+        let stripVerticalPadding: CGFloat = 8
 
         VStack(spacing: 0) {
             Spacer(minLength: 0)
 
+            ScrollViewReader { scrollProxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
@@ -4185,11 +5157,12 @@ Extend learning with monthly photo bird identification
                             }
                             .padding(7)
                         }
+                        .id(group.id)
                     }
                 }
                 .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .frame(minHeight: stripHeight - 10, alignment: .center)
+                .padding(.vertical, stripVerticalPadding)
+                .frame(height: stripHeight, alignment: .center)
             }
             .frame(height: stripHeight, alignment: .center)
             .frame(maxWidth: .infinity)
@@ -4199,15 +5172,27 @@ Extend learning with monthly photo bird identification
                     .fill(Color.white.opacity(0.16))
                     .frame(height: 1)
             }
-            .ignoresSafeArea(edges: .bottom)
+            .onChange(of: selectedGroupID) { _, newID in
+                guard let newID else { return }
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    scrollProxy.scrollTo(newID, anchor: .center)
+                }
+            }
+            .onAppear {
+                if let id = selectedGroupID {
+                    scrollProxy.scrollTo(id, anchor: .center)
+                }
+            }
+            } // ScrollViewReader
         }
+        .ignoresSafeArea(edges: .bottom)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 
     @ViewBuilder
     private func presentationStylingFloatingEntryButton(
         fileID: UUID,
-        groups: [EduPresentationSlideGroup],
-        bottomSafeInset: CGFloat
+        groups: [EduPresentationSlideGroup]
     ) -> some View {
         let storedSelectedID = selectedPresentationGroupIDByFile[fileID]
         let selectedGroupID: UUID? = {
@@ -4232,8 +5217,10 @@ Extend learning with monthly photo bird identification
                 Spacer(minLength: 0)
             }
             .padding(.leading, 20)
-            .padding(.bottom, max(bottomSafeInset, 12) + (presentationFilmstripHeight - 18))
+            .padding(.bottom, presentationFilmstripHeight - 14)
         }
+        .ignoresSafeArea(edges: .bottom)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 
     @ViewBuilder

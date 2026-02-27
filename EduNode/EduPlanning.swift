@@ -230,7 +230,7 @@ struct EduToolkitPreset: Hashable, Identifiable {
 
 enum EduPlanning {
     static let rolePrefix = "edunode.role="
-    private static let zhuhaiSampleID = "zhuhai_birds_v3"
+    private static let zhuhaiSampleID = "zhuhai_birds_v4"
 
     static func loadModelRules() -> [EduModelRule] {
         let decoder = JSONDecoder()
@@ -1117,6 +1117,32 @@ enum EduPlanning {
             )
         }
 
+        func makeEvaluation(
+            _ titleZH: String,
+            _ titleEN: String,
+            formText: [String: String] = [:],
+            formOptions: [String: String] = [:]
+        ) -> any GNode {
+            let title = isChinese ? titleZH : titleEN
+            if let registered = GNodeNodeKit.gnodeNodeKit.createNode(type: EduNodeType.evaluation) {
+                registered.attributes.name = title
+                if let formNode = registered as? any NodeFormEditable {
+                    for (fieldID, optionValue) in formOptions {
+                        formNode.setEditorFormOptionValue(optionValue, for: fieldID)
+                    }
+                    for (fieldID, textValue) in formText {
+                        formNode.setEditorFormTextFieldValue(textValue, for: fieldID)
+                    }
+                }
+                return registered
+            }
+            return EduEvaluationNode(
+                name: title,
+                textFieldValues: formText,
+                optionFieldValues: formOptions
+            )
+        }
+
         let levelRemember = S("edu.knowledge.type.remember")
         let levelUnderstand = S("edu.knowledge.type.understand")
         let levelApply = S("edu.knowledge.type.apply")
@@ -1420,62 +1446,18 @@ enum EduPlanning {
             ]
         )
 
-        let tRubric = makeToolkit(
-            "课堂评价指标（三维三级）",
-            "Class Evaluation Rubric (3D × 3L)",
-            "课堂版三维三级：知识理解与运用、技能掌握与实践、情感态度与价值观；等级为初级/良好/优秀。",
-            "Classroom 3-dimension/3-level rubric: knowledge use, skill practice, and attitude/value; levels are Basic/Good/Excellent.",
-            nodeType: EduNodeType.toolkitRegulationMetacognition,
-            methodID: "rubric_checklist",
+        let eClassScore = makeEvaluation(
+            "课堂成绩评估",
+            "Class Performance Evaluation",
             formText: [
-                "rubric_dimension_dict": isChinese
-                    ? "知识理解与运用 | 能说出鸟类分类与巢型依据\n技能掌握与实践 | 能完成稳定结构与材料搭建\n情感态度与价值观 | 能协作并体现生态关怀"
-                    : "Knowledge Use | Explain bird classification and nest rationale\nSkill Practice | Build stable structure with suitable materials\nAttitude & Value | Collaborate and show ecological care",
-                "rubric_weight_config": isChinese
-                    ? "知识理解与运用 | 35\n技能掌握与实践 | 40\n情感态度与价值观 | 25"
-                    : "Knowledge Use | 35\nSkill Practice | 40\nAttitude & Value | 25",
-                "rubric_level_descriptions": isChinese
-                    ? "初级 | 在提示下完成基础识别与搭建\n良好 | 能独立完成并解释主要设计理由\n优秀 | 能迁移知识、优化设计并高质量协作"
-                    : "Basic | Complete with prompts\nGood | Independently complete with clear rationale\nExcellent | Transfer knowledge, optimize design, and collaborate effectively",
-                "rubric_band_ranges": isChinese
-                    ? "初级 | 0-59\n良好 | 60-84\n优秀 | 85-100"
-                    : "Basic | 0-59\nGood | 60-84\nExcellent | 85-100",
-                "rubric_evidence_library_optional": isChinese
-                    ? "证据示例：任务卡填写、鸟巢实物、展览讲解记录。"
-                    : "Evidence examples: worksheets, nest artifact, exhibition explanation notes.",
-                "rubric_feedback_template_optional": isChinese
-                    ? "你们在【维度】表现为【等级】；建议下一步【行动】。"
-                    : "In [dimension], your level is [band]; next step: [action]."
+                "evaluation_indicators": isChinese
+                    ? "鸟类分类理解 | score | 0.4\n搭建任务完成 | completion | 0.3\n展示讲解质量 | score | 0.3"
+                    : "Bird Classification Understanding | score | 0.4\nNest Building Completion | completion | 0.3\nShowcase Explanation Quality | score | 0.3"
             ],
             formOptions: [
-                "rubric_levels": "level3",
-                "rubric_summary_strategy": "grade_band"
-            ]
-        )
-
-        let tDashboard = makeToolkit(
-            "评价汇总（课中+课后）",
-            "Evaluation Summary (In-class + After-class)",
-            "汇总课堂评价与月度拍图识鸟数据，形成后续教学改进输入。",
-            "Aggregate in-class rubric and monthly photo-ID results as input for follow-up instruction.",
-            nodeType: EduNodeType.toolkitRegulationMetacognition,
-            methodID: "learning_dashboard",
-            formText: [
-                "dashboard_metric_dict": isChinese
-                    ? "课堂掌握度 | 三维三级课堂评分\n合作表现 | 组内协作观察记录\n延伸参与度 | 月度拍图识鸟提交率"
-                    : "Class Mastery | 3D×3L classroom rating\nCollaboration | Teamwork observation logs\nExtension Participation | Monthly photo-ID submission rate",
-                "dashboard_source_mapping": isChinese
-                    ? "课堂掌握度 | 评价指标节点\n合作表现 | 展览互评+教师观察\n延伸参与度 | 拍图识鸟记录"
-                    : "Class Mastery | Rubric node\nCollaboration | Exhibition peer review + teacher notes\nExtension Participation | Photo-ID records",
-                "dashboard_alert_threshold": isChinese
-                    ? "任一指标连续2次低于60触发复教与小组支持。"
-                    : "Any metric below 60 for two cycles triggers reteaching and group support.",
-                "dashboard_view_mode_optional": isChinese
-                    ? "课次趋势 + 组别对比摘要"
-                    : "Lesson trend + group comparison summary"
-            ],
-            formOptions: [
-                "dashboard_cycle": "per_lesson"
+                "evaluation_formula": "weighted_avg",
+                "evaluation_grouping": "group",
+                "evaluation_output_scale": "score100"
             ]
         )
 
@@ -1503,9 +1485,7 @@ enum EduPlanning {
         add(tExhibitionAwards, type: EduNodeType.toolkitCommunicationNegotiation, x: 3820, y: -420, role: "toolkit")
         add(tReflection, type: EduNodeType.toolkitRegulationMetacognition, x: 4280, y: -420, role: "toolkit")
         add(tAfterClassObservation, type: EduNodeType.toolkitPerceptionInquiry, x: 4740, y: -420, role: "toolkit")
-
-        add(tRubric, type: EduNodeType.toolkitRegulationMetacognition, x: 4280, y: 220, role: "evaluation_metric")
-        add(tDashboard, type: EduNodeType.toolkitRegulationMetacognition, x: 4740, y: 220, role: "evaluation_summary")
+        add(eClassScore, type: EduNodeType.evaluation, x: 4280, y: 220, role: "evaluation")
 
         connectFirstOutput(from: tCheckinGrouping, to: tWarmupPuzzle, inputIndex: 0, in: graph)
         connectFirstOutput(from: tWarmupPuzzle, to: tContextHook, inputIndex: 0, in: graph)
@@ -1529,12 +1509,9 @@ enum EduPlanning {
         connectFirstOutput(from: tBuildWorkshop, to: tExhibitionAwards, inputIndex: 0, in: graph)
         connectFirstOutput(from: tExhibitionAwards, to: tReflection, inputIndex: 0, in: graph)
         connectFirstOutput(from: tReflection, to: tAfterClassObservation, inputIndex: 0, in: graph)
-
-        connectFirstOutput(from: tBuildWorkshop, to: tRubric, inputIndex: 0, in: graph)
-        connectFirstOutput(from: tExhibitionAwards, to: tRubric, inputIndex: 0, in: graph)
-        connectFirstOutput(from: tReflection, to: tRubric, inputIndex: 0, in: graph)
-        connectFirstOutput(from: tRubric, to: tDashboard, inputIndex: 0, in: graph)
-        connectFirstOutput(from: tAfterClassObservation, to: tDashboard, inputIndex: 0, in: graph)
+        connectFirstOutput(from: kResidentMigratory, to: eClassScore, inputIndex: 0, in: graph)
+        connectFirstOutput(from: tBuildWorkshop, to: eClassScore, inputIndex: 1, in: graph)
+        connectFirstOutput(from: tExhibitionAwards, to: eClassScore, inputIndex: 2, in: graph)
 
         let serializedNodes = entries.map { entry in
             SerializableNode(from: entry.node, nodeType: entry.type)
@@ -1548,7 +1525,7 @@ enum EduPlanning {
             connections: graph.getAllConnections(),
             canvasState: canvasState
         )
-        document.metadata.description = "edunode.sample=\(zhuhaiSampleID);edunode.model=inquiry"
+        document.metadata.description = "edunode.sample=\(zhuhaiSampleID);edunode.model=fivee"
 
         return (try? encodeDocument(document)) ?? Data()
     }
@@ -1698,12 +1675,34 @@ enum EduPlanning {
     private static func shouldUpgradeZhuhaiSample(_ document: GNodeDocument) -> Bool {
         guard isZhuhaiSample(document) else { return false }
         let description = document.metadata.description ?? ""
-        guard !description.contains("edunode.sample=\(zhuhaiSampleID)") else { return false }
-        if description.contains("edunode.sample=zhuhai_birds_v2") {
+        if description.contains("edunode.sample=\(zhuhaiSampleID)") {
+            return hasLegacyZhuhaiEvaluationToolkitNodes(document)
+        }
+        if description.contains("edunode.sample=zhuhai_birds_v2")
+            || description.contains("edunode.sample=zhuhai_birds_v3") {
             return true
         }
         return legacyZhuhaiNamePrefixes.contains { prefix in
             document.nodes.contains(where: { $0.attributes.name.hasPrefix(prefix) })
+        }
+    }
+
+    private static func hasLegacyZhuhaiEvaluationToolkitNodes(_ document: GNodeDocument) -> Bool {
+        document.nodes.contains { node in
+            guard EduNodeType.allToolkitTypes.contains(node.nodeType) else { return false }
+
+            let methodID = (node.nodeData["toolkitMethodID"] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            if methodID == "rubric_checklist" || methodID == "learning_dashboard" {
+                return true
+            }
+
+            let nodeName = node.attributes.name
+            return nodeName.contains("课堂评价指标")
+                || nodeName.contains("评价汇总")
+                || nodeName.localizedCaseInsensitiveContains("Class Evaluation Rubric")
+                || nodeName.localizedCaseInsensitiveContains("Evaluation Summary")
         }
     }
 
