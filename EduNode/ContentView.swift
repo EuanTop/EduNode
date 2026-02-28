@@ -25,6 +25,9 @@ struct ContentView: View {
     @AppStorage("edunode.seeded_default_course.v1") private var didSeedDefaultCourse = false
     @AppStorage("edunode.lastPersistLog") private var lastPersistLog = ""
     @AppStorage("edunode.onboarding.completed.v1") private var didCompleteOnboarding = false
+    @AppStorage("edunode.tutorial.basics.completed.v1") private var didCompleteBasics = false
+    @AppStorage("edunode.tutorial.practice.completed.v1") private var didCompletePractice = false
+    @AppStorage("edunode.tutorial.explore.completed.v1") private var didCompleteExplore = false
 
     @State private var selectedFileID: UUID?
     @State private var splitVisibility: NavigationSplitViewVisibility = .automatic
@@ -69,6 +72,34 @@ struct ContentView: View {
     @State private var inlineEvaluationCompletionValuesByFile: [UUID: [InlineEvaluationScoreKey: Bool]] = [:]
     @State private var selectionRequest: NodeEditorSelectionRequest?
     @State private var isHandlingPresentationButtonTap = false
+    @State private var tutorialHintPulsePhase = false
+    @State private var activeTutorial: TutorialKind?
+    @State private var tutorialStepIndex: Int = 0
+    @State private var tutorialPreviousNodeCount: Int = 0
+    @State private var tutorialPreviousConnectionCount: Int = 0
+    @State private var tutorialAutoAdvanceToken = UUID()
+    @State private var tutorialDedicatedFileID: UUID?
+    @State private var tutorialPracticeFileID: UUID?
+    @State private var tutorialPracticeBaselineSemanticData: Data?
+    @State private var tutorialPracticeHasEnteredPresentation = false
+    @State private var tutorialPracticeInitialToolkitCount: Int = 0
+    @State private var tutorialPracticeInitialConnections: Set<TutorialConnectionSignature> = []
+    @State private var tutorialPracticeInitialNodeIDs: Set<UUID> = []
+    @State private var tutorialPracticeInitialKnowledgeContentByNodeID: [UUID: String] = [:]
+    @State private var tutorialPracticeTopKnowledgeNodeIDs: [UUID] = []
+    @State private var tutorialPracticeKnowledgeModificationBaseline: Int?
+    @State private var tutorialPracticeKnowledgeStepTargetNodeID: UUID?
+    @State private var tutorialPracticeKnowledgeStepEntryContent: String?
+    @State private var tutorialPracticeConfiguredToolkitNodeID: UUID?
+    @State private var tutorialPracticeConnectionStepBaseline: Set<TutorialConnectionSignature>?
+    @State private var tutorialPracticeGuidedFillToken = UUID()
+    @State private var tutorialPracticeGuidedFillPendingStepIndex: Int?
+    @State private var tutorialPracticeInitialZoomPercent: Int = 100
+    @State private var tutorialPracticeZoomStepBaseline: Int?
+    @State private var tutorialCanvasEvaluationCountBeforeDelete: Int?
+    @State private var tutorialCanvasConnectionCountBeforeDelete: Int?
+    @State private var tutorialCreateCourseButtonFrameInGlobal: CGRect = .zero
+    @State private var tutorialDesignButtonFrameInGlobal: CGRect = .zero
     private let presentationPersistenceDebugEnabled = true
 
     private let modelRules = EduPlanning.loadModelRules()
@@ -81,6 +112,7 @@ struct ContentView: View {
         splitVisibility == .detailOnly ? 52 : 0
     }
     private let presentationFilmstripHeight: CGFloat = 186
+    private let tutorialRootCoordinateSpaceName = "TutorialRootCoordinateSpace"
 
     private struct ResolvedPresentationSelection {
         let group: EduPresentationSlideGroup
@@ -146,6 +178,312 @@ struct ContentView: View {
         }
     }
 
+    private struct TutorialSemanticSnapshot: Codable {
+        let nodes: [SerializableNode]
+        let connections: [NodeConnection]
+        let canvasState: [CanvasNodeState]
+    }
+
+    private struct TutorialConnectionSignature: Hashable {
+        let sourceNodeID: UUID
+        let sourcePortID: UUID
+        let targetNodeID: UUID
+        let targetPortID: UUID
+    }
+
+    private struct TutorialDesignButtonFramePreferenceKey: PreferenceKey {
+        static var defaultValue: CGRect = .zero
+
+        static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+            let next = nextValue()
+            if next.width > 1 && next.height > 1 {
+                value = next
+            }
+        }
+    }
+
+    private struct TutorialCreateCourseButtonFramePreferenceKey: PreferenceKey {
+        static var defaultValue: CGRect = .zero
+
+        static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+            let next = nextValue()
+            if next.width > 1 && next.height > 1 {
+                value = next
+            }
+        }
+    }
+
+    // MARK: - Tutorial System Types
+
+    /// Tutorial flow (all within the "5-Min Basics" button):
+    ///   aboutDemo  →  canvasBasics  →  modelsIntro  →  [delete tutorial file, show welcome]
+    /// Then "Practice" button:
+    ///   practice
+    /// Then "Explore" button:
+    ///   explore  →  done
+    private enum TutorialKind: Equatable {
+        case aboutDemo             // Animated intro on blank canvas — nodes appear & connect automatically
+        case canvasBasics          // Hands-on canvas ops on the same tutorial file
+        case modelsIntro           // User opens Docs and browses Education Models
+        case practice              // User creates a real course and works on it
+        case explore               // User views bird example
+    }
+
+    private enum TutorialAdvanceMode {
+        case tapAnywhere           // Tap coach mark to advance
+        case nodeAdded             // Auto-advance when node count increases
+        case nodeDeleted           // Auto-advance when node count decreases
+        case connectionAdded       // Auto-advance when connection count increases
+        case connectionDeleted     // Auto-advance when connection count decreases
+        case animationAuto         // Auto-advance after a timed delay (for demo animations)
+        case waitForDocs           // Wait for user to open the docs panel
+        case waitForModelDocSelection // Wait for user to select an Education Model entry in Docs
+        case waitForCreateCourseSheet
+        case waitForCourseCreated
+        case waitForCanvasZoomOut
+        case waitForKnowledgeKeywordEdit
+        case waitForAdditionalKnowledgeEdit
+        case waitForSpecificToolkitConfigured
+        case waitForKnowledgeToSpecificToolkitConnectionAdded
+        case waitForPresentationEnter
+        case waitForStylingPanelEnter
+        case waitForPresentationExit
+        case waitForLessonPlanPreview
+        case waitForPresentationPreview
+        case waitForBirdExampleSelection
+    }
+
+    private struct TutorialStep {
+        let enMessage: String
+        let zhMessage: String
+        let advanceMode: TutorialAdvanceMode
+        /// For animationAuto steps: which demo stage to trigger
+        var demoAction: TutorialDemoAction?
+
+        func message(chinese: Bool) -> String {
+            chinese ? zhMessage : enMessage
+        }
+    }
+
+    /// Actions performed during the aboutDemo phase
+    private enum TutorialDemoAction {
+        case showKnowledgeNode
+        case showToolkitNode
+        case showEvaluationNode
+        case connectKnowledgeToToolkit
+        case connectToolkitToEvaluation
+    }
+
+    /// Whether the current tutorial phase runs inside the docs fullScreenCover
+    private var isTutorialInDocsPhase: Bool {
+        activeTutorial == .modelsIntro && showingDocs
+    }
+
+    // ── About EduNode demo steps (animated on blank canvas) ──
+    private var aboutDemoSteps: [TutorialStep] {
+        [
+            TutorialStep(
+                enMessage: "Welcome to EduNode! It helps every teacher design quality lessons — NOT replace teachers with AI.\nLet me show you the three core building blocks.",
+                zhMessage: "欢迎来到 EduNode！它帮助每位教师设计高质量课堂——不会用 AI 取代教师。\n让我展示三种核心构建模块。",
+                advanceMode: .tapAnywhere
+            ),
+            TutorialStep(
+                enMessage: "This is a Knowledge node — it defines WHAT to teach.",
+                zhMessage: "这是 Knowledge 节点——它定义「学什么」。",
+                advanceMode: .tapAnywhere,
+                demoAction: .showKnowledgeNode
+            ),
+            TutorialStep(
+                enMessage: "This is a Toolkit node — it defines HOW to teach.",
+                zhMessage: "这是 Toolkit 节点——它定义「怎么学」。",
+                advanceMode: .tapAnywhere,
+                demoAction: .showToolkitNode
+            ),
+            TutorialStep(
+                enMessage: "This is an Evaluation node — it verifies HOW WELL students learn.",
+                zhMessage: "这是 Evaluation 节点——它验证「学得怎么样」。",
+                advanceMode: .tapAnywhere,
+                demoAction: .showEvaluationNode
+            ),
+            TutorialStep(
+                enMessage: "Now watch — we auto-connect from Knowledge right output \"\(S("edu.knowledge.output.content")) (String)\" to Toolkit left input \"\(S("edu.toolkit.input.knowledge")) (Any)\".",
+                zhMessage: "现在看——系统会自动从 Knowledge 右侧输出「Content（String）」连到 Toolkit 左侧输入「Knowledge（Any）」。",
+                advanceMode: .tapAnywhere,
+                demoAction: .connectKnowledgeToToolkit
+            ),
+            TutorialStep(
+                enMessage: "Next, Evaluation needs at least one indicator input. We auto-add \"Quick Check | score\", then connect Toolkit first output \"\(S("edu.output.toolkit")) (String)\" to Evaluation input \"Quick Check (Any)\".",
+                zhMessage: "接着，Evaluation 必须先有至少一个指标输入。系统会自动添加「Quick Check | score」，再将 Toolkit 第一个输出「\(S("edu.output.toolkit"))（String）」连到 Evaluation 输入「Quick Check（Any）」。",
+                advanceMode: .tapAnywhere,
+                demoAction: .connectToolkitToEvaluation
+            ),
+            TutorialStep(
+                enMessage: "Your workflow:\n1. Create a course (subject, grade, goals)\n2. Build the canvas (add & connect nodes)\n3. Fill details (content, activities)\n4. Preview & Export (lesson plan, slides)\n\nNow let's practice these operations yourself!",
+                zhMessage: "你的工作流：\n1. 新建课程（学科、学段、目标）\n2. 搭建画布（添加节点并连线）\n3. 填写细节（内容、活动）\n4. 预览与导出（教案、演示文稿）\n\n下面让我们亲手操作一下！",
+                advanceMode: .tapAnywhere
+            ),
+        ]
+    }
+
+    // ── Canvas basics hands-on steps ──
+    private var canvasBasicsSteps: [TutorialStep] {
+        [
+            TutorialStep(
+                enMessage: "The demo nodes have been cleared. Now it's your turn!\nDouble-tap anywhere to open the node menu, then add a Knowledge node.",
+                zhMessage: "演示节点已清除，现在轮到你了！\n双击画布空白区域打开节点面板，添加一个 Knowledge 节点。",
+                advanceMode: .nodeAdded
+            ),
+            TutorialStep(
+                enMessage: "Great! Now double-tap again and add ONE Toolkit node (any of the 4 Toolkit categories is accepted).",
+                zhMessage: "很好！再次双击画布，添加 1 个 Toolkit 节点（四类 Toolkit 任意一种都可以）。",
+                advanceMode: .nodeAdded
+            ),
+            TutorialStep(
+                enMessage: "Connect them precisely: drag from Knowledge right output \"\(S("edu.knowledge.output.content")) (String)\" to Toolkit left input \"\(S("edu.toolkit.input.knowledge")) (Any)\".",
+                zhMessage: "请精确连线：从 Knowledge 右侧输出「Content（String）」拖到 Toolkit 左侧输入「Knowledge（Any）」。",
+                advanceMode: .connectionAdded
+            ),
+            TutorialStep(
+                enMessage: "Add an Evaluation node. Then in its Indicators table, add one row (for example: \"Quick Check | score\") so the left input port appears.",
+                zhMessage: "添加一个 Evaluation 节点。然后在它的 Indicators 表格里新增一行（例如「Quick Check | score」），这样左侧输入端口才会出现。",
+                advanceMode: .nodeAdded
+            ),
+            TutorialStep(
+                enMessage: "Now connect Toolkit first output \"\(S("edu.output.toolkit")) (String)\" to Evaluation indicator input (Any).",
+                zhMessage: "现在连接 Toolkit 第一个输出「\(S("edu.output.toolkit"))（String）」到 Evaluation 指标输入端口（Any）。",
+                advanceMode: .connectionAdded
+            ),
+            TutorialStep(
+                enMessage: "Delete one Evaluation node: long-press that node to open quick actions, then tap Delete.",
+                zhMessage: "删除 1 个 Evaluation 节点：长按该节点呼出操作，再点击删除。",
+                advanceMode: .nodeDeleted
+            ),
+            TutorialStep(
+                enMessage: "One more operation: long-press an existing connection line to delete it.\nAfter you do this, we'll jump to Documentation automatically.",
+                zhMessage: "最后一个操作：长按一条已有连线即可删除。\n完成后会自动跳转到 Documentation 介绍教育模型。",
+                advanceMode: .connectionDeleted
+            ),
+        ]
+    }
+
+    // ── Models intro steps (shown overlaid on docs) ──
+    private var modelsIntroSteps: [TutorialStep] {
+        [
+            TutorialStep(
+                enMessage: "This is the Documentation page. Education Models provide structural blueprints for your teaching chains.\nBrowse through the models in the sidebar — try tapping \"Kolb Experiential Learning\".",
+                zhMessage: "这是文档页面。教育模型为教学链路提供结构蓝图。\n浏览侧栏中的模型——试试点击「Kolb 体验学习循环」。",
+                advanceMode: .waitForModelDocSelection
+            ),
+            TutorialStep(
+                enMessage: "Each model has a different node structure. When you create a course, EduNode recommends the best model for your needs.\n\n5-Min Basics complete. Moving to Practice.",
+                zhMessage: "每种模型有不同的节点结构。创建课程时，EduNode 会推荐最合适的模型。\n\n5 分钟入门完成。正在进入实战训练。",
+                advanceMode: .tapAnywhere
+            ),
+        ]
+    }
+
+    // ── Practice steps (on generated course canvas) ──
+    private var practiceSteps: [TutorialStep] {
+        [
+            TutorialStep(
+                enMessage: "Click + to create a new course. We pre-fill the form for this guided practice.",
+                zhMessage: "点击右上角 + 新建课程。实战训练中表单会自动预填。",
+                advanceMode: .waitForCreateCourseSheet
+            ),
+            TutorialStep(
+                enMessage: "Keep the pre-filled form and click Next/Create to generate the course template.",
+                zhMessage: "保持预填信息，直接点击 Next/Create 生成课程模板。",
+                advanceMode: .waitForCourseCreated
+            ),
+            TutorialStep(
+                enMessage: "Step 1: pinch to zoom out the canvas (about 80% or lower) and inspect the full UbD template structure first.",
+                zhMessage: "第 1 步：先双指缩小画布（约 80% 或更小），完整查看 UbD 模板结构。",
+                advanceMode: .waitForCanvasZoomOut
+            ),
+            TutorialStep(
+                enMessage: "UbD quick walkthrough: we'll spotlight the top understanding chain in sequence, then move to a concrete Newton's First Law lesson adaptation.",
+                zhMessage: "UbD 快速导览：系统会依次高亮上方“理解主链”，然后把它改造成「牛顿第一定律」课堂。",
+                advanceMode: .tapAnywhere
+            ),
+            TutorialStep(
+                enMessage: "Step 2 (Why): define what students must truly understand.\nSelect the highlighted \"UbD Stage 1: Desired Results\" node, then tap the guide-panel button \"Apply Guided Text\".",
+                zhMessage: "第 2 步（为什么）：先定义学生真正要理解什么。\n选中高亮的「UbD 阶段1：预期结果」节点，然后点击下方引导面板按钮「填入教程示例」。",
+                advanceMode: .waitForKnowledgeKeywordEdit
+            ),
+            TutorialStep(
+                enMessage: "Step 3 (Why): decide what evidence will prove understanding.\nSelect the highlighted \"UbD Stage 2: Acceptable Evidence\" node, then tap \"Apply Guided Text\" in this guide panel.",
+                zhMessage: "第 3 步（为什么）：明确用什么证据证明“学会了”。\n选中高亮的「UbD 阶段2：可接受证据」节点，然后点击本引导面板中的「填入教程示例」。",
+                advanceMode: .waitForAdditionalKnowledgeEdit
+            ),
+            TutorialStep(
+                enMessage: "Step 4 (Why): arrange activities in teaching order.\nSelect the highlighted \"UbD Stage 3: Learning Plan\" node, then tap \"Apply Guided Text\" in this guide panel.",
+                zhMessage: "第 4 步（为什么）：把活动按教学顺序组织出来。\n选中高亮的「UbD 阶段3：学习体验规划」节点，然后点击本引导面板中的「填入教程示例」。",
+                advanceMode: .waitForAdditionalKnowledgeEdit
+            ),
+            TutorialStep(
+                enMessage: "Step 5 (Why): add a concrete evidence-analysis activity.\nCreate ONE \"Inquiry\" toolkit. The tutorial will auto-switch it to Source Analysis, fill fields, and auto-link it from \"UbD Stage 3: Learning Plan\" as the activity-flow driver.",
+                zhMessage: "第 5 步（为什么）：补上一段“证据分析”活动。\n新增 1 个「Inquiry」Toolkit，教程会自动切到 Source Analysis、填好参数，并自动接到「UbD 阶段3」作为活动流程驱动。",
+                advanceMode: .waitForSpecificToolkitConfigured
+            ),
+            TutorialStep(
+                enMessage: "Step 6: keep existing UbD links as-is.\nNow add ONE more link from \"UbD Stage 2: Acceptable Evidence\" output \"\(S("edu.knowledge.output.content"))\" to the highlighted Inquiry Toolkit (Source Analysis) input \"\(S("edu.toolkit.input.knowledge"))\".",
+                zhMessage: "第 6 步：保持原有 UbD 连线不变。\n现在再新增 1 条连线：从「UbD 阶段2：可接受证据」输出「\(S("edu.knowledge.output.content"))」，连接到当前高亮的 Inquiry Toolkit（Source Analysis）输入「\(S("edu.toolkit.input.knowledge"))」。",
+                advanceMode: .waitForKnowledgeToSpecificToolkitConnectionAdded
+            ),
+            TutorialStep(
+                enMessage: "Why this matters: for this same toolkit, Stage 3 defines activity sequence, while Stage 2 adds evidence criteria.\nIn Lesson Plan / PPT preview, this stage will now show extra evidence-alignment guidance.",
+                zhMessage: "这一步的意义：对同一个 Toolkit，Stage 3 负责活动流程，Stage 2 负责证据标准。\n在教案/PPT 预览里，这个环节会出现额外的“证据对齐”提示。",
+                advanceMode: .tapAnywhere
+            ),
+            TutorialStep(
+                enMessage: "Now click Present to enter presentation mode.",
+                zhMessage: "现在点击 Present 进入演示模式。",
+                advanceMode: .waitForPresentationEnter
+            ),
+            TutorialStep(
+                enMessage: "Click the Design button to open quick styling.",
+                zhMessage: "点击 Design 按钮，进入快速美化。",
+                advanceMode: .waitForStylingPanelEnter
+            ),
+            TutorialStep(
+                enMessage: "Return and click Present again to exit presentation mode.",
+                zhMessage: "返回后再次点击 Present，退出演示模式。",
+                advanceMode: .waitForPresentationExit
+            ),
+            TutorialStep(
+                enMessage: "Use the Export button in the top-right toolbar, then open Lesson Plan Preview.\nCheck this toolkit section now includes evidence-alignment notes.",
+                zhMessage: "请点击右上角 Export 按钮，然后打开 Lesson Plan Preview。\n请查看该 Toolkit 环节现在多了“证据对齐”说明。",
+                advanceMode: .waitForLessonPlanPreview
+            ),
+            TutorialStep(
+                enMessage: "Use the Export button in the top-right toolbar, then open PPT Preview.\nYou should see extra evidence cue text for the same activity slide.",
+                zhMessage: "请点击右上角 Export 按钮，然后打开 PPT Preview。\n同一活动页会出现额外的证据提示文本。",
+                advanceMode: .waitForPresentationPreview
+            ),
+            TutorialStep(
+                enMessage: "Practice complete. Next: explore the Zhuhai bird sample.",
+                zhMessage: "实战训练完成。下一步：探索珠海观鸟优秀案例。",
+                advanceMode: .animationAuto
+            ),
+        ]
+    }
+
+    // ── Explore step ──
+    private var exploreSteps: [TutorialStep] {
+        [
+            TutorialStep(
+                enMessage: "Select \"Zhuhai Bird & Nest Workshop\" from the left file list.",
+                zhMessage: "请在左侧课程列表中选择「珠海观鸟美育工作坊」。",
+                advanceMode: .waitForBirdExampleSelection
+            ),
+            TutorialStep(
+                enMessage: "Excellent. Tutorial completed. Welcome to EduNode!",
+                zhMessage: "太好了，教程全部完成。欢迎使用 EduNode！",
+                advanceMode: .animationAuto
+            ),
+        ]
+    }
+
     var body: some View {
         coreLayout
         .onAppear {
@@ -155,6 +493,11 @@ struct ContentView: View {
             hydratePresentationStateFromStoreIfNeeded()
             migrateWorkspaceFilesIfNeeded()
             requestCameraFocusOnFirstNodeForSelectedFile()
+            if !tutorialHintPulsePhase {
+                withAnimation(.easeInOut(duration: 0.86).repeatForever(autoreverses: true)) {
+                    tutorialHintPulsePhase = true
+                }
+            }
             if !didCompleteOnboarding {
                 showingOnboardingGuide = true
             }
@@ -192,12 +535,28 @@ struct ContentView: View {
             isSidebarBasicInfoExpanded = false
             selectedModelTemplatePreviewID = nil
             requestCameraFocusOnFirstNodeForSelectedFile()
+            handleTutorialSelectionChange()
         }
         .onChange(of: scenePhase) { _, newPhase in
             persistenceLog("scenePhase -> \(String(describing: newPhase))", force: true)
             if newPhase == .inactive || newPhase == .background {
                 persistAllPresentationStates()
             }
+        }
+        .onChange(of: showingCreateCourseSheet) { _, _ in
+            handleTutorialSheetStateChange()
+        }
+        .onChange(of: activePresentationModeFileID) { _, _ in
+            handleTutorialPresentationStateChange()
+        }
+        .onChange(of: activePresentationStylingFileID) { _, _ in
+            handleTutorialPresentationStateChange()
+        }
+        .onChange(of: lessonPlanPreviewPayload?.id) { _, _ in
+            handleTutorialPreviewStateChange()
+        }
+        .onChange(of: presentationPreviewPayload?.id) { _, _ in
+            handleTutorialPreviewStateChange()
         }
     }
 
@@ -240,9 +599,34 @@ struct ContentView: View {
                     onboardingGuideOverlay
                         .zIndex(6100)
                 }
+
+                if shouldShowTutorialCreateCourseButtonSpotlight {
+                    tutorialCreateCourseButtonSpotlightOverlay()
+                        .zIndex(6038)
+                        .transition(.opacity)
+                }
+
+                if shouldShowTutorialDesignButtonSpotlight {
+                    tutorialDesignButtonSpotlightOverlay()
+                        .zIndex(6040)
+                        .transition(.opacity)
+                }
+
+                if activeTutorial != nil
+                    && !isTutorialInDocsPhase
+                    && !showingCreateCourseSheet {
+                    tutorialCoachMarkOverlay
+                        .zIndex(6050)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .coordinateSpace(name: tutorialRootCoordinateSpaceName)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onPreferenceChange(TutorialCreateCourseButtonFramePreferenceKey.self) { frame in
+            guard frame.width > 1, frame.height > 1 else { return }
+            tutorialCreateCourseButtonFrameInGlobal = frame
+        }
         .sheet(isPresented: $showingCreateCourseSheet) {
             CourseCreationSheet(
                 draft: $creationDraft,
@@ -252,7 +636,8 @@ struct ContentView: View {
                 },
                 onCreate: {
                     createWorkspaceFileFromDraft()
-                }
+                },
+                requiredModelID: activeTutorial == .practice ? tutorialPracticeRequiredModelID : nil
             )
             .presentationDetents([.large])
             .preferredColorScheme(.dark)
@@ -383,10 +768,22 @@ struct ContentView: View {
         .navigationTitle(S("app.files.title"))
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    showingDocs = true
-                } label: {
-                    Label(S("app.sidebar.docs"), systemImage: "book.closed")
+                HStack(spacing: 4) {
+                    Button {
+                        showingDocs = true
+                        handleDocsOpenedDuringTutorial()
+                    } label: {
+                        Label(S("app.sidebar.docs"), systemImage: "book.closed")
+                    }
+
+                    Button {
+                        showingOnboardingGuide = true
+                    } label: {
+                        Label(
+                            isChineseUI() ? "教程引导" : "Tutorial Guide",
+                            systemImage: "questionmark.circle"
+                        )
+                    }
                 }
             }
 
@@ -396,6 +793,17 @@ struct ContentView: View {
                 } label: {
                     Label(S("app.files.newCourse"), systemImage: "plus")
                 }
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear
+                            .preference(
+                                key: TutorialCreateCourseButtonFramePreferenceKey.self,
+                                value: proxy.frame(in: .named(tutorialRootCoordinateSpaceName))
+                            )
+                    }
+                )
+                .scaleEffect(shouldPulseCreateCourseButton ? (tutorialHintPulsePhase ? 1.08 : 0.94) : 1)
+                .opacity(shouldPulseCreateCourseButton ? (tutorialHintPulsePhase ? 1 : 0.72) : 1)
                 .contextMenu {
                     Button {
                         presentCreateCourseSheet()
@@ -455,6 +863,7 @@ struct ContentView: View {
                         ),
                     onStatsChanged: { stats in
                         editorStatsByFileID[file.id] = stats
+                        handleTutorialStatsChange(fileID: file.id, stats: stats)
                     },
                     connectionAppearanceProvider: { connection, sourceNodeType, targetNodeType in
                         editorConnectionAppearance(
@@ -496,6 +905,10 @@ struct ContentView: View {
                             fileID: file.id,
                             groups: slideGroups
                         )
+                        .onPreferenceChange(TutorialDesignButtonFramePreferenceKey.self) { frame in
+                            guard frame.width > 1, frame.height > 1 else { return }
+                            tutorialDesignButtonFrameInGlobal = frame
+                        }
                         .zIndex(2050)
                     }
 
@@ -529,6 +942,17 @@ struct ContentView: View {
                     } label: {
                         Label(S("app.files.newCourse"), systemImage: "plus")
                     }
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear
+                                .preference(
+                                    key: TutorialCreateCourseButtonFramePreferenceKey.self,
+                                    value: proxy.frame(in: .named(tutorialRootCoordinateSpaceName))
+                                )
+                        }
+                    )
+                    .scaleEffect(shouldPulseCreateCourseButton ? (tutorialHintPulsePhase ? 1.08 : 0.94) : 1)
+                    .opacity(shouldPulseCreateCourseButton ? (tutorialHintPulsePhase ? 1 : 0.72) : 1)
                 }
             }
         }
@@ -544,24 +968,45 @@ struct ContentView: View {
         } else {
             fallbackNodeCount = 0
         }
-        return NodeEditorCanvasStats(nodeCount: fallbackNodeCount, zoomPercent: 100)
+        return NodeEditorCanvasStats(nodeCount: fallbackNodeCount, connectionCount: 0, zoomPercent: 100)
     }
 
     @ViewBuilder
     private var docsContent: some View {
         if #available(iOS 17.0, macOS 14.0, *) {
-            if let docsPreferredNodeType {
-                NodeDocumentationView(
-                    selectedNodeType: docsPreferredNodeType,
-                    onClose: {
-                        showingDocs = false
-                        self.docsPreferredNodeType = nil
-                    }
-                )
-            } else {
-                NodeDocumentationView(onClose: {
-                    showingDocs = false
-                })
+            ZStack {
+                if let docsPreferredNodeType {
+                    NodeDocumentationView(
+                        selectedNodeType: docsPreferredNodeType,
+                        onSelectionChange: { selectedType in
+                            handleDocsSelectionDuringTutorial(selectedType)
+                        },
+                        onClose: {
+                            if isTutorialInDocsPhase {
+                                endTutorial(completed: false)
+                            }
+                            showingDocs = false
+                            self.docsPreferredNodeType = nil
+                        }
+                    )
+                } else {
+                    NodeDocumentationView(
+                        onClose: {
+                            if isTutorialInDocsPhase {
+                                endTutorial(completed: false)
+                            }
+                            showingDocs = false
+                        },
+                        onSelectionChange: { selectedType in
+                            handleDocsSelectionDuringTutorial(selectedType)
+                        }
+                    )
+                }
+
+                // Coach mark overlay for docs-phase tutorials
+                if isTutorialInDocsPhase && activeTutorial != nil {
+                    tutorialCoachMarkOverlay
+                }
             }
         } else {
             Text(S("app.docs.unsupported"))
@@ -578,73 +1023,10 @@ struct ContentView: View {
                 .ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: 14) {
-                Text(chinese ? "欢迎使用 EduNode" : "Welcome to EduNode")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.white)
-
-                Text(
-                    chinese
-                    ? "这是一个专业的教学设计工具。建议按下面 3 步完成首次上手：先学，再练，再探索。"
-                    : "This is a professional lesson-design tool. Start with this 3-step route: learn, practice, then explore."
-                )
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.92))
-
-                onboardingStepRow(
-                    index: 1,
-                    title: chinese ? "5 分钟基础教程" : "5-min Basics",
-                    detail: chinese
-                    ? "了解课程框架、节点角色与连线规则。"
-                    : "Learn framework, node roles, and connection rules."
-                )
-
-                onboardingStepRow(
-                    index: 2,
-                    title: chinese ? "实战训练：中学物理微课" : "Practice: Physics Micro-Lesson",
-                    detail: chinese
-                    ? "从 Course Context 到 Knowledge/Toolkit 串联，完成讲义与演讲产出。"
-                    : "Build Course Context -> Knowledge/Toolkit chain, then finish lesson-plan and presentation output."
-                )
-
-                onboardingStepRow(
-                    index: 3,
-                    title: chinese ? "示例探索" : "Explore Example",
-                    detail: chinese
-                    ? "先参考内置观鸟案例，再迁移到你自己的主题。"
-                    : "Inspect the built-in bird sample, then adapt it to your own topic."
-                )
-
-                VStack(spacing: 8) {
-                    Button {
-                        docsPreferredNodeType = "EduGuideBasics5Min"
-                        showingDocs = true
-                        completeOnboardingGuide()
-                    } label: {
-                        Text(chinese ? "开始基础教程" : "Start Basics Tutorial")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 34)
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    Button {
-                        createPhysicsMicroLessonTrainingFile()
-                        completeOnboardingGuide()
-                    } label: {
-                        Text(chinese ? "创建中学物理实战任务" : "Create Physics Practice Task")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 34)
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button(chinese ? "稍后再看" : "Maybe Later") {
-                        dismissOnboardingGuideForNow()
-                    }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.76))
-                    .buttonStyle(.plain)
+                onboardingHeaderSection(chinese: chinese)
+                onboardingStepsSection(chinese: chinese)
+                onboardingButtonsSection(chinese: chinese)
                     .padding(.top, 4)
-                }
-                .padding(.top, 4)
             }
             .padding(.horizontal, 22)
             .padding(.vertical, 20)
@@ -660,18 +1042,153 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func onboardingStepRow(index: Int, title: String, detail: String) -> some View {
+    private func onboardingHeaderSection(chinese: Bool) -> some View {
+        Text(chinese ? "欢迎使用 EduNode" : "Welcome to EduNode")
+            .font(.title3.weight(.bold))
+            .foregroundStyle(.white)
+
+        Text(
+            chinese
+            ? "这是一个专业的教学设计工具。建议按下面 3 步完成首次上手：先学，再练，再探索。"
+            : "This is a professional lesson-design tool. Start with this 3-step route: learn, practice, then explore."
+        )
+        .font(.subheadline)
+        .foregroundStyle(.white.opacity(0.92))
+    }
+
+    @ViewBuilder
+    private func onboardingStepsSection(chinese: Bool) -> some View {
+        onboardingStepRow(
+            index: 1,
+            title: chinese ? "5 分钟入门" : "5-Min Basics",
+            detail: chinese
+            ? "带读了解 EduNode → 教育模型简介 → 画布操作练习。"
+            : "Guided reading → Education Models → Canvas practice.",
+            isCompleted: didCompleteBasics
+        )
+
+        onboardingStepRow(
+            index: 2,
+            title: chinese ? "实战训练" : "Practice",
+            detail: chinese
+            ? "自动创建一门科学课程，在生成的画布上填写节点。"
+            : "Auto-create a science course, then fill in nodes on the canvas.",
+            isCompleted: didCompletePractice
+        )
+
+        onboardingStepRow(
+            index: 3,
+            title: chinese ? "示例探索" : "Explore Example",
+            detail: chinese
+            ? "打开内置观鸟案例，参考完整课程结构。"
+            : "Open the built-in bird sample to see a complete course.",
+            isCompleted: didCompleteExplore
+        )
+    }
+
+    @ViewBuilder
+    private func onboardingButtonsSection(chinese: Bool) -> some View {
+        VStack(spacing: 8) {
+            onboardingBasicsButton(chinese: chinese)
+            onboardingPracticeButton(chinese: chinese)
+            onboardingExploreButton(chinese: chinese)
+
+            Button(chinese ? "稍后再看" : "Maybe Later") {
+                dismissOnboardingGuideForNow()
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.76))
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+        }
+    }
+
+    private func onboardingBasicsButton(chinese: Bool) -> some View {
+        Button {
+            showingOnboardingGuide = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                startTutorial(.aboutDemo)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if didCompleteBasics {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                Text(chinese
+                     ? (didCompleteBasics ? "重新学习基础" : "5 分钟入门")
+                     : (didCompleteBasics ? "Redo Basics" : "5-Min Basics"))
+                    .font(.subheadline.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity, minHeight: 34)
+        }
+        .buttonStyle(.borderedProminent)
+    }
+
+    private func onboardingPracticeButton(chinese: Bool) -> some View {
+        Button {
+            showingOnboardingGuide = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                startTutorial(.practice)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if didCompletePractice {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                Text(chinese
+                     ? (didCompletePractice ? "重新实战训练" : "实战训练")
+                     : (didCompletePractice ? "Redo Practice" : "Practice"))
+                    .font(.subheadline.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity, minHeight: 34)
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private func onboardingExploreButton(chinese: Bool) -> some View {
+        Button {
+            showingOnboardingGuide = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                startTutorial(.explore)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if didCompleteExplore {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                Text(chinese
+                     ? (didCompleteExplore ? "再次查看示例" : "探索观鸟示例")
+                     : (didCompleteExplore ? "View Example Again" : "Explore Bird Example"))
+                    .font(.subheadline.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity, minHeight: 34)
+        }
+        .buttonStyle(.bordered)
+    }
+
+    @ViewBuilder
+    private func onboardingStepRow(index: Int, title: String, detail: String, isCompleted: Bool) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            Text("\(index)")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.black.opacity(0.78))
-                .frame(width: 18, height: 18)
-                .background(Color.white.opacity(0.86), in: Circle())
+            if isCompleted {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.green)
+                    .frame(width: 18, height: 18)
+            } else {
+                Text("\(index)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.black.opacity(0.78))
+                    .frame(width: 18, height: 18)
+                    .background(Color.white.opacity(0.3), in: Circle())
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(isCompleted ? .green : .white)
                 Text(detail)
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.84))
@@ -679,6 +1196,1871 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 2)
+    }
+
+    // MARK: - Tutorial Coach Mark Overlay
+
+    private var tutorialCoachMarkOverlay: some View {
+        let chinese = isChineseUI()
+        let steps = currentTutorialSteps
+        let stepCount = steps.count
+        let currentStep = tutorialStepIndex < stepCount ? steps[tutorialStepIndex] : nil
+        let isLastStep = tutorialStepIndex >= stepCount - 1
+        let isTapStep = currentStep?.advanceMode == .tapAnywhere
+        let isWaitForModelDoc = currentStep?.advanceMode == .waitForModelDocSelection
+        let isAutoDetect = !isTapStep
+            && currentStep?.advanceMode != .waitForDocs
+            && currentStep?.advanceMode != .waitForModelDocSelection
+            && currentStep != nil
+        let isWaitForDocs = currentStep?.advanceMode == .waitForDocs
+        let isGuidedFillStep = isTutorialPracticeGuidedFillStep
+        let isPracticeToolkitCreationStep = currentStep?.advanceMode == .waitForSpecificToolkitConfigured
+        let isPracticeStylingEnterStep = currentStep?.advanceMode == .waitForStylingPanelEnter
+        let isPracticePresentationExitStepInStyling = currentStep?.advanceMode == .waitForPresentationExit
+            && activePresentationStylingFileID != nil
+        let isPracticeLessonPlanPreviewStep = currentStep?.advanceMode == .waitForLessonPlanPreview
+        let isPracticePPTPreviewStep = currentStep?.advanceMode == .waitForPresentationPreview
+
+        return VStack {
+            Spacer()
+
+            VStack(alignment: .leading, spacing: 10) {
+                // Phase title + step counter
+                HStack {
+                    Text(tutorialPhaseTitle(chinese: chinese))
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .textCase(.uppercase)
+
+                    Spacer()
+
+                    Text("\(tutorialStepIndex + 1) / \(stepCount)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+
+                // Progress bar
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.white.opacity(0.15))
+                            .frame(height: 3)
+                        Capsule()
+                            .fill(Color.green)
+                            .frame(width: geo.size.width * CGFloat(tutorialStepIndex + 1) / CGFloat(max(stepCount, 1)), height: 3)
+                    }
+                }
+                .frame(height: 3)
+
+                // Instruction text
+                if let step = currentStep {
+                    Text(step.message(chinese: chinese))
+                        .font(.subheadline)
+                        .foregroundStyle(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .animation(.easeInOut(duration: 0.2), value: tutorialStepIndex)
+                }
+
+                // Buttons
+                HStack(spacing: 12) {
+                    Button {
+                        endTutorial(completed: false)
+                    } label: {
+                        Text(chinese ? "退出" : "Exit")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+
+                    if isAutoDetect && !isLastStep && !isGuidedFillStep {
+                        HStack(spacing: 4) {
+                            ProgressView()
+                                .tint(.white.opacity(0.6))
+                                .scaleEffect(0.7)
+                            Text(chinese ? "等待操作…" : "Waiting…")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                    }
+
+                    if isWaitForDocs && !isLastStep {
+                        HStack(spacing: 4) {
+                            Image(systemName: "book.fill")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.6))
+                            Text(chinese ? "请点击 📖 按钮" : "Tap the 📖 button")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                    }
+
+                    if isWaitForModelDoc && !isLastStep {
+                        HStack(spacing: 4) {
+                            Image(systemName: "list.bullet.rectangle")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.6))
+                            Text(chinese ? "请在 Docs 左栏点击任一教育模型" : "Select any Education Model in Docs sidebar")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                    }
+
+                    if isPracticeToolkitCreationStep && !isLastStep {
+                        HStack(spacing: 6) {
+                            Image(systemName: "hand.tap.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .scaleEffect(tutorialHintPulsePhase ? 1.05 : 0.92)
+                            Text(chinese ? "双击画布空白处 → 选择 Toolkit → Inquiry" : "Double-tap empty canvas -> Toolkit -> Inquiry")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.72))
+                        }
+                    }
+
+                    if isPracticeStylingEnterStep && !isLastStep {
+                        HStack(spacing: 6) {
+                            Image(systemName: "paintpalette.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .scaleEffect(tutorialHintPulsePhase ? 1.05 : 0.92)
+                            Text(chinese ? "点击左下角调色盘 Design 按钮" : "Tap the bottom-left palette Design button")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.72))
+                        }
+                    }
+
+                    if isPracticePresentationExitStepInStyling && !isLastStep {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.backward.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .scaleEffect(tutorialHintPulsePhase ? 1.05 : 0.92)
+                            Text(chinese ? "先点击左上角 Back 返回，再点 Present 退出演示" : "Tap top-left Back first, then tap Present to exit mode")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.72))
+                        }
+                    }
+
+                    if isPracticeLessonPlanPreviewStep && !isLastStep {
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.and.arrow.up.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .scaleEffect(tutorialHintPulsePhase ? 1.05 : 0.92)
+                            Text(chinese ? "点击右上角 Export → Lesson Plan Preview" : "Tap top-right Export -> Lesson Plan Preview")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.72))
+                        }
+                    }
+
+                    if isPracticePPTPreviewStep && !isLastStep {
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.and.arrow.up.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .scaleEffect(tutorialHintPulsePhase ? 1.05 : 0.92)
+                            Text(chinese ? "点击右上角 Export → PPT Preview" : "Tap top-right Export -> PPT Preview")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.72))
+                        }
+                    }
+
+                    if isGuidedFillStep && !isLastStep {
+                        Button {
+                            applyTutorialPracticeGuidedFill()
+                        } label: {
+                            Text(chinese ? "填入教程示例" : "Apply Guided Text")
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color.orange.opacity(0.9), in: Capsule())
+                                .foregroundStyle(.black)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if isTapStep {
+                        Button {
+                            if isLastStep {
+                                endTutorial(completed: true)
+                            } else {
+                                advanceTutorialStep()
+                            }
+                        } label: {
+                            Text(isLastStep
+                                 ? (chinese ? "完成" : "Done")
+                                 : (chinese ? "继续" : "Continue"))
+                                .font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 6)
+                                .background(Color.accentColor, in: Capsule())
+                                .foregroundStyle(.white)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .frame(maxWidth: 420)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 28)
+        }
+        .allowsHitTesting(true)
+    }
+
+    private func tutorialPhaseTitle(chinese: Bool) -> String {
+        switch activeTutorial {
+        case .aboutDemo: return chinese ? "了解 EduNode" : "About EduNode"
+        case .canvasBasics: return chinese ? "基础操作" : "Canvas Basics"
+        case .modelsIntro: return chinese ? "教育模型" : "Education Models"
+        case .practice: return chinese ? "实战训练" : "Practice"
+        case .explore: return chinese ? "示例探索" : "Explore"
+        case .none: return ""
+        }
+    }
+
+    private var currentTutorialSteps: [TutorialStep] {
+        switch activeTutorial {
+        case .aboutDemo: return aboutDemoSteps
+        case .canvasBasics: return canvasBasicsSteps
+        case .modelsIntro: return modelsIntroSteps
+        case .practice: return practiceSteps
+        case .explore: return exploreSteps
+        case .none: return []
+        }
+    }
+
+    private var currentTutorialAdvanceMode: TutorialAdvanceMode? {
+        let steps = currentTutorialSteps
+        guard tutorialStepIndex >= 0, tutorialStepIndex < steps.count else { return nil }
+        return steps[tutorialStepIndex].advanceMode
+    }
+
+    private var shouldPulseCreateCourseButton: Bool {
+        activeTutorial == .practice && currentTutorialAdvanceMode == .waitForCreateCourseSheet
+    }
+
+    private var shouldShowTutorialCreateCourseButtonSpotlight: Bool {
+        shouldPulseCreateCourseButton
+            && tutorialCreateCourseButtonFrameInGlobal.width > 1
+            && tutorialCreateCourseButtonFrameInGlobal.height > 1
+    }
+
+    private var shouldPulsePresentButton: Bool {
+        guard activeTutorial == .practice else { return false }
+        let mode = currentTutorialAdvanceMode
+        return mode == .waitForPresentationEnter || mode == .waitForPresentationExit
+    }
+
+    private var shouldPulseDesignEntryButton: Bool {
+        guard activeTutorial == .practice else { return false }
+        guard currentTutorialAdvanceMode == .waitForStylingPanelEnter else { return false }
+        guard let practiceFileID = tutorialPracticeFileID else { return false }
+        return activePresentationModeFileID == practiceFileID && activePresentationStylingFileID == nil
+    }
+
+    private var shouldShowTutorialDesignButtonSpotlight: Bool {
+        shouldPulseDesignEntryButton
+            && tutorialDesignButtonFrameInGlobal.width > 1
+            && tutorialDesignButtonFrameInGlobal.height > 1
+    }
+
+    private func tutorialDesignButtonSpotlightOverlay() -> some View {
+        let localRect = tutorialDesignButtonFrameInGlobal.insetBy(dx: -16, dy: -16)
+
+        return ZStack {
+            Color.black.opacity(0.56)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .frame(width: localRect.width, height: localRect.height)
+                        .position(x: localRect.midX, y: localRect.midY)
+                        .blendMode(.destinationOut)
+                }
+                .compositingGroup()
+
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.orange.opacity(tutorialHintPulsePhase ? 0.95 : 0.55), lineWidth: 2.2)
+                .frame(width: localRect.width, height: localRect.height)
+                .position(x: localRect.midX, y: localRect.midY)
+
+            Text(isChineseUI() ? "Design" : "Design")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(Color.white.opacity(0.26), lineWidth: 0.8)
+                )
+                .position(
+                    x: localRect.midX,
+                    y: max(26, localRect.minY - 20)
+                )
+        }
+        .allowsHitTesting(false)
+        .ignoresSafeArea()
+    }
+
+    private func tutorialCreateCourseButtonSpotlightOverlay() -> some View {
+        let localRect = tutorialCreateCourseButtonFrameInGlobal.insetBy(dx: -14, dy: -12)
+
+        return ZStack {
+            Color.black.opacity(0.56)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .frame(width: localRect.width, height: localRect.height)
+                        .position(x: localRect.midX, y: localRect.midY)
+                        .blendMode(.destinationOut)
+                }
+                .compositingGroup()
+
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.cyan.opacity(tutorialHintPulsePhase ? 0.94 : 0.52), lineWidth: 2.1)
+                .frame(width: localRect.width, height: localRect.height)
+                .position(x: localRect.midX, y: localRect.midY)
+
+            Text(isChineseUI() ? "新建课程" : "New Course")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(Color.white.opacity(0.26), lineWidth: 0.8)
+                )
+                .position(
+                    x: localRect.midX,
+                    y: max(26, localRect.minY - 20)
+                )
+        }
+        .allowsHitTesting(false)
+        .ignoresSafeArea()
+    }
+
+    private var isTutorialPracticeGuidedFillStep: Bool {
+        guard activeTutorial == .practice else { return false }
+        guard tutorialStepIndex < practiceSteps.count else { return false }
+        let mode = practiceSteps[tutorialStepIndex].advanceMode
+        guard mode == .waitForKnowledgeKeywordEdit || mode == .waitForAdditionalKnowledgeEdit else {
+            return false
+        }
+        return tutorialPracticeAutofillTextForCurrentStep(isChinese: isChineseUI()) != nil
+    }
+
+    private func applyTutorialPracticeGuidedFill() {
+        guard activeTutorial == .practice,
+              let fileID = tutorialPracticeFileID,
+              let file = workspaceFiles.first(where: { $0.id == fileID }),
+              let document = try? decodeDocument(from: file.data),
+              let targetNodeID = resolvedTutorialPracticeKnowledgeTargetNodeID(in: document),
+              let fillText = tutorialPracticeAutofillTextForCurrentStep(isChinese: isChineseUI()) else {
+            return
+        }
+
+        var updatedDocument = document
+        guard let nodeIndex = updatedDocument.nodes.firstIndex(where: { $0.id == targetNodeID }) else { return }
+        let sourceNode = updatedDocument.nodes[nodeIndex]
+        var nodeData = sourceNode.nodeData
+        nodeData["content"] = fillText
+        let updatedNode = SerializableNode(
+            id: sourceNode.id,
+            nodeType: sourceNode.nodeType,
+            attributes: sourceNode.attributes,
+            inputPorts: sourceNode.inputPorts,
+            outputPorts: sourceNode.outputPorts,
+            nodeData: nodeData
+        )
+        updatedDocument.nodes[nodeIndex] = updatedNode
+        guard let encoded = try? encodeDocument(updatedDocument) else { return }
+
+        if let targetState = updatedDocument.canvasState.first(where: { $0.nodeID == targetNodeID }) {
+            selectedFileID = fileID
+            selectionRequest = NodeEditorSelectionRequest(nodeID: targetNodeID)
+            cameraRequest = NodeEditorCameraRequest(
+                canvasPosition: CGPoint(x: targetState.positionX, y: targetState.positionY)
+            )
+        }
+        persistWorkspaceFileData(id: fileID, data: encoded)
+
+        let token = UUID()
+        tutorialPracticeGuidedFillToken = token
+        tutorialPracticeGuidedFillPendingStepIndex = tutorialStepIndex
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            guard tutorialPracticeGuidedFillToken == token else { return }
+            guard activeTutorial == .practice else { return }
+            guard tutorialStepIndex < practiceSteps.count else { return }
+            let mode = practiceSteps[tutorialStepIndex].advanceMode
+            guard mode == .waitForKnowledgeKeywordEdit || mode == .waitForAdditionalKnowledgeEdit else {
+                return
+            }
+            tutorialPracticeGuidedFillPendingStepIndex = nil
+            advanceTutorialStep()
+        }
+    }
+
+    private func advanceTutorialStep() {
+        let steps = currentTutorialSteps
+        if tutorialStepIndex < steps.count - 1 {
+            tutorialPracticeGuidedFillToken = UUID()
+            tutorialPracticeGuidedFillPendingStepIndex = nil
+            withAnimation(.easeInOut(duration: 0.25)) {
+                tutorialStepIndex += 1
+            }
+            snapshotTutorialCounts()
+            // Execute demo action if the new step has one
+            let newStep = steps[tutorialStepIndex]
+            if let demoAction = newStep.demoAction {
+                executeDemoAction(demoAction)
+            }
+            runPracticeStepVisualAssistIfNeeded()
+            scheduleTutorialAutoAdvanceIfNeeded()
+        }
+    }
+
+    private func runPracticeStepVisualAssistIfNeeded() {
+        guard activeTutorial == .practice else { return }
+        guard tutorialStepIndex < practiceSteps.count else { return }
+        let mode = practiceSteps[tutorialStepIndex].advanceMode
+        if tutorialStepIndex == 3, mode == .tapAnywhere {
+            spotlightTutorialPracticeUbDChain()
+            return
+        }
+        if mode == .waitForKnowledgeKeywordEdit || mode == .waitForAdditionalKnowledgeEdit {
+            spotlightTutorialPracticeKnowledgeTarget()
+            return
+        }
+        if mode == .waitForKnowledgeToSpecificToolkitConnectionAdded {
+            spotlightTutorialPracticeConnectionTargets()
+        }
+    }
+
+    private func tutorialPracticeKnowledgeTargetIndexForCurrentStep() -> Int? {
+        switch tutorialStepIndex {
+        case 4: return 0
+        case 5: return 1
+        case 6: return 2
+        default: return nil
+        }
+    }
+
+    private func resolvedTutorialPracticeKnowledgeTargetNodeID(in document: GNodeDocument) -> UUID? {
+        if tutorialPracticeTopKnowledgeNodeIDs.isEmpty {
+            tutorialPracticeTopKnowledgeNodeIDs = tutorialPracticeTopKnowledgeNodeIDs(in: document)
+        }
+        guard let targetIndex = tutorialPracticeKnowledgeTargetIndexForCurrentStep(),
+              tutorialPracticeTopKnowledgeNodeIDs.indices.contains(targetIndex) else {
+            return nil
+        }
+        let targetNodeID = tutorialPracticeTopKnowledgeNodeIDs[targetIndex]
+        if document.nodes.contains(where: { $0.id == targetNodeID }) {
+            return targetNodeID
+        }
+        tutorialPracticeTopKnowledgeNodeIDs = tutorialPracticeTopKnowledgeNodeIDs(in: document)
+        guard tutorialPracticeTopKnowledgeNodeIDs.indices.contains(targetIndex) else { return nil }
+        return tutorialPracticeTopKnowledgeNodeIDs[targetIndex]
+    }
+
+    private func spotlightTutorialPracticeKnowledgeTarget() {
+        guard let fileID = tutorialPracticeFileID,
+              let file = workspaceFiles.first(where: { $0.id == fileID }),
+              let document = try? decodeDocument(from: file.data),
+              let targetNodeID = resolvedTutorialPracticeKnowledgeTargetNodeID(in: document),
+              let targetState = document.canvasState.first(where: { $0.nodeID == targetNodeID }) else {
+            return
+        }
+        let position = CGPoint(x: targetState.positionX, y: targetState.positionY)
+        selectedFileID = fileID
+        selectionRequest = NodeEditorSelectionRequest(nodeID: targetNodeID)
+        cameraRequest = NodeEditorCameraRequest(canvasPosition: position)
+    }
+
+    private func tutorialPracticeConnectionSourceNodeID(in document: GNodeDocument) -> UUID? {
+        if let stage2 = document.nodes.first(where: { node in
+            guard node.nodeType == EduNodeType.knowledge else { return false }
+            let lowerName = node.attributes.name.lowercased()
+            return (lowerName.contains("ubd") && lowerName.contains("stage 2"))
+                || node.attributes.name.contains("UbD 阶段2")
+        }) {
+            return stage2.id
+        }
+
+        if tutorialPracticeTopKnowledgeNodeIDs.isEmpty {
+            tutorialPracticeTopKnowledgeNodeIDs = tutorialPracticeTopKnowledgeNodeIDs(in: document)
+        }
+        guard tutorialPracticeTopKnowledgeNodeIDs.indices.contains(1) else { return nil }
+        let nodeID = tutorialPracticeTopKnowledgeNodeIDs[1]
+        if document.nodes.contains(where: { $0.id == nodeID }) {
+            return nodeID
+        }
+        tutorialPracticeTopKnowledgeNodeIDs = tutorialPracticeTopKnowledgeNodeIDs(in: document)
+        guard tutorialPracticeTopKnowledgeNodeIDs.indices.contains(1) else { return nil }
+        return tutorialPracticeTopKnowledgeNodeIDs[1]
+    }
+
+    private func tutorialPracticeLearningPlanSourceNodeID(in document: GNodeDocument) -> UUID? {
+        if let stage3 = document.nodes.first(where: { node in
+            guard node.nodeType == EduNodeType.knowledge else { return false }
+            let lowerName = node.attributes.name.lowercased()
+            return (lowerName.contains("ubd") && lowerName.contains("stage 3"))
+                || lowerName.contains("learning plan")
+                || node.attributes.name.contains("UbD 阶段3")
+                || node.attributes.name.contains("学习体验规划")
+        }) {
+            return stage3.id
+        }
+
+        if tutorialPracticeTopKnowledgeNodeIDs.isEmpty {
+            tutorialPracticeTopKnowledgeNodeIDs = tutorialPracticeTopKnowledgeNodeIDs(in: document)
+        }
+        guard tutorialPracticeTopKnowledgeNodeIDs.indices.contains(2) else { return nil }
+        let nodeID = tutorialPracticeTopKnowledgeNodeIDs[2]
+        if document.nodes.contains(where: { $0.id == nodeID }) {
+            return nodeID
+        }
+        tutorialPracticeTopKnowledgeNodeIDs = tutorialPracticeTopKnowledgeNodeIDs(in: document)
+        guard tutorialPracticeTopKnowledgeNodeIDs.indices.contains(2) else { return nil }
+        return tutorialPracticeTopKnowledgeNodeIDs[2]
+    }
+
+    private func tutorialSourceAnalysisToolkitNodeIDs(in document: GNodeDocument) -> Set<UUID> {
+        Set(
+            document.nodes.compactMap { node in
+                guard node.nodeType == EduNodeType.toolkitPerceptionInquiry else { return nil }
+                guard !tutorialPracticeInitialNodeIDs.contains(node.id) else { return nil }
+                guard (node.nodeData["toolkitMethodID"] ?? "").lowercased() == "source_analysis" else { return nil }
+                return node.id
+            }
+        )
+    }
+
+    private func tutorialPrimarySourceAnalysisToolkitNodeID(in document: GNodeDocument) -> UUID? {
+        let toolkitIDs = tutorialSourceAnalysisToolkitNodeIDs(in: document)
+        guard !toolkitIDs.isEmpty else { return nil }
+        if let configured = tutorialPracticeConfiguredToolkitNodeID,
+           toolkitIDs.contains(configured) {
+            return configured
+        }
+        for node in document.nodes.reversed() where toolkitIDs.contains(node.id) {
+            return node.id
+        }
+        return nil
+    }
+
+    private func spotlightTutorialPracticeConnectionTargets() {
+        guard let fileID = tutorialPracticeFileID,
+              let file = workspaceFiles.first(where: { $0.id == fileID }),
+              let document = try? decodeDocument(from: file.data),
+              let sourceNodeID = tutorialPracticeConnectionSourceNodeID(in: document) else {
+            return
+        }
+        let toolkitNodeID = tutorialPrimarySourceAnalysisToolkitNodeID(in: document)
+        guard let toolkitNodeID else { return }
+
+        let positionByNodeID = Dictionary(
+            uniqueKeysWithValues: document.canvasState.map { state in
+                (state.nodeID, CGPoint(x: state.positionX, y: state.positionY))
+            }
+        )
+        guard let sourcePosition = positionByNodeID[sourceNodeID],
+              let toolkitPosition = positionByNodeID[toolkitNodeID] else {
+            return
+        }
+
+        let focusPosition = CGPoint(
+            x: (sourcePosition.x + toolkitPosition.x) * 0.5,
+            y: (sourcePosition.y + toolkitPosition.y) * 0.5
+        )
+
+        selectedFileID = fileID
+        selectionRequest = NodeEditorSelectionRequest(nodeID: toolkitNodeID)
+        cameraRequest = NodeEditorCameraRequest(canvasPosition: focusPosition)
+    }
+
+    private func spotlightTutorialPracticeUbDChain() {
+        guard let fileID = tutorialPracticeFileID,
+              let file = workspaceFiles.first(where: { $0.id == fileID }),
+              let document = try? decodeDocument(from: file.data) else {
+            return
+        }
+
+        let positionByNodeID = Dictionary(
+            uniqueKeysWithValues: document.canvasState.map { canvasState in
+                (canvasState.nodeID, CGPoint(x: canvasState.positionX, y: canvasState.positionY))
+            }
+        )
+        let knowledgeCandidates = document.nodes
+            .compactMap { node -> (nodeID: UUID, position: CGPoint)? in
+                guard node.nodeType == EduNodeType.knowledge else { return nil }
+                guard let position = positionByNodeID[node.id] else { return nil }
+                return (node.id, position)
+            }
+
+        let spotlightCandidates: [(nodeID: UUID, position: CGPoint)]
+        if let minY = knowledgeCandidates.map(\.position.y).min() {
+            let topBand = knowledgeCandidates.filter { $0.position.y <= minY + 220 }
+            spotlightCandidates = topBand.isEmpty ? knowledgeCandidates : topBand
+        } else {
+            spotlightCandidates = []
+        }
+
+        let spotlightNodes = spotlightCandidates
+            .sorted { lhs, rhs in
+                if abs(lhs.position.x - rhs.position.x) < 1 {
+                    return lhs.position.y < rhs.position.y
+                }
+                return lhs.position.x < rhs.position.x
+            }
+            .prefix(3)
+
+        for (offset, target) in spotlightNodes.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.42 * Double(offset)) {
+                guard activeTutorial == .practice else { return }
+                guard tutorialStepIndex < practiceSteps.count else { return }
+                guard practiceSteps[tutorialStepIndex].advanceMode == .tapAnywhere else { return }
+                selectedFileID = fileID
+                selectionRequest = NodeEditorSelectionRequest(nodeID: target.nodeID)
+                cameraRequest = NodeEditorCameraRequest(canvasPosition: target.position)
+            }
+        }
+    }
+
+    private func tutorialPracticeTopKnowledgeNodeIDs(in document: GNodeDocument) -> [UUID] {
+        let positionByNodeID = Dictionary(
+            uniqueKeysWithValues: document.canvasState.map { state in
+                (state.nodeID, CGPoint(x: state.positionX, y: state.positionY))
+            }
+        )
+        let knowledgeNodes = document.nodes
+            .compactMap { node -> (id: UUID, position: CGPoint)? in
+                guard node.nodeType == EduNodeType.knowledge,
+                      let position = positionByNodeID[node.id] else { return nil }
+                return (node.id, position)
+            }
+        guard !knowledgeNodes.isEmpty else { return [] }
+
+        let minY = knowledgeNodes.map(\.position.y).min() ?? 0
+        let topBand = knowledgeNodes.filter { $0.position.y <= minY + 220 }
+        let candidates = topBand.isEmpty ? knowledgeNodes : topBand
+
+        return candidates
+            .sorted { lhs, rhs in
+                if abs(lhs.position.x - rhs.position.x) < 1 {
+                    return lhs.position.y < rhs.position.y
+                }
+                return lhs.position.x < rhs.position.x
+            }
+            .map(\.id)
+    }
+
+    private func snapshotTutorialCounts() {
+        if let fileID = selectedFileID,
+           let stats = editorStatsByFileID[fileID] {
+            tutorialPreviousNodeCount = stats.nodeCount
+            tutorialPreviousConnectionCount = stats.connectionCount
+        } else {
+            tutorialPreviousNodeCount = 0
+            tutorialPreviousConnectionCount = 0
+        }
+    }
+
+    private func scheduleTutorialAutoAdvanceIfNeeded() {
+        tutorialAutoAdvanceToken = UUID()
+        guard let tutorial = activeTutorial else { return }
+        let steps = currentTutorialSteps
+        guard tutorialStepIndex < steps.count else { return }
+        let step = steps[tutorialStepIndex]
+        guard step.advanceMode == .animationAuto else { return }
+
+        let token = tutorialAutoAdvanceToken
+        let targetIndex = tutorialStepIndex
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.35) {
+            guard tutorialAutoAdvanceToken == token else { return }
+            guard activeTutorial == tutorial else { return }
+            guard tutorialStepIndex == targetIndex else { return }
+
+            if tutorialStepIndex >= steps.count - 1 {
+                endTutorial(completed: true)
+            } else {
+                advanceTutorialStep()
+            }
+        }
+    }
+
+    private func startTutorial(_ kind: TutorialKind) {
+        activeTutorial = kind
+        tutorialStepIndex = 0
+        tutorialAutoAdvanceToken = UUID()
+        snapshotTutorialCounts()
+
+        switch kind {
+        case .aboutDemo:
+            createTutorialFile()
+            // aboutDemo第1步如果有demoAction，立即执行（如自动插入Knowledge节点）
+            let steps = aboutDemoSteps
+            if let demoAction = steps.first?.demoAction {
+                executeDemoAction(demoAction)
+            }
+        case .canvasBasics:
+            // Clear the tutorial canvas for fresh hands-on practice
+            if let fileID = tutorialDedicatedFileID,
+               let file = workspaceFiles.first(where: { $0.id == fileID }) {
+                file.data = emptyDocumentData()
+                selectedFileID = fileID
+                tutorialPreviousNodeCount = 0
+                tutorialPreviousConnectionCount = 0
+                selectionRequest = nil
+                cameraRequest = NodeEditorCameraRequest(canvasPosition: Self.demoKnowledgePosition)
+            }
+            tutorialCanvasEvaluationCountBeforeDelete = nil
+            tutorialCanvasConnectionCountBeforeDelete = nil
+        case .modelsIntro:
+            // User already opened docs; overlay will show inside docs
+            docsPreferredNodeType = nil
+        case .practice:
+            tutorialPracticeFileID = nil
+            tutorialPracticeBaselineSemanticData = nil
+            tutorialPracticeHasEnteredPresentation = false
+            tutorialPracticeInitialToolkitCount = 0
+            tutorialPracticeInitialConnections = []
+            tutorialPracticeInitialNodeIDs = []
+            tutorialPracticeInitialKnowledgeContentByNodeID = [:]
+            tutorialPracticeTopKnowledgeNodeIDs = []
+            tutorialPracticeKnowledgeModificationBaseline = nil
+            tutorialPracticeKnowledgeStepTargetNodeID = nil
+            tutorialPracticeKnowledgeStepEntryContent = nil
+            tutorialPracticeConfiguredToolkitNodeID = nil
+            tutorialPracticeConnectionStepBaseline = nil
+            tutorialPracticeGuidedFillToken = UUID()
+            tutorialPracticeGuidedFillPendingStepIndex = nil
+            tutorialPracticeInitialZoomPercent = 100
+            tutorialPracticeZoomStepBaseline = nil
+        case .explore:
+            break
+        }
+
+        scheduleTutorialAutoAdvanceIfNeeded()
+    }
+
+    private func endTutorial(completed: Bool) {
+        let kind = activeTutorial
+        tutorialAutoAdvanceToken = UUID()
+        withAnimation(.easeInOut(duration: 0.25)) {
+            activeTutorial = nil
+        }
+        tutorialStepIndex = 0
+
+        // Close docs if we were showing them
+        if kind == .modelsIntro {
+            showingDocs = false
+        }
+
+        if completed {
+            switch kind {
+            case .aboutDemo:
+                // Chain immediately to canvasBasics on the same file
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    startTutorial(.canvasBasics)
+                }
+            case .canvasBasics:
+                // Last step told user to open Docs — we wait, detection handled by showingDocs onChange
+                // But if they tapped "Done" on last step (shouldn't happen with waitForDocs), still chain
+                break
+            case .modelsIntro:
+                didCompleteBasics = true
+                // Delete tutorial practice file
+                deleteTutorialFile()
+                // Show welcome overlay so user can start Practice
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    showingOnboardingGuide = true
+                }
+            case .practice:
+                didCompletePractice = true
+                // Prompt to explore bird example
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    showingOnboardingGuide = true
+                }
+            case .explore:
+                didCompleteExplore = true
+                didCompleteOnboarding = true
+            case .none:
+                break
+            }
+        } else {
+            // User exited early — still clean up tutorial file if exiting aboutDemo/canvasBasics
+            if kind == .aboutDemo || kind == .canvasBasics {
+                deleteTutorialFile()
+            }
+        }
+    }
+
+    private func createTutorialFile() {
+        let tutorialFile = GNodeWorkspaceFile(
+            name: isChineseUI() ? "教程练习" : "Tutorial Practice",
+            data: emptyDocumentData()
+        )
+        modelContext.insert(tutorialFile)
+        tutorialDedicatedFileID = tutorialFile.id
+        selectedFileID = tutorialFile.id
+        selectionRequest = nil
+        cameraRequest = NodeEditorCameraRequest(canvasPosition: Self.demoKnowledgePosition)
+    }
+
+    private func deleteTutorialFile() {
+        guard let fileID = tutorialDedicatedFileID else { return }
+        if let file = workspaceFiles.first(where: { $0.id == fileID }) {
+            modelContext.delete(file)
+            try? modelContext.save()
+        }
+        if selectedFileID == fileID {
+            selectedFileID = workspaceFiles.first(where: { $0.id != fileID })?.id
+        }
+        tutorialDedicatedFileID = nil
+    }
+
+    // MARK: - Tutorial Demo Animations
+
+    /// IDs for the demo nodes placed during aboutDemo
+    private static let demoKnowledgeID = UUID(uuidString: "00000000-DE00-0001-0000-000000000001")!
+    private static let demoToolkitID   = UUID(uuidString: "00000000-DE00-0002-0000-000000000002")!
+    private static let demoEvaluationID = UUID(uuidString: "00000000-DE00-0003-0000-000000000003")!
+    private static let demoKnowledgePosition = CGPoint(x: 400, y: 300)
+    private static let demoToolkitPosition = CGPoint(x: 860, y: 300)
+    private static let demoEvaluationPosition = CGPoint(x: 1320, y: 300)
+
+    private func executeDemoAction(_ action: TutorialDemoAction) {
+        guard let fileID = tutorialDedicatedFileID,
+              let file = workspaceFiles.first(where: { $0.id == fileID }) else { return }
+
+        var focusPoint: CGPoint?
+        var focusNodeID: UUID?
+        let doc: GNodeDocument
+
+        switch action {
+        case .showKnowledgeNode:
+            doc = makeAboutDemoDocument(
+                includeKnowledge: true,
+                includeToolkit: false,
+                includeEvaluation: false,
+                connectKnowledgeToolkit: false,
+                connectToolkitEvaluation: false
+            )
+            focusPoint = Self.demoKnowledgePosition
+            focusNodeID = Self.demoKnowledgeID
+
+        case .showToolkitNode:
+            doc = makeAboutDemoDocument(
+                includeKnowledge: true,
+                includeToolkit: true,
+                includeEvaluation: false,
+                connectKnowledgeToolkit: false,
+                connectToolkitEvaluation: false
+            )
+            focusPoint = Self.demoToolkitPosition
+            focusNodeID = Self.demoToolkitID
+
+        case .showEvaluationNode:
+            doc = makeAboutDemoDocument(
+                includeKnowledge: true,
+                includeToolkit: true,
+                includeEvaluation: true,
+                connectKnowledgeToolkit: false,
+                connectToolkitEvaluation: false
+            )
+            focusPoint = Self.demoEvaluationPosition
+            focusNodeID = Self.demoEvaluationID
+
+        case .connectKnowledgeToToolkit:
+            doc = makeAboutDemoDocument(
+                includeKnowledge: true,
+                includeToolkit: true,
+                includeEvaluation: true,
+                connectKnowledgeToolkit: true,
+                connectToolkitEvaluation: false
+            )
+            focusPoint = Self.demoToolkitPosition
+            focusNodeID = Self.demoToolkitID
+
+        case .connectToolkitToEvaluation:
+            doc = makeAboutDemoDocument(
+                includeKnowledge: true,
+                includeToolkit: true,
+                includeEvaluation: true,
+                connectKnowledgeToolkit: true,
+                connectToolkitEvaluation: true
+            )
+            focusPoint = Self.demoEvaluationPosition
+            focusNodeID = Self.demoEvaluationID
+        }
+
+        if let encoded = try? encodeDocument(doc) {
+            selectedFileID = fileID
+            file.data = encoded
+            if let focusNodeID {
+                selectionRequest = NodeEditorSelectionRequest(nodeID: focusNodeID)
+            } else {
+                selectionRequest = nil
+            }
+            if let focusPoint {
+                cameraRequest = NodeEditorCameraRequest(canvasPosition: focusPoint)
+                // Re-emit camera focus on next runloop to avoid occasional empty viewport race.
+                DispatchQueue.main.async {
+                    selectedFileID = fileID
+                    cameraRequest = NodeEditorCameraRequest(canvasPosition: focusPoint)
+                }
+            }
+        }
+    }
+
+    private func makeAboutDemoDocument(
+        includeKnowledge: Bool,
+        includeToolkit: Bool,
+        includeEvaluation: Bool,
+        connectKnowledgeToolkit: Bool,
+        connectToolkitEvaluation: Bool
+    ) -> GNodeDocument {
+        var nodes: [SerializableNode] = []
+        var canvasState: [CanvasNodeState] = []
+
+        if includeKnowledge {
+            nodes.append(
+                makeDemoSerializableNode(
+                    id: Self.demoKnowledgeID,
+                    type: EduNodeType.knowledge
+                )
+            )
+            canvasState.append(
+                CanvasNodeState(nodeID: Self.demoKnowledgeID, position: Self.demoKnowledgePosition)
+            )
+        }
+
+        if includeToolkit {
+            nodes.append(
+                makeDemoSerializableNode(
+                    id: Self.demoToolkitID,
+                    type: EduNodeType.toolkitPerceptionInquiry
+                )
+            )
+            canvasState.append(
+                CanvasNodeState(nodeID: Self.demoToolkitID, position: Self.demoToolkitPosition)
+            )
+        }
+
+        if includeEvaluation {
+            nodes.append(
+                makeDemoSerializableEvaluationNode(id: Self.demoEvaluationID)
+            )
+            canvasState.append(
+                CanvasNodeState(nodeID: Self.demoEvaluationID, position: Self.demoEvaluationPosition)
+            )
+        }
+
+        let nodeByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        var connections: [NodeConnection] = []
+
+        if connectKnowledgeToolkit,
+           let connection = makeDemoConnection(
+            sourceNodeID: Self.demoKnowledgeID,
+            targetNodeID: Self.demoToolkitID,
+            nodeByID: nodeByID
+           ) {
+            connections.append(connection)
+        }
+
+        if connectToolkitEvaluation,
+           let connection = makeDemoConnection(
+            sourceNodeID: Self.demoToolkitID,
+            targetNodeID: Self.demoEvaluationID,
+            nodeByID: nodeByID
+           ) {
+            connections.append(connection)
+        }
+
+        return GNodeDocument(
+            nodes: nodes,
+            connections: connections,
+            canvasState: canvasState
+        )
+    }
+
+    private func makeDemoConnection(
+        sourceNodeID: UUID,
+        targetNodeID: UUID,
+        nodeByID: [UUID: SerializableNode]
+    ) -> NodeConnection? {
+        guard let sourceNode = nodeByID[sourceNodeID],
+              let targetNode = nodeByID[targetNodeID],
+              let sourcePort = sourceNode.outputPorts.first,
+              let targetPort = targetNode.inputPorts.first else {
+            return nil
+        }
+
+        return NodeConnection(
+            sourceNode: sourceNodeID,
+            sourcePort: sourcePort.id,
+            targetNode: targetNodeID,
+            targetPort: targetPort.id,
+            dataType: "Any"
+        )
+    }
+
+    private func makeDemoSerializableEvaluationNode(id: UUID) -> SerializableNode {
+        let demoNode = EduEvaluationNode(
+            name: isChineseUI() ? "评价" : "Evaluation",
+            textFieldValues: [
+                "evaluation_indicators": "Quick Check | score"
+            ],
+            optionFieldValues: [
+                "evaluation_formula": "average",
+                "evaluation_grouping": "individual",
+                "evaluation_output_scale": "score100"
+            ]
+        )
+        let serialized = SerializableNode(from: demoNode, nodeType: EduNodeType.evaluation)
+        return SerializableNode._withID(id, from: serialized)
+    }
+
+    /// Create a SerializableNode by instantiating a real GNode, then serializing it
+    private func makeDemoSerializableNode(id: UUID, type: String) -> SerializableNode {
+        if let realNode = GNodeNodeKit.gnodeNodeKit.createNode(type: type) {
+            // Use the real node's ports and attributes, but replace its ID
+            let sNode = SerializableNode(from: realNode, nodeType: type)
+            // SerializableNode.id is let, so we create a wrapper
+            return SerializableNode._withID(id, from: sNode)
+        }
+        // Fallback: minimal node
+        return SerializableNode._minimal(id: id, nodeType: type)
+    }
+
+    private var isTutorialPracticeAwaitingCourseCreation: Bool {
+        guard activeTutorial == .practice else { return false }
+        guard tutorialStepIndex < practiceSteps.count else { return false }
+        let mode = practiceSteps[tutorialStepIndex].advanceMode
+        return mode == .waitForCreateCourseSheet || mode == .waitForCourseCreated
+    }
+
+    private var tutorialPracticeRequiredModelID: String {
+        let chinese = isChineseUI()
+        let fallbackID = modelRules.first(where: { $0.id == "ubd" })?.id ?? (modelRules.first?.id ?? "")
+        guard !modelRules.isEmpty else { return fallbackID }
+
+        let ranked = modelRules.map { rule in
+            let nodeCount = tutorialTemplateNodeCount(for: rule, isChinese: chinese)
+            return (id: rule.id, nodeCount: nodeCount)
+        }
+
+        guard let minimal = ranked.min(by: { lhs, rhs in
+            if lhs.nodeCount == rhs.nodeCount {
+                return lhs.id < rhs.id
+            }
+            return lhs.nodeCount < rhs.nodeCount
+        }) else {
+            return fallbackID
+        }
+
+        return minimal.id
+    }
+
+    private func tutorialTemplateNodeCount(for rule: EduModelRule, isChinese: Bool) -> Int {
+        let draft = tutorialPracticeDraft(for: rule.id, isChinese: isChinese)
+        let data = EduPlanning.makeInitialDocumentData(
+            draft: draft,
+            modelRule: rule,
+            isChinese: isChinese
+        )
+        guard let document = try? decodeDocument(from: data) else {
+            return Int.max
+        }
+        return document.nodes.count
+    }
+
+    private func tutorialPracticeDraft(for modelID: String, isChinese: Bool) -> CourseCreationDraft {
+        var draft = CourseCreationDraft()
+        draft.courseName = isChinese ? "中学科学微课（引导练习）" : "Middle-School Science Micro-Lesson (Guided Practice)"
+        draft.gradeInputMode = .grade
+        draft.gradeMinText = "7"
+        draft.gradeMaxText = "8"
+        draft.subject = isChinese ? "科学" : "Science"
+        draft.lessonDurationMinutesText = "20"
+        draft.lessonType = .singleLesson
+        draft.totalSessionsText = "1"
+        draft.periodRange = isChinese ? "引导练习：单课时科学课设计" : "Guided practice: single-lesson science class design"
+        draft.studentCountText = "32"
+        draft.priorAssessmentScoreText = "68"
+        draft.assignmentCompletionRateText = "80"
+        draft.supportNeedCountText = "6"
+        draft.learningOrganization = .mixed
+        draft.teachingStyle = .inquiryDriven
+        draft.emphasizeInquiryExperiment = true
+        draft.emphasizeExperienceReflection = false
+        draft.requireStructuredFlow = false
+        draft.formativeCheckIntensity = .medium
+        draft.expectedOutputIDs = ["lessonHandout", "presentation", "worksheet"]
+        draft.goals = isChinese
+            ? [
+                "概念理解：解释核心科学规律并识别关键概念。",
+                "证据表达：基于可观察现象给出证据说明。",
+                "迁移应用：把规律迁移到新的生活情境。"
+            ]
+            : [
+                "Concept understanding: explain a core science principle and key concepts.",
+                "Evidence expression: justify claims with observable evidence.",
+                "Transfer: apply the principle to new real-world contexts."
+            ]
+        draft.modelID = modelID
+        draft.leadTeacherCountText = "1"
+        draft.assistantTeacherCountText = "1"
+        draft.teacherRolePlan = isChinese
+            ? """
+            主讲 | 王老师 | 引导现象分析与关键追问，组织课堂收束
+            助教 | 李老师 | 组织分组记录证据，支持 Source Analysis 讨论
+            """
+            : """
+            Lead | Ms. Wang | Lead phenomenon analysis and synthesize key findings
+            Assistant | Mr. Li | Facilitate evidence recording and Source Analysis discussion
+            """
+        draft.studentRosterText = isChinese
+            ? """
+            林晨|A组|13
+            陈雨|A组|13
+            张宁|B组|14
+            赵敏|B组|14
+            王涵|C组|13
+            李哲|C组|13
+            """
+            : """
+            Alex Chen|Group A|13
+            Mia Lin|Group A|13
+            Noah Zhang|Group B|14
+            Emma Zhao|Group B|14
+            Ethan Wang|Group C|13
+            Olivia Li|Group C|13
+            """
+
+        switch modelID {
+        case "fivee":
+            draft.lessonType = .singleLesson
+            draft.totalSessionsText = "1"
+            draft.teachingStyle = .inquiryDriven
+            draft.learningOrganization = .group
+            draft.emphasizeInquiryExperiment = true
+            draft.formativeCheckIntensity = .medium
+            draft.periodRange = isChinese
+                ? "单课时探究：现象观察→解释→迁移"
+                : "Single-lesson inquiry: observe -> explain -> transfer"
+            draft.expectedOutputIDs = ["experimentLog", "worksheet", "presentation"]
+            draft.goals = isChinese
+                ? [
+                    "观察现象：从实验现象中提出关键问题。",
+                    "概念解释：用证据解释光合作用影响因素。",
+                    "迁移应用：把解释迁移到新的生长情境。"
+                ]
+                : [
+                    "Observation: raise key questions from experimental evidence.",
+                    "Explanation: explain photosynthesis factors with evidence.",
+                    "Transfer: apply explanation to a new growth context."
+                ]
+
+        case "kolb":
+            draft.lessonType = .unitSeries
+            draft.totalSessionsText = "3"
+            draft.teachingStyle = .experientialReflective
+            draft.learningOrganization = .group
+            draft.emphasizeExperienceReflection = true
+            draft.formativeCheckIntensity = .low
+            draft.periodRange = isChinese
+                ? "体验-反思-概念-再实践循环"
+                : "Experience-reflection-concept-practice cycle"
+            draft.expectedOutputIDs = ["experimentLog", "projectArtifact", "lessonHandout"]
+            draft.goals = isChinese
+                ? [
+                    "具体体验：记录真实观察并形成问题。",
+                    "反思抽象：把观察转化为概念解释。",
+                    "主动实验：用新任务验证并修正理解。"
+                ]
+                : [
+                    "Concrete experience: capture observations and questions.",
+                    "Reflective abstraction: build conceptual explanations from observations.",
+                    "Active experimentation: validate and refine understanding in new tasks."
+                ]
+
+        case "boppps":
+            draft.lessonType = .singleLesson
+            draft.totalSessionsText = "1"
+            draft.teachingStyle = .lectureDriven
+            draft.learningOrganization = .mixed
+            draft.requireStructuredFlow = true
+            draft.formativeCheckIntensity = .high
+            draft.periodRange = isChinese
+                ? "单课时结构化流程（Bridge-in 到 Summary）"
+                : "Single-lesson structured flow (Bridge-in to Summary)"
+            draft.expectedOutputIDs = ["worksheet", "lessonHandout", "presentation"]
+            draft.goals = isChinese
+                ? [
+                    "明确目标：学生清楚本课学习目标与成功标准。",
+                    "参与实践：在参与活动中输出可观察结果。",
+                    "课末收束：通过后测与总结确认达成。"
+                ]
+                : [
+                    "Objective clarity: learners understand success criteria.",
+                    "Participatory performance: produce observable learning outputs.",
+                    "Closure: confirm achievement through post-assessment and summary."
+                ]
+
+        case "gagne9":
+            draft.lessonType = .singleLesson
+            draft.totalSessionsText = "1"
+            draft.teachingStyle = .lectureDriven
+            draft.learningOrganization = .individual
+            draft.requireStructuredFlow = true
+            draft.formativeCheckIntensity = .high
+            draft.periodRange = isChinese
+                ? "九事件流程：从注意到保持与迁移"
+                : "Nine-event flow: from attention to retention/transfer"
+            draft.expectedOutputIDs = ["worksheet", "lessonHandout", "presentation"]
+            draft.goals = isChinese
+                ? [
+                    "注意与目标：快速进入任务并明确目标。",
+                    "指导与表现：在指导后完成关键表现任务。",
+                    "反馈与迁移：通过反馈修正并迁移应用。"
+                ]
+                : [
+                    "Attention & objectives: enter task quickly with clear objective.",
+                    "Guidance & performance: complete key performance task with scaffolds.",
+                    "Feedback & transfer: refine through feedback and transfer learning."
+                ]
+
+        default:
+            break
+        }
+
+        return draft
+    }
+
+    private func tutorialPracticeDraft() -> CourseCreationDraft {
+        let chinese = isChineseUI()
+        let minimalModelID = tutorialPracticeRequiredModelID
+        return tutorialPracticeDraft(for: minimalModelID, isChinese: chinese)
+    }
+
+    private func tutorialPracticeAutofillTextForCurrentStep(isChinese: Bool) -> String? {
+        switch tutorialStepIndex {
+        case 4:
+            return isChinese
+                ? "聚焦牛顿第一定律：学生能够解释“物体在不受外力或合力为零时保持静止或匀速直线运动”的规律，并能用“惯性”解释常见现象。"
+                : "Focus on Newton's First Law: students explain that an object remains at rest or in uniform straight-line motion when net force is zero, and use inertia to explain everyday phenomena."
+        case 5:
+            return isChinese
+                ? "证据设计：使用“公交车急刹前倾、抽桌布实验、滑板滑行”三个案例。每个案例记录三项证据：受力情况、运动状态变化、是否符合惯性解释。"
+                : "Evidence design: use three cases (bus sudden braking, tablecloth pull, skateboard glide). Capture three points per case: force condition, motion-state change, and inertia consistency."
+        case 6:
+            return isChinese
+                ? "活动安排：先做现象实验并记录，再分组讨论证据与结论，最后全班汇总形成牛顿第一定律表述并完成即时小结。"
+                : "Activity flow: run phenomenon experiments and record observations, then group discussion on evidence and claims, then whole-class synthesis of Newton's First Law with a quick exit summary."
+        default:
+            return nil
+        }
+    }
+
+    /// Called when user opens docs — detect if we should chain from canvasBasics to modelsIntro
+    private func handleDocsOpenedDuringTutorial() {
+        if activeTutorial == .canvasBasics {
+            let steps = canvasBasicsSteps
+            if tutorialStepIndex < steps.count,
+               steps[tutorialStepIndex].advanceMode == .waitForDocs {
+                // User opened docs as instructed — chain to modelsIntro
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    activeTutorial = nil
+                }
+                tutorialStepIndex = 0
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    startTutorial(.modelsIntro)
+                }
+            }
+        }
+    }
+
+    private func handleDocsSelectionDuringTutorial(_ selectedType: String?) {
+        guard activeTutorial == .modelsIntro else { return }
+        let steps = modelsIntroSteps
+        guard tutorialStepIndex < steps.count else { return }
+        guard steps[tutorialStepIndex].advanceMode == .waitForModelDocSelection else { return }
+        guard let selectedType, selectedType.hasPrefix("EduModelTemplate") else { return }
+        advanceTutorialStep()
+    }
+
+    private func handleTutorialStatsChange(fileID: UUID, stats: NodeEditorCanvasStats) {
+        guard activeTutorial != nil else { return }
+        tutorialPreviousNodeCount = stats.nodeCount
+        tutorialPreviousConnectionCount = stats.connectionCount
+
+        guard activeTutorial == .practice else { return }
+        guard fileID == tutorialPracticeFileID else { return }
+        guard tutorialStepIndex < practiceSteps.count else { return }
+        let mode = practiceSteps[tutorialStepIndex].advanceMode
+        guard mode == .waitForCanvasZoomOut else {
+            tutorialPracticeZoomStepBaseline = nil
+            return
+        }
+
+        if tutorialPracticeZoomStepBaseline == nil {
+            tutorialPracticeZoomStepBaseline = stats.zoomPercent
+            return
+        }
+        let baseline = tutorialPracticeZoomStepBaseline ?? tutorialPracticeInitialZoomPercent
+        let threshold = max(55, baseline - 10)
+        guard stats.zoomPercent <= threshold else { return }
+        tutorialPracticeZoomStepBaseline = nil
+        advanceTutorialStep()
+    }
+
+    private func transitionFromCanvasBasicsToModelsIntro() {
+        guard activeTutorial == .canvasBasics else { return }
+        withAnimation(.easeInOut(duration: 0.25)) {
+            activeTutorial = nil
+        }
+        tutorialStepIndex = 0
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            showingDocs = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                startTutorial(.modelsIntro)
+            }
+        }
+    }
+
+    private func tutorialSemanticSnapshotData(from data: Data) -> Data? {
+        guard let document = try? decodeDocument(from: data) else { return nil }
+        let snapshot = TutorialSemanticSnapshot(
+            nodes: document.nodes,
+            connections: document.connections,
+            canvasState: document.canvasState
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try? encoder.encode(snapshot)
+    }
+
+    private func handleTutorialDocumentDataPersisted(fileID: UUID, data: Data) {
+        guard let tutorial = activeTutorial else { return }
+        guard let document = try? decodeDocument(from: data) else { return }
+
+        switch tutorial {
+        case .canvasBasics:
+            guard fileID == tutorialDedicatedFileID else { return }
+            evaluateCanvasBasicsProgress(document)
+        case .practice:
+            guard fileID == tutorialPracticeFileID else { return }
+            evaluatePracticeDocumentProgress(fileID: fileID, data: data)
+        case .aboutDemo, .modelsIntro, .explore:
+            break
+        }
+    }
+
+    private func evaluateCanvasBasicsProgress(_ document: GNodeDocument) {
+        guard activeTutorial == .canvasBasics else { return }
+
+        for _ in 0..<8 {
+            guard tutorialStepIndex < canvasBasicsSteps.count else { return }
+
+            switch tutorialStepIndex {
+            case 0:
+                guard document.nodes.contains(where: { $0.nodeType == EduNodeType.knowledge }) else { return }
+                advanceTutorialStep()
+
+            case 1:
+                guard document.nodes.contains(where: { EduNodeType.allToolkitTypes.contains($0.nodeType) }) else { return }
+                advanceTutorialStep()
+
+            case 2:
+                let hasExpectedConnection = EduNodeType.allToolkitTypes.contains { toolkitType in
+                    hasTutorialConnection(
+                        in: document,
+                        sourceType: EduNodeType.knowledge,
+                        sourcePortName: S("edu.knowledge.output.content"),
+                        targetType: toolkitType,
+                        targetPortName: S("edu.toolkit.input.knowledge")
+                    )
+                }
+                guard hasExpectedConnection else { return }
+                advanceTutorialStep()
+
+            case 3:
+                let isReady = document.nodes.contains { node in
+                    node.nodeType == EduNodeType.evaluation && !node.inputPorts.isEmpty
+                }
+                guard isReady else { return }
+                advanceTutorialStep()
+
+            case 4:
+                let hasExpectedConnection = EduNodeType.allToolkitTypes.contains { toolkitType in
+                    hasTutorialConnection(
+                        in: document,
+                        sourceType: toolkitType,
+                        sourcePortName: S("edu.output.toolkit"),
+                        targetType: EduNodeType.evaluation,
+                        targetPortName: nil
+                    )
+                }
+                guard hasExpectedConnection else { return }
+                tutorialCanvasEvaluationCountBeforeDelete = document.nodes.filter { $0.nodeType == EduNodeType.evaluation }.count
+                advanceTutorialStep()
+
+            case 5:
+                let currentEvaluationCount = document.nodes.filter { $0.nodeType == EduNodeType.evaluation }.count
+                let baseline = tutorialCanvasEvaluationCountBeforeDelete ?? currentEvaluationCount
+                tutorialCanvasEvaluationCountBeforeDelete = baseline
+                guard currentEvaluationCount < baseline else { return }
+                tutorialCanvasConnectionCountBeforeDelete = document.connections.count
+                advanceTutorialStep()
+
+            case 6:
+                let currentConnectionCount = document.connections.count
+                let baseline = tutorialCanvasConnectionCountBeforeDelete ?? currentConnectionCount
+                tutorialCanvasConnectionCountBeforeDelete = baseline
+                guard currentConnectionCount < baseline else { return }
+                transitionFromCanvasBasicsToModelsIntro()
+                return
+
+            default:
+                return
+            }
+        }
+    }
+
+    private func evaluatePracticeDocumentProgress(fileID: UUID, data: Data) {
+        guard activeTutorial == .practice else { return }
+        guard let document = try? decodeDocument(from: data) else { return }
+
+        for _ in 0..<8 {
+            guard tutorialStepIndex < practiceSteps.count else { return }
+            let step = practiceSteps[tutorialStepIndex]
+
+            if step.advanceMode != .waitForAdditionalKnowledgeEdit {
+                tutorialPracticeKnowledgeModificationBaseline = nil
+            }
+            if step.advanceMode != .waitForKnowledgeToSpecificToolkitConnectionAdded {
+                tutorialPracticeConnectionStepBaseline = nil
+            }
+            if step.advanceMode != .waitForKnowledgeKeywordEdit && step.advanceMode != .waitForAdditionalKnowledgeEdit {
+                tutorialPracticeKnowledgeStepTargetNodeID = nil
+                tutorialPracticeKnowledgeStepEntryContent = nil
+            }
+
+            switch step.advanceMode {
+            case .waitForCourseCreated:
+                guard tutorialPracticeFileID == fileID else { return }
+                advanceTutorialStep()
+
+            case .waitForKnowledgeKeywordEdit:
+                guard let targetNodeID = resolvedTutorialPracticeKnowledgeTargetNodeID(in: document) else { return }
+                let currentContent = tutorialKnowledgeContent(in: document, nodeID: targetNodeID)
+                if tutorialPracticeKnowledgeStepTargetNodeID != targetNodeID {
+                    tutorialPracticeKnowledgeStepTargetNodeID = targetNodeID
+                    tutorialPracticeKnowledgeStepEntryContent = currentContent
+                    spotlightTutorialPracticeKnowledgeTarget()
+                    return
+                }
+                if tutorialPracticeGuidedFillPendingStepIndex == tutorialStepIndex {
+                    return
+                }
+                let baselineContent = tutorialPracticeKnowledgeStepEntryContent ?? currentContent
+                guard currentContent != baselineContent else { return }
+                guard containsTutorialNewtonKeyword(currentContent) else { return }
+                tutorialPracticeKnowledgeModificationBaseline = nil
+                tutorialPracticeKnowledgeStepTargetNodeID = nil
+                tutorialPracticeKnowledgeStepEntryContent = nil
+                advanceTutorialStep()
+
+            case .waitForAdditionalKnowledgeEdit:
+                guard let targetNodeID = resolvedTutorialPracticeKnowledgeTargetNodeID(in: document) else { return }
+                let currentContent = tutorialKnowledgeContent(in: document, nodeID: targetNodeID)
+                if tutorialPracticeKnowledgeStepTargetNodeID != targetNodeID {
+                    tutorialPracticeKnowledgeStepTargetNodeID = targetNodeID
+                    tutorialPracticeKnowledgeStepEntryContent = currentContent
+                    spotlightTutorialPracticeKnowledgeTarget()
+                    return
+                }
+                if tutorialPracticeGuidedFillPendingStepIndex == tutorialStepIndex {
+                    return
+                }
+                let baselineContent = tutorialPracticeKnowledgeStepEntryContent ?? currentContent
+                guard currentContent != baselineContent else { return }
+                guard !currentContent.isEmpty else { return }
+                tutorialPracticeKnowledgeModificationBaseline = nil
+                tutorialPracticeKnowledgeStepTargetNodeID = nil
+                tutorialPracticeKnowledgeStepEntryContent = nil
+                advanceTutorialStep()
+
+            case .waitForSpecificToolkitConfigured:
+                guard let toolkitNodeID = tutorialPreparedSourceAnalysisToolkitNodeID(
+                    fileID: fileID,
+                    data: data,
+                    document: document
+                ) else { return }
+                tutorialPracticeConfiguredToolkitNodeID = toolkitNodeID
+                tutorialPracticeConnectionStepBaseline = nil
+                advanceTutorialStep()
+
+            case .waitForKnowledgeToSpecificToolkitConnectionAdded:
+                let targetToolkitNodeID = tutorialPracticeConfiguredToolkitNodeID
+                    ?? tutorialConfiguredSourceAnalysisToolkitNodeID(in: document)
+                guard let targetToolkitNodeID else { return }
+                tutorialPracticeConfiguredToolkitNodeID = targetToolkitNodeID
+                let requiredSourceNodeID = tutorialPracticeConnectionSourceNodeID(in: document)
+                let targetToolkitNodeIDs = tutorialSourceAnalysisToolkitNodeIDs(in: document)
+                guard !targetToolkitNodeIDs.isEmpty else { return }
+                if hasTutorialKnowledgeConnection(
+                    toAny: targetToolkitNodeIDs,
+                    in: document,
+                    requiredSourceNodeID: requiredSourceNodeID
+                ) {
+                    tutorialPracticeConnectionStepBaseline = nil
+                    advanceTutorialStep()
+                    return
+                }
+                let currentConnections = tutorialConnectionSignatures(in: document)
+                if tutorialPracticeConnectionStepBaseline == nil {
+                    tutorialPracticeConnectionStepBaseline = currentConnections
+                    return
+                }
+                let baselineConnections = tutorialPracticeConnectionStepBaseline ?? currentConnections
+                if !hasNewTutorialKnowledgeConnection(
+                    toAny: targetToolkitNodeIDs,
+                    in: document,
+                    baselineConnections: baselineConnections,
+                    requiredSourceNodeID: requiredSourceNodeID
+                ) {
+                    return
+                }
+                tutorialPracticeConnectionStepBaseline = nil
+                advanceTutorialStep()
+
+            default:
+                return
+            }
+        }
+    }
+
+    private func hasTutorialConnection(
+        in document: GNodeDocument,
+        sourceType: String,
+        sourcePortName: String,
+        targetType: String,
+        targetPortName: String?
+    ) -> Bool {
+        let nodesByID = Dictionary(uniqueKeysWithValues: document.nodes.map { ($0.id, $0) })
+
+        for connection in document.connections {
+            guard let sourceNode = nodesByID[connection.sourceNodeID],
+                  let targetNode = nodesByID[connection.targetNodeID],
+                  sourceNode.nodeType == sourceType,
+                  targetNode.nodeType == targetType else {
+                continue
+            }
+
+            guard let sourcePort = sourceNode.outputPorts.first(where: { $0.id == connection.sourcePortID }),
+                  sourcePort.name == sourcePortName else {
+                continue
+            }
+
+            guard let targetPort = targetNode.inputPorts.first(where: { $0.id == connection.targetPortID }) else {
+                continue
+            }
+            if let targetPortName, targetPort.name != targetPortName {
+                continue
+            }
+            return true
+        }
+
+        return false
+    }
+
+    private func tutorialKnowledgeContentByNodeID(in document: GNodeDocument) -> [UUID: String] {
+        Dictionary(uniqueKeysWithValues: document.nodes.compactMap { node in
+            guard node.nodeType == EduNodeType.knowledge else { return nil }
+            let content = (node.nodeData["content"] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return (node.id, content)
+        })
+    }
+
+    private func tutorialKnowledgeContent(in document: GNodeDocument, nodeID: UUID) -> String {
+        document.nodes.first(where: { $0.id == nodeID })?.nodeData["content"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private func containsTutorialNewtonKeyword(_ raw: String) -> Bool {
+        let normalized = raw.lowercased()
+        let tokens = [
+            "牛顿第一定律",
+            "牛顿第一运动定律",
+            "惯性定律",
+            "newton's first law",
+            "newton first law",
+            "law of inertia"
+        ]
+        return tokens.contains(where: { normalized.contains($0) })
+    }
+
+    private func tutorialPreparedSourceAnalysisToolkitNodeID(
+        fileID: UUID,
+        data: Data,
+        document: GNodeDocument
+    ) -> UUID? {
+        let candidateIndex = document.nodes.indices.reversed().first { index in
+            let node = document.nodes[index]
+            return node.nodeType == EduNodeType.toolkitPerceptionInquiry
+                && !tutorialPracticeInitialNodeIDs.contains(node.id)
+        }
+        guard let candidateIndex else { return nil }
+
+        let node = document.nodes[candidateIndex]
+        var nodeData = node.nodeData
+        var changed = false
+
+        if (nodeData["toolkitMethodID"] ?? "").lowercased() != "source_analysis" {
+            nodeData["toolkitMethodID"] = "source_analysis"
+            changed = true
+        }
+
+        var textFields = parseJSONStringDictionary(nodeData["toolkitTextFields"])
+        let defaultSourceSet = isChineseUI()
+            ? "公交车急刹/桌布抽拉/滑板滑行案例"
+            : "Bus sudden brake / tablecloth pull / skateboard glide cases"
+        let defaultRule = isChineseUI()
+            ? "提取每个案例的“受力情况、运动状态变化、是否符合惯性”三条证据"
+            : "Extract three evidence points per case: force condition, motion-state change, inertia consistency"
+        let defaultMatrix = isChineseUI()
+            ? "惯性存在 | 急刹前后乘客前倾 | 高\n受力改变运动 | 外力改变速度方向 | 高"
+            : "Inertia exists | Passenger leans forward during braking | High\nForce changes motion | External force changes velocity direction | High"
+
+        if (textFields["source_analysis_set"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            textFields["source_analysis_set"] = defaultSourceSet
+            changed = true
+        }
+        if (textFields["source_analysis_rule"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            textFields["source_analysis_rule"] = defaultRule
+            changed = true
+        }
+        if (textFields["source_analysis_matrix"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            textFields["source_analysis_matrix"] = defaultMatrix
+            changed = true
+        }
+
+        var updatedDocument = document
+        if let stage3NodeID = tutorialPracticeLearningPlanSourceNodeID(in: updatedDocument),
+           let sourceNode = updatedDocument.nodes.first(where: { $0.id == stage3NodeID }) {
+            let sourcePort = sourceNode.outputPorts.first(where: { $0.name == S("edu.knowledge.output.content") })
+                ?? sourceNode.outputPorts.first
+            let targetPort = node.inputPorts.first(where: { $0.name == S("edu.toolkit.input.knowledge") })
+                ?? node.inputPorts.first
+
+            if let sourcePort, let targetPort {
+                let exists = updatedDocument.connections.contains { connection in
+                    connection.sourceNodeID == stage3NodeID
+                        && connection.targetNodeID == node.id
+                        && connection.sourcePortID == sourcePort.id
+                        && connection.targetPortID == targetPort.id
+                }
+                if !exists {
+                    updatedDocument.connections.append(
+                        NodeConnection(
+                            sourceNode: stage3NodeID,
+                            sourcePort: sourcePort.id,
+                            targetNode: node.id,
+                            targetPort: targetPort.id,
+                            dataType: sourcePort.dataType
+                        )
+                    )
+                    changed = true
+                }
+            }
+        }
+
+        if changed {
+            nodeData["toolkitTextFields"] = encodeJSONStringDictionary(textFields)
+            let updatedNode = SerializableNode(
+                id: node.id,
+                nodeType: node.nodeType,
+                attributes: node.attributes,
+                inputPorts: node.inputPorts,
+                outputPorts: node.outputPorts,
+                nodeData: nodeData
+            )
+            updatedDocument.nodes[candidateIndex] = updatedNode
+            if let encoded = try? encodeDocument(updatedDocument), encoded != data {
+                persistWorkspaceFileData(id: fileID, data: encoded)
+            }
+            return nil
+        }
+
+        return node.id
+    }
+
+    private func encodeJSONStringDictionary(_ dictionary: [String: String]) -> String {
+        guard let data = try? JSONEncoder().encode(dictionary),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return text
+    }
+
+    private func tutorialConfiguredSourceAnalysisToolkitNodeID(in document: GNodeDocument) -> UUID? {
+        for node in document.nodes {
+            guard node.nodeType == EduNodeType.toolkitPerceptionInquiry else { continue }
+            guard !tutorialPracticeInitialNodeIDs.contains(node.id) else { continue }
+            guard (node.nodeData["toolkitMethodID"] ?? "").lowercased() == "source_analysis" else { continue }
+            return node.id
+        }
+        return nil
+    }
+
+    private func hasTutorialKnowledgeConnection(
+        toAny toolkitNodeIDs: Set<UUID>,
+        in document: GNodeDocument,
+        requiredSourceNodeID: UUID?
+    ) -> Bool {
+        hasNewTutorialKnowledgeConnection(
+            toAny: toolkitNodeIDs,
+            in: document,
+            baselineConnections: [],
+            requiredSourceNodeID: requiredSourceNodeID
+        )
+    }
+
+    private func hasNewTutorialKnowledgeConnection(
+        toAny toolkitNodeIDs: Set<UUID>,
+        in document: GNodeDocument,
+        baselineConnections: Set<TutorialConnectionSignature>,
+        requiredSourceNodeID: UUID?
+    ) -> Bool {
+        guard !toolkitNodeIDs.isEmpty else { return false }
+        let nodesByID = Dictionary(uniqueKeysWithValues: document.nodes.map { ($0.id, $0) })
+        let currentConnections = tutorialConnectionSignatures(in: document)
+
+        for signature in currentConnections.subtracting(baselineConnections) {
+            guard let sourceNode = nodesByID[signature.sourceNodeID],
+                  let targetNode = nodesByID[signature.targetNodeID],
+                  toolkitNodeIDs.contains(signature.targetNodeID),
+                  sourceNode.nodeType == EduNodeType.knowledge,
+                  EduNodeType.allToolkitTypes.contains(targetNode.nodeType) else {
+                continue
+            }
+            if let requiredSourceNodeID,
+               signature.sourceNodeID != requiredSourceNodeID {
+                continue
+            }
+            guard let sourcePort = sourceNode.outputPorts.first(where: { $0.id == signature.sourcePortID }),
+                  sourcePort.name == S("edu.knowledge.output.content") else {
+                continue
+            }
+            guard let targetPort = targetNode.inputPorts.first(where: { $0.id == signature.targetPortID }),
+                  targetPort.name == S("edu.toolkit.input.knowledge") else {
+                continue
+            }
+            return true
+        }
+
+        return false
+    }
+
+    private func tutorialConnectionSignatures(in document: GNodeDocument) -> Set<TutorialConnectionSignature> {
+        Set(
+            document.connections.map { connection in
+                TutorialConnectionSignature(
+                    sourceNodeID: connection.sourceNodeID,
+                    sourcePortID: connection.sourcePortID,
+                    targetNodeID: connection.targetNodeID,
+                    targetPortID: connection.targetPortID
+                )
+            }
+        )
+    }
+
+    private func handleTutorialSheetStateChange() {
+        guard activeTutorial == .practice else { return }
+        guard tutorialStepIndex < practiceSteps.count else { return }
+        let mode = practiceSteps[tutorialStepIndex].advanceMode
+        guard mode == .waitForCreateCourseSheet else { return }
+        guard showingCreateCourseSheet else { return }
+        advanceTutorialStep()
+    }
+
+    private func handleTutorialPresentationStateChange() {
+        guard activeTutorial == .practice else { return }
+        guard tutorialStepIndex < practiceSteps.count else { return }
+        let mode = practiceSteps[tutorialStepIndex].advanceMode
+
+        switch mode {
+        case .waitForPresentationEnter:
+            guard let practiceFileID = tutorialPracticeFileID,
+                  activePresentationModeFileID == practiceFileID else {
+                return
+            }
+            tutorialPracticeHasEnteredPresentation = true
+            advanceTutorialStep()
+
+        case .waitForStylingPanelEnter:
+            guard let practiceFileID = tutorialPracticeFileID,
+                  activePresentationStylingFileID == practiceFileID else {
+                return
+            }
+            advanceTutorialStep()
+
+        case .waitForPresentationExit:
+            guard tutorialPracticeHasEnteredPresentation else { return }
+            guard activePresentationModeFileID == nil else { return }
+            advanceTutorialStep()
+
+        default:
+            break
+        }
+    }
+
+    private func handleTutorialPreviewStateChange() {
+        guard activeTutorial == .practice else { return }
+        guard tutorialStepIndex < practiceSteps.count else { return }
+        let mode = practiceSteps[tutorialStepIndex].advanceMode
+
+        switch mode {
+        case .waitForLessonPlanPreview:
+            guard lessonPlanPreviewPayload != nil else { return }
+            advanceTutorialStep()
+
+        case .waitForPresentationPreview:
+            guard presentationPreviewPayload != nil else { return }
+            advanceTutorialStep()
+
+        default:
+            break
+        }
+    }
+
+    private func handleTutorialSelectionChange() {
+        guard activeTutorial == .explore else { return }
+        guard tutorialStepIndex < exploreSteps.count else { return }
+        let mode = exploreSteps[tutorialStepIndex].advanceMode
+        guard mode == .waitForBirdExampleSelection else { return }
+        guard let file = selectedWorkspaceFile, isBirdExampleFile(file) else { return }
+        advanceTutorialStep()
+    }
+
+    private func isBirdExampleFile(_ file: GNodeWorkspaceFile) -> Bool {
+        file.subject.contains("美育")
+            || file.subject.contains("Aesthetic")
+            || file.name.contains("Bird")
+            || file.name.contains("观鸟")
     }
 
     @ViewBuilder
@@ -730,6 +3112,12 @@ struct ContentView: View {
                             }
                         }
                     }
+
+                    if activeTutorial != nil && !isTutorialInDocsPhase {
+                        tutorialCoachMarkOverlay
+                            .zIndex(3200)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
             }
             .ignoresSafeArea()
@@ -755,7 +3143,11 @@ struct ContentView: View {
     }
 
     private func presentCreateCourseSheet() {
-        creationDraft = CourseCreationDraft()
+        if isTutorialPracticeAwaitingCourseCreation {
+            creationDraft = tutorialPracticeDraft()
+        } else {
+            creationDraft = CourseCreationDraft()
+        }
         showingCreateCourseSheet = true
     }
 
@@ -982,6 +3374,36 @@ struct ContentView: View {
 
         selectedFileID = file.id
         showingCreateCourseSheet = false
+
+        if activeTutorial == .practice {
+            tutorialPracticeFileID = file.id
+            tutorialPracticeBaselineSemanticData = tutorialSemanticSnapshotData(from: data)
+            tutorialPracticeHasEnteredPresentation = false
+            tutorialPracticeConfiguredToolkitNodeID = nil
+            tutorialPracticeKnowledgeModificationBaseline = nil
+            tutorialPracticeKnowledgeStepTargetNodeID = nil
+            tutorialPracticeKnowledgeStepEntryContent = nil
+            tutorialPracticeConnectionStepBaseline = nil
+            tutorialPracticeInitialZoomPercent = editorStatsByFileID[file.id]?.zoomPercent ?? 100
+            tutorialPracticeZoomStepBaseline = nil
+            if let document = try? decodeDocument(from: data) {
+                tutorialPracticeInitialToolkitCount = document.nodes.filter { EduNodeType.allToolkitTypes.contains($0.nodeType) }.count
+                tutorialPracticeInitialConnections = tutorialConnectionSignatures(in: document)
+                tutorialPracticeInitialNodeIDs = Set(document.nodes.map(\.id))
+                tutorialPracticeInitialKnowledgeContentByNodeID = tutorialKnowledgeContentByNodeID(in: document)
+                tutorialPracticeTopKnowledgeNodeIDs = tutorialPracticeTopKnowledgeNodeIDs(in: document)
+            } else {
+                tutorialPracticeInitialToolkitCount = 0
+                tutorialPracticeInitialConnections = []
+                tutorialPracticeInitialNodeIDs = []
+                tutorialPracticeInitialKnowledgeContentByNodeID = [:]
+                tutorialPracticeTopKnowledgeNodeIDs = []
+            }
+            if tutorialStepIndex < practiceSteps.count,
+               practiceSteps[tutorialStepIndex].advanceMode == .waitForCourseCreated {
+                advanceTutorialStep()
+            }
+        }
     }
 
     private func completeOnboardingGuide() {
@@ -1048,6 +3470,7 @@ struct ContentView: View {
         let name = isChinese ? "珠海观鸟美育工作坊" : "Zhuhai Bird & Nest Workshop"
         let subject = isChinese ? "综合实践（美育）" : "Integrated Practice (Aesthetic Education)"
         let goals = zhuhaiSampleGoals(isChinese: isChinese)
+        let teacherRolePlan = zhuhaiSampleTeacherRolePlan(isChinese: isChinese)
 
         let file = GNodeWorkspaceFile(
             name: name,
@@ -1061,16 +3484,16 @@ struct ContentView: View {
             allowOvertime: false,
             periodRange: isChinese ? "器材：望远镜6台、鸟类图鉴3套、巢材包28份；需室内 + 户外场地" : "Equipment: 6 binoculars, 3 field guides, 28 nest kits; indoor + outdoor venue needed",
             studentCount: 28,
-            studentProfile: isChinese ? "priorScore=60, completion=85, supportNeed=4, notes=低龄组增加助教支持与结构示范。, roster=, organization=mixed, outputs=学生作品集,课堂展示" : "priorScore=60, completion=85, supportNeed=4, notes=Provide extra TA support and structure demo for younger groups., roster=, organization=mixed, outputs=portfolio,presentation",
+            studentProfile: zhuhaiSampleStudentProfile(isChinese: isChinese),
             studentPriorKnowledgeLevel: "60",
             studentMotivationLevel: "85",
             studentSupportNotes: isChinese ? "低龄组增加助教支持与结构示范。" : "Provide extra TA support and structure demo for younger groups.",
             goalsText: goals,
             modelID: "fivee",
-            teacherTeam: isChinese ? "lead=1, assistant=4, plan=主讲负责主线与讲授；助教分组支持搭建、记录与安全。" : "lead=1, assistant=4, plan=Lead teacher drives main instruction; TAs support group build, recording, and safety.",
-            leadTeacherCount: 1,
-            assistantTeacherCount: 4,
-            teacherRolePlan: isChinese ? "主讲负责主线与讲授；助教分组支持搭建、记录与安全。" : "Lead teacher drives main instruction; TAs support group build, recording, and safety.",
+            teacherTeam: zhuhaiSampleTeacherTeamSummary(isChinese: isChinese),
+            leadTeacherCount: 2,
+            assistantTeacherCount: 9,
+            teacherRolePlan: teacherRolePlan,
             learningScenario: "",
             curriculumStandard: "",
             resourceConstraints: isChinese ? "器材：望远镜6台、鸟类图鉴3套、巢材包28份；需室内 + 户外场地" : "Equipment: 6 binoculars, 3 field guides, 28 nest kits; indoor + outdoor venue needed",
@@ -1200,6 +3623,24 @@ struct ContentView: View {
             if EduPlanning.isZhuhaiSampleData(file.data),
                shouldUpgradeZhuhaiGoals(for: file) {
                 file.goalsText = zhuhaiSampleGoals(isChinese: inferredChinesePreference(for: file))
+                file.updatedAt = .now
+                didChange = true
+            }
+
+            if EduPlanning.isZhuhaiSampleData(file.data),
+               shouldUpgradeZhuhaiTeamRoster(for: file) {
+                let isChinese = inferredChinesePreference(for: file)
+                file.studentCount = 28
+                file.studentProfile = zhuhaiSampleStudentProfile(isChinese: isChinese)
+                file.studentPriorKnowledgeLevel = "60"
+                file.studentMotivationLevel = "85"
+                file.studentSupportNotes = isChinese
+                    ? "低龄组增加助教支持与结构示范。"
+                    : "Provide extra TA support and structure demo for younger groups."
+                file.teacherTeam = zhuhaiSampleTeacherTeamSummary(isChinese: isChinese)
+                file.leadTeacherCount = 2
+                file.assistantTeacherCount = 9
+                file.teacherRolePlan = zhuhaiSampleTeacherRolePlan(isChinese: isChinese)
                 file.updatedAt = .now
                 didChange = true
             }
@@ -1944,6 +4385,7 @@ struct ContentView: View {
         file.data = data
         file.updatedAt = .now
         try? modelContext.save()
+        handleTutorialDocumentDataPersisted(fileID: id, data: data)
     }
 
     private func importWorkspaceFile(data: Data, suggestedName: String) {
@@ -2197,6 +4639,119 @@ Continue one-month post-class bird observation with photo identification and sha
 """
     }
 
+    private func zhuhaiSampleRosterText(isChinese: Bool) -> String {
+        if isChinese {
+            return """
+1|林晨|A组|6
+2|陈雨|A组|6
+3|张宁|A组|7
+4|赵敏|A组|7
+5|王涵|B组|7
+6|李哲|B组|8
+7|周悦|B组|8
+8|吴昊|B组|8
+9|郑琪|C组|9
+10|孙朗|C组|9
+11|马慧|C组|9
+12|何然|C组|10
+13|高宁|D组|10
+14|梁嘉|D组|10
+15|谢然|D组|11
+16|蒋可|D组|11
+17|宋宇|E组|11
+18|彭颖|E组|12
+19|许凡|E组|12
+20|邓欣|E组|12
+21|冯泽|F组|13
+22|曹悦|F组|13
+23|罗晨|F组|12
+24|龚琳|F组|11
+25|戴航|G组|9
+26|韩雪|G组|10
+27|余澄|G组|11
+28|潘诺|G组|13
+"""
+        }
+
+        return """
+1|Lin Chen|Group A|6
+2|Rain Chen|Group A|6
+3|Ning Zhang|Group A|7
+4|Min Zhao|Group A|7
+5|Han Wang|Group B|7
+6|Zhe Li|Group B|8
+7|Yue Zhou|Group B|8
+8|Hao Wu|Group B|8
+9|Qi Zheng|Group C|9
+10|Lang Sun|Group C|9
+11|Hui Ma|Group C|9
+12|Ran He|Group C|10
+13|Ning Gao|Group D|10
+14|Jia Liang|Group D|10
+15|Ran Xie|Group D|11
+16|Ke Jiang|Group D|11
+17|Yu Song|Group E|11
+18|Ying Peng|Group E|12
+19|Fan Xu|Group E|12
+20|Xin Deng|Group E|12
+21|Ze Feng|Group F|13
+22|Yue Cao|Group F|13
+23|Chen Luo|Group F|12
+24|Lin Gong|Group F|11
+25|Hang Dai|Group G|9
+26|Xue Han|Group G|10
+27|Cheng Yu|Group G|11
+28|Nuo Pan|Group G|13
+"""
+    }
+
+    private func zhuhaiSampleTeacherRolePlan(isChinese: Bool) -> String {
+        if isChinese {
+            return """
+主讲 | 陈老师 | 负责课程主线推进、关键提问与概念收束
+主讲 | 王老师 | 负责实验演示节奏控制与全班讲解
+助教 | 刘老师（A组） | 负责 A 组观察记录、搭建支持与安全提醒
+助教 | 李老师（B组） | 负责 B 组观察记录、搭建支持与安全提醒
+助教 | 张老师（C组） | 负责 C 组观察记录、搭建支持与安全提醒
+助教 | 赵老师（D组） | 负责 D 组观察记录、搭建支持与安全提醒
+助教 | 周老师（E组） | 负责 E 组观察记录、搭建支持与安全提醒
+助教 | 吴老师（F组） | 负责 F 组观察记录、搭建支持与安全提醒
+助教 | 郑老师（G组） | 负责 G 组观察记录、搭建支持与安全提醒
+助教 | 徐老师（摄影） | 负责课堂摄影、作品采样与过程档案记录
+助教 | 何老师（机动） | 负责机动支援、材料调配与全场安全巡检
+"""
+        }
+
+        return """
+Lead | Ms. Chen | Drive the main storyline, key questioning, and concept synthesis
+Lead | Mr. Wang | Control demo pacing and whole-class explanation
+Assistant | Ms. Liu (Group A) | Support observation notes, nest building, and safety checks for Group A
+Assistant | Mr. Li (Group B) | Support observation notes, nest building, and safety checks for Group B
+Assistant | Ms. Zhang (Group C) | Support observation notes, nest building, and safety checks for Group C
+Assistant | Mr. Zhao (Group D) | Support observation notes, nest building, and safety checks for Group D
+Assistant | Ms. Zhou (Group E) | Support observation notes, nest building, and safety checks for Group E
+Assistant | Mr. Wu (Group F) | Support observation notes, nest building, and safety checks for Group F
+Assistant | Ms. Zheng (Group G) | Support observation notes, nest building, and safety checks for Group G
+Assistant | Mr. Xu (Photo) | Handle in-class photography, artifact capture, and process archiving
+Assistant | Ms. He (Floater) | Provide floating support, material dispatch, and safety backup
+"""
+    }
+
+    private func zhuhaiSampleStudentProfile(isChinese: Bool) -> String {
+        let notes = isChinese
+            ? "低龄组增加助教支持与结构示范。"
+            : "Provide extra TA support and structure demo for younger groups."
+        let outputs = isChinese ? "学生作品集,课堂展示" : "portfolio,presentation"
+        return "priorScore=60, completion=85, supportNeed=4, notes=\(notes), roster=\(zhuhaiSampleRosterText(isChinese: isChinese)), organization=mixed, outputs=\(outputs)"
+    }
+
+    private func zhuhaiSampleTeacherTeamSummary(isChinese: Bool) -> String {
+        if isChinese {
+            return "lead=2, assistant=9, plan=2位主讲 + 7位分组助教 + 1位摄影 + 1位机动支援。"
+        }
+        return "lead=2, assistant=9, plan=2 leads + 7 group TAs + 1 photo TA + 1 floating TA."
+    }
+
     private func zhuhaiLegacyGoals(isChinese: Bool) -> String {
         if isChinese {
             return """
@@ -2237,6 +4792,25 @@ Extend learning with monthly photo bird identification
         let oldChinese = normalizedMultiline(zhuhaiLegacyGoals(isChinese: true))
         let oldEnglish = normalizedMultiline(zhuhaiLegacyGoals(isChinese: false))
         return current == oldChinese || current == oldEnglish
+    }
+
+    private func shouldUpgradeZhuhaiTeamRoster(for file: GNodeWorkspaceFile) -> Bool {
+        let rosterEntries = parsedStudentRosterEntries(from: file.studentProfile)
+        let rosterCountMatches = rosterEntries.count == 28
+        let groupCount = Set(
+            rosterEntries
+                .map { $0.group.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .filter { !$0.isEmpty }
+        ).count
+        let groupCountMatches = groupCount == 7
+        let teacherCountMatches = file.leadTeacherCount == 2 && file.assistantTeacherCount == 9
+
+        let planLower = file.teacherRolePlan.lowercased()
+        let hasPhotoRole = planLower.contains("摄影") || planLower.contains("photo")
+        let hasFloatingRole = planLower.contains("机动") || planLower.contains("float")
+        let hasCompletePlan = hasPhotoRole && hasFloatingRole
+
+        return !(rosterCountMatches && groupCountMatches && teacherCountMatches && hasCompletePlan)
     }
 
     private func effectiveGoals(for file: GNodeWorkspaceFile) -> [String] {
@@ -2493,6 +5067,7 @@ Extend learning with monthly photo bird identification
                 systemImage: "play.rectangle.on.rectangle",
                 accent: .orange,
                 isActive: isActive,
+                isPulsing: shouldPulsePresentButton,
                 minWidth: 108
             ) {
                 handlePresentationButtonTap(for: file)
@@ -4493,6 +7068,7 @@ Extend learning with monthly photo bird identification
     @ViewBuilder
     private func presentationStylingEntryButton(
         isActive: Bool,
+        isPulsing: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -4541,6 +7117,8 @@ Extend learning with monthly photo bird identification
             )
             .shadow(color: .black.opacity(0.26), radius: 9, y: 4)
         }
+        .scaleEffect(isPulsing ? (tutorialHintPulsePhase ? 1.12 : 0.94) : 1)
+        .opacity(isPulsing ? (tutorialHintPulsePhase ? 1 : 0.74) : 1)
         .buttonStyle(.plain)
     }
 
@@ -5886,7 +8464,8 @@ Extend learning with monthly photo bird identification
             Spacer(minLength: 0)
             HStack {
                 presentationStylingEntryButton(
-                    isActive: false
+                    isActive: false,
+                    isPulsing: shouldPulseDesignEntryButton
                 ) {
                     togglePresentationStylingMode(
                         fileID: fileID,
@@ -5894,6 +8473,15 @@ Extend learning with monthly photo bird identification
                         selectedGroupID: selectedGroupID
                     )
                 }
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear
+                            .preference(
+                                key: TutorialDesignButtonFramePreferenceKey.self,
+                                value: proxy.frame(in: .named(tutorialRootCoordinateSpaceName))
+                            )
+                    }
+                )
                 Spacer(minLength: 0)
             }
             .padding(.leading, 20)

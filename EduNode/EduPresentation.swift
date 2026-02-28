@@ -71,6 +71,29 @@ enum EduPresentationPlanner {
 
         let isChinese = Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
         let stateByID = Dictionary(uniqueKeysWithValues: document.canvasState.map { ($0.nodeID, $0) })
+        let serializedByID = Dictionary(uniqueKeysWithValues: document.nodes.map { ($0.id, $0) })
+
+        var incomingKnowledgeTitlesByToolkitID: [UUID: [String]] = [:]
+        for connection in document.connections {
+            guard let sourceNode = serializedByID[connection.sourceNodeID],
+                  let targetNode = serializedByID[connection.targetNodeID] else {
+                continue
+            }
+            guard sourceNode.nodeType == EduNodeType.knowledge else { continue }
+            guard EduNodeType.allToolkitTypes.contains(targetNode.nodeType) else { continue }
+
+            let sourceState = stateByID[sourceNode.id]
+            let sourceCustomName = (sourceState?.customName ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let sourceTitle = sourceCustomName.isEmpty ? sourceNode.attributes.name : sourceCustomName
+            guard !sourceTitle.isEmpty else { continue }
+
+            var titles = incomingKnowledgeTitlesByToolkitID[targetNode.id] ?? []
+            if !titles.contains(sourceTitle) {
+                titles.append(sourceTitle)
+            }
+            incomingKnowledgeTitlesByToolkitID[targetNode.id] = titles
+        }
 
         let slides = document.nodes.compactMap { serialized -> EduPresentationBaseSlide? in
             guard serialized.nodeType == EduNodeType.knowledge || EduNodeType.allToolkitTypes.contains(serialized.nodeType) else {
@@ -123,13 +146,20 @@ enum EduPresentationPlanner {
                 nodeType: serialized.nodeType,
                 isChinese: isChinese
             )
-            let keyPoints = toolkitKeyPoints(
+            var keyPoints = toolkitKeyPoints(
                 textFields: parsed.formTextFields,
                 optionFields: parsed.formOptionFields,
                 summary: summary,
                 method: subtitle,
                 isChinese: isChinese
             )
+            let alignmentLines = toolkitInputAlignmentLines(
+                incomingKnowledgeTitles: incomingKnowledgeTitlesByToolkitID[serialized.id] ?? [],
+                isChinese: isChinese
+            )
+            if !alignmentLines.isEmpty {
+                keyPoints.append(contentsOf: alignmentLines)
+            }
 
             return EduPresentationBaseSlide(
                 id: serialized.id,
@@ -395,6 +425,48 @@ enum EduPresentationPlanner {
         return isChinese
             ? "以活动驱动学习推进，强调协作、表达与反思。"
             : "Drive learning through activity with collaboration, expression, and reflection."
+    }
+
+    private static func toolkitInputAlignmentLines(
+        incomingKnowledgeTitles: [String],
+        isChinese: Bool
+    ) -> [String] {
+        guard !incomingKnowledgeTitles.isEmpty else { return [] }
+
+        let hasStage2 = incomingKnowledgeTitles.contains { title in
+            let lower = title.lowercased()
+            return (lower.contains("ubd") && lower.contains("stage 2"))
+                || lower.contains("acceptable evidence")
+                || title.contains("UbD 阶段2")
+                || title.contains("可接受证据")
+        }
+        let hasStage3 = incomingKnowledgeTitles.contains { title in
+            let lower = title.lowercased()
+            return (lower.contains("ubd") && lower.contains("stage 3"))
+                || lower.contains("learning plan")
+                || title.contains("UbD 阶段3")
+                || title.contains("学习体验规划")
+        }
+
+        if hasStage2 && hasStage3 {
+            return [
+                isChinese
+                    ? "证据对齐：Stage 3 负责活动流程，Stage 2 负责证据判定。"
+                    : "Evidence alignment: Stage 3 drives activity flow, Stage 2 defines evidence criteria."
+            ]
+        }
+        if incomingKnowledgeTitles.count == 1, let only = incomingKnowledgeTitles.first {
+            return [
+                isChinese
+                    ? "知识驱动：本活动主要由「\(only)」驱动。"
+                    : "Knowledge-driven: this activity is mainly driven by \"\(only)\"."
+            ]
+        }
+        return [
+            isChinese
+                ? "多知识约束：本活动同时受「\(incomingKnowledgeTitles.joined(separator: " / "))」驱动。"
+                : "Multi-knowledge constraints: this activity is jointly driven by \"\(incomingKnowledgeTitles.joined(separator: " / "))\"."
+        ]
     }
 
     private static func toolkitPresentationItems(for slide: EduPresentationBaseSlide, isChinese: Bool) -> [String] {

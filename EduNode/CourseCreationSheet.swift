@@ -111,6 +111,7 @@ struct CourseCreationSheet: View {
     var initialPage: CourseFormPage = .basics
     var onSaveRoster: ((String) -> Void)? = nil
     var isEditing: Bool = false
+    var requiredModelID: String? = nil
 
     @State private var page: CourseFormPage = .basics
     @State private var selectedSubjectPreset = "__custom__"
@@ -126,6 +127,8 @@ struct CourseCreationSheet: View {
     @State private var expandedStudentGroupRowID: UUID?
     @State private var pendingStudentGroupTextByRowID: [UUID: String] = [:]
     @State private var showingStudentCSVImporter = false
+    @State private var dismissedGuidePages: Set<CourseFormPage> = []
+    @State private var guidePulse = false
 
     private let customSubjectTag = "__custom__"
     private let subjectDropdownID = "course.subject.dropdown"
@@ -371,6 +374,75 @@ struct CourseCreationSheet: View {
         isSubjectDropdownExpanded || expandedGoalRowID != nil || expandedRoleRowID != nil || expandedStudentGroupRowID != nil
     }
 
+    private var isGuidedCreateMode: Bool {
+        requiredModelID != nil && onSaveRoster == nil && !isEditing
+    }
+
+    private var shouldShowGuideOverlay: Bool {
+        isGuidedCreateMode && !dismissedGuidePages.contains(page)
+    }
+
+    private struct CoursePageHint {
+        let icon: String
+        let title: String
+        let detail: String
+    }
+
+    private var currentPageHint: CoursePageHint {
+        switch page {
+        case .basics:
+            return CoursePageHint(
+                icon: "pencil.and.list.clipboard",
+                title: isChinese ? "先定义课堂边界" : "Define lesson scope first",
+                detail: isChinese
+                    ? "填写课程名、年级/年龄范围、学科、课时与人数，系统会据此建立基础约束。"
+                    : "Set course name, grade/age range, subject, duration, and student count to anchor planning constraints."
+            )
+        case .goalsOutputs:
+            return CoursePageHint(
+                icon: "target",
+                title: isChinese ? "目标要可落地" : "Make goals actionable",
+                detail: isChinese
+                    ? "先选 Primary Goals，再补充具体目标；同时勾选期望产出，确保后续节点可执行。"
+                    : "Pick primary goals, add concrete goal details, and choose expected outputs for executable downstream nodes."
+            )
+        case .modelInputs:
+            return CoursePageHint(
+                icon: "slider.horizontal.3",
+                title: isChinese ? "补充匹配信号" : "Provide model signals",
+                detail: isChinese
+                    ? "这里的课堂风格与检查强度会影响模型推荐排序。"
+                    : "Teaching style and formative-check intensity here directly influence model ranking."
+            )
+        case .model:
+            let modelName = modelRules.first(where: { $0.id == draft.modelID })?.displayName(isChinese: isChinese) ?? draft.modelID
+            if requiredModelID != nil {
+                return CoursePageHint(
+                    icon: "sparkles.rectangle.stack",
+                    title: isChinese ? "训练任务模型已锁定" : "Practice model locked",
+                    detail: isChinese
+                        ? "本次引导实战使用 \(modelName) 模型，便于你快速完成完整流程。"
+                        : "This guided practice locks \(modelName) so you can finish the full flow quickly."
+                )
+            }
+            return CoursePageHint(
+                icon: "sparkles.rectangle.stack",
+                title: isChinese ? "确认教育模型" : "Confirm education model",
+                detail: isChinese
+                    ? "查看推荐原因并确认模型，后续模板节点将按该模型自动生成。"
+                    : "Review recommendation reasons and confirm the model; template nodes will be generated accordingly."
+            )
+        case .teamStudents:
+            return CoursePageHint(
+                icon: "person.2.badge.gearshape",
+                title: isChinese ? "完善师生信息" : "Finalize team and roster",
+                detail: isChinese
+                    ? "教师姓名为必填；学生名单可手填或导入 CSV，后续可直接联动 Evaluation 打分。"
+                    : "Teacher names are required; student roster can be typed or imported via CSV for Evaluation scoring linkage."
+            )
+        }
+    }
+
     private var canGoNext: Bool {
         switch page {
         case .basics:
@@ -389,7 +461,12 @@ struct CourseCreationSheet: View {
             return true
 
         case .model:
-            return !draft.modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let selected = !draft.modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            guard selected else { return false }
+            if let requiredModelID {
+                return draft.modelID == requiredModelID
+            }
+            return true
 
         case .teamStudents:
             return isTeacherTeamValid
@@ -403,42 +480,53 @@ struct CourseCreationSheet: View {
         return normalizedNames.allSatisfy { !$0.isEmpty }
     }
 
+    @ViewBuilder
+    private var currentPageView: some View {
+        switch page {
+        case .basics:
+            basicsPage
+        case .goalsOutputs:
+            goalsOutputsPage
+        case .modelInputs:
+            modelInputsPage
+        case .model:
+            modelRecommendPage
+        case .teamStudents:
+            teamStudentsPage
+        }
+    }
+
+    private var sheetBackground: some View {
+        LinearGradient(
+            colors: [
+                Color.black.opacity(0.08),
+                Color.black.opacity(0.03)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .ignoresSafeArea()
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 header
 
-                Group {
-                    switch page {
-                    case .basics:
-                        basicsPage
-                    case .goalsOutputs:
-                        goalsOutputsPage
-                    case .modelInputs:
-                        modelInputsPage
-                    case .model:
-                        modelRecommendPage
-                    case .teamStudents:
-                        teamStudentsPage
-                    }
-                }
+                topHintBar
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+                    .zIndex(1500)
+
+                currentPageView
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .zIndex(isAnyFormDropdownExpanded ? 2000 : 0)
 
                 footer
                     .zIndex(0)
             }
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.08),
-                        Color.black.opacity(0.03)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-            )
+            .background(sheetBackground)
             .navigationTitle(S(isEditing ? "course.editTitle" : "course.createTitle"))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -448,9 +536,13 @@ struct CourseCreationSheet: View {
             .toolbarBackground(.hidden, for: .navigationBar)
             .onAppear {
                 page = initialPage
+                dismissedGuidePages = []
                 if draft.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                    let first = subjectPresets.first {
                     draft.subject = first
+                }
+                if let requiredModelID {
+                    draft.modelID = requiredModelID
                 }
                 syncPresetSelectionWithSubject()
                 initializeTeacherRoleRowsFromDraft()
@@ -461,6 +553,13 @@ struct CourseCreationSheet: View {
                 if draft.modelID.isEmpty, let firstRecommended = recommended.first {
                     draft.modelID = firstRecommended.id
                 }
+                refreshGuidePulseAnimation()
+            }
+            .onChange(of: page) { _, _ in
+                if let requiredModelID, page == .model {
+                    draft.modelID = requiredModelID
+                }
+                refreshGuidePulseAnimation()
             }
             .onChange(of: teacherRoleRows) { _, _ in
                 if let expandedRoleRowID,
@@ -496,6 +595,60 @@ struct CourseCreationSheet: View {
             }
         }
         .interactiveDismissDisabled(true)
+    }
+
+    private var topHintBar: some View {
+        let hint = currentPageHint
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: hint.icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.cyan)
+                .frame(width: 18, height: 18)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(hint.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(hint.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(
+                    shouldShowGuideOverlay
+                    ? Color.cyan.opacity(guidePulse ? 0.95 : 0.42)
+                    : Color.white.opacity(0.16),
+                    lineWidth: shouldShowGuideOverlay ? 1.4 : 1
+                )
+        )
+        .scaleEffect(shouldShowGuideOverlay ? (guidePulse ? 1.012 : 0.998) : 1)
+        .shadow(
+            color: shouldShowGuideOverlay ? Color.cyan.opacity(guidePulse ? 0.28 : 0.1) : .clear,
+            radius: shouldShowGuideOverlay ? 9 : 0
+        )
+    }
+
+    private func refreshGuidePulseAnimation() {
+        if shouldShowGuideOverlay {
+            guidePulse = false
+            withAnimation(.easeInOut(duration: 0.86).repeatForever(autoreverses: true)) {
+                guidePulse = true
+            }
+        } else {
+            guidePulse = false
+        }
     }
 
     private var header: some View {
@@ -759,7 +912,6 @@ struct CourseCreationSheet: View {
                     }
                 }
             }
-
             sectionCard {
                 formField(isChinese ? "课堂组织方式" : "Learning Organization", required: true) {
                     let orderedModes: [LearningOrganizationMode] = [.individual, .mixed, .group]
@@ -990,7 +1142,6 @@ struct CourseCreationSheet: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-
             sectionCard {
                 formField(isChinese ? "学生名单（可选）" : "Student Roster (Optional)") {
                     studentRosterTable
@@ -1069,6 +1220,9 @@ struct CourseCreationSheet: View {
     @ViewBuilder
     private func modelRow(rule: EduModelRule, recommended: Bool, showDetails: Bool) -> some View {
         Button {
+            if let requiredModelID, rule.id != requiredModelID {
+                return
+            }
             draft.modelID = rule.id
         } label: {
             HStack(alignment: .top, spacing: 10) {
@@ -1148,6 +1302,10 @@ struct CourseCreationSheet: View {
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
+        .opacity({
+            guard let requiredModelID else { return 1 }
+            return rule.id == requiredModelID ? 1 : 0.42
+        }())
     }
 
     @ViewBuilder

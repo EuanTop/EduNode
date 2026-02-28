@@ -183,6 +183,16 @@ enum EduLessonPlanExporter {
                 let processText = node.isKnowledge
                     ? (isChinese ? "围绕该知识点开展讲授、提问与理解巩固。" : "Deliver explanation, questioning and consolidation around this knowledge point.")
                     : node.formProcessSummary
+                let toolkitInputTitles = node.isToolkit ? graph.incomingKnowledgeTitles(for: node.id, limitedTo: mainIDs) : []
+                let toolkitInputText = toolkitInputTitles.isEmpty ? "-" : toolkitInputTitles.joined(separator: " / ")
+                let toolkitInputRow = node.isToolkit
+                    ? "<tr><th>\(escapeHTML(isChinese ? "知识输入" : "Knowledge Inputs"))</th><td>\(escapeHTML(toolkitInputText))</td></tr>"
+                    : ""
+                let toolkitGuidanceRow = node.isToolkit
+                    ? graph.toolkitInputGuidance(for: node.id, limitedTo: mainIDs).map {
+                        "<tr><th>\(escapeHTML(isChinese ? "执行逻辑" : "Execution Logic"))</th><td>\(escapeHTML($0))</td></tr>"
+                    } ?? ""
+                    : ""
 
                 let methodRows: String = {
                     guard !node.detailedFieldLines.isEmpty else { return "" }
@@ -206,6 +216,8 @@ enum EduLessonPlanExporter {
                     <tr><th>\(escapeHTML(isChinese ? "教学方式/认知层级" : "Teaching Mode / Cognitive Level"))</th><td>\(escapeHTML(node.methodOrLevelLabel.isEmpty ? "-" : node.methodOrLevelLabel))</td></tr>
                     <tr><th>\(escapeHTML(isChinese ? "前后衔接" : "Prerequisite & Transition"))</th><td>\(escapeHTML(inputText))</td></tr>
                     <tr><th>\(escapeHTML(isChinese ? "教师实施" : "Teacher Action"))</th><td>\(escapeHTML(processText))</td></tr>
+                    \(toolkitInputRow)
+                    \(toolkitGuidanceRow)
                     <tr><th>\(escapeHTML(isChinese ? "学习产出" : "Learner Outcome"))</th><td>\(escapeHTML(node.shortSummary))</td></tr>
                   </table>
                   \(methodRows)
@@ -617,6 +629,14 @@ enum EduLessonPlanExporter {
                     ? (isChinese ? "围绕该知识点开展讲授、提问与理解巩固。" : "Deliver explanation, questioning and consolidation around this knowledge point.")
                     : node.formProcessSummary
                 lines.append("- \(isChinese ? "教师活动" : "Teacher Action"): \(teacherAction)")
+                if node.isToolkit {
+                    let inputTitles = graph.incomingKnowledgeTitles(for: node.id, limitedTo: mainIDs)
+                    let inputText = inputTitles.isEmpty ? "-" : inputTitles.joined(separator: " / ")
+                    lines.append("- \(isChinese ? "知识输入" : "Knowledge Inputs"): \(inputText)")
+                    if let guidance = graph.toolkitInputGuidance(for: node.id, limitedTo: mainIDs) {
+                        lines.append("- \(isChinese ? "执行逻辑" : "Execution Logic"): \(guidance)")
+                    }
+                }
                 lines.append("- \(isChinese ? "学生活动与产出" : "Learner Activity & Outcome"): \(node.shortSummary)")
 
                 let filledFields = node.detailedFieldLines
@@ -862,6 +882,57 @@ private struct ParsedGraph {
             }
         }
         return result
+    }
+
+    func incomingKnowledgeNodes(for targetID: UUID, limitedTo allowed: Set<UUID>? = nil) -> [ParsedGraphNode] {
+        let incoming = incomingByNode[targetID] ?? []
+        var result: [ParsedGraphNode] = []
+        var seen = Set<UUID>()
+        for sourceID in incoming {
+            if let allowed, !allowed.contains(sourceID) { continue }
+            guard let node = nodesByID[sourceID], node.isKnowledge else { continue }
+            guard seen.insert(node.id).inserted else { continue }
+            result.append(node)
+        }
+        return result
+    }
+
+    func incomingKnowledgeTitles(for targetID: UUID, limitedTo allowed: Set<UUID>? = nil) -> [String] {
+        incomingKnowledgeNodes(for: targetID, limitedTo: allowed).map(\.title)
+    }
+
+    func toolkitInputGuidance(for targetID: UUID, limitedTo allowed: Set<UUID>? = nil) -> String? {
+        let titles = incomingKnowledgeTitles(for: targetID, limitedTo: allowed)
+        guard !titles.isEmpty else { return nil }
+
+        let hasStage2 = titles.contains { title in
+            let lower = title.lowercased()
+            return (lower.contains("ubd") && lower.contains("stage 2"))
+                || lower.contains("acceptable evidence")
+                || title.contains("UbD 阶段2")
+                || title.contains("可接受证据")
+        }
+        let hasStage3 = titles.contains { title in
+            let lower = title.lowercased()
+            return (lower.contains("ubd") && lower.contains("stage 3"))
+                || lower.contains("learning plan")
+                || title.contains("UbD 阶段3")
+                || title.contains("学习体验规划")
+        }
+
+        if hasStage2 && hasStage3 {
+            return isChinese
+                ? "双输入协同：Stage 3 决定活动推进顺序，Stage 2 提供证据判定标准。课堂执行时既要完成活动，也要采集可判定证据。"
+                : "Dual-input alignment: Stage 3 drives activity sequence, while Stage 2 provides evidence criteria. Execute the activity and collect assessable evidence together."
+        }
+        if titles.count == 1, let only = titles.first {
+            return isChinese
+                ? "单知识输入：该活动主要由「\(only)」驱动，重点是把该知识转化为可执行课堂任务。"
+                : "Single knowledge input: this activity is mainly driven by \"\(only)\", focusing on translating that knowledge into executable class tasks."
+        }
+        return isChinese
+            ? "多知识输入：该活动同时受「\(titles.joined(separator: " / "))」驱动，需在同一环节兼顾多项知识约束。"
+            : "Multi-knowledge input: this activity is jointly driven by \"\(titles.joined(separator: " / "))\", so multiple knowledge constraints should be addressed in one stage."
     }
 
     func linkedToolkitNodes(for knowledgeID: UUID) -> [ParsedGraphNode] {
