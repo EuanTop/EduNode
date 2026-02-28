@@ -51,7 +51,7 @@ enum EduNodePluginConfig {
         NodeVisualStyleRegistry.setStyle(
             NodeVisualStyle(
                 backgroundColor: Color(red: 0.12, green: 0.28, blue: 0.30),
-                selectedBorderColor: .teal,
+                selectedBorderColor: .accentColor,
                 menuDotColor: .teal,
                 shape: .rounded,
                 topRightSystemImage: "wrench.adjustable.fill"
@@ -62,7 +62,7 @@ enum EduNodePluginConfig {
         NodeVisualStyleRegistry.setStyle(
             NodeVisualStyle(
                 backgroundColor: Color(red: 0.34, green: 0.22, blue: 0.12),
-                selectedBorderColor: .orange,
+                selectedBorderColor: .accentColor,
                 menuDotColor: .orange,
                 shape: .rounded,
                 topRightSystemImage: "wrench.adjustable.fill"
@@ -73,7 +73,7 @@ enum EduNodePluginConfig {
         NodeVisualStyleRegistry.setStyle(
             NodeVisualStyle(
                 backgroundColor: Color(red: 0.18, green: 0.18, blue: 0.36),
-                selectedBorderColor: .indigo,
+                selectedBorderColor: .accentColor,
                 menuDotColor: .indigo,
                 shape: .rounded,
                 topRightSystemImage: "wrench.adjustable.fill"
@@ -84,7 +84,7 @@ enum EduNodePluginConfig {
         NodeVisualStyleRegistry.setStyle(
             NodeVisualStyle(
                 backgroundColor: Color(red: 0.14, green: 0.30, blue: 0.20),
-                selectedBorderColor: .mint,
+                selectedBorderColor: .accentColor,
                 menuDotColor: .mint,
                 shape: .rounded,
                 topRightSystemImage: "wrench.adjustable.fill"
@@ -95,7 +95,7 @@ enum EduNodePluginConfig {
         NodeVisualStyleRegistry.setStyle(
             NodeVisualStyle(
                 backgroundColor: Color(red: 0.20, green: 0.22, blue: 0.30),
-                selectedBorderColor: .cyan,
+                selectedBorderColor: .accentColor,
                 menuDotColor: .cyan,
                 shape: .rounded,
                 topRightSystemImage: "wrench.adjustable.fill"
@@ -106,7 +106,7 @@ enum EduNodePluginConfig {
         NodeVisualStyleRegistry.setStyle(
             NodeVisualStyle(
                 backgroundColor: Color(red: 0.16, green: 0.16, blue: 0.24),
-                selectedBorderColor: .orange,
+                selectedBorderColor: .accentColor,
                 menuDotColor: .orange,
                 shape: .rounded,
                 topRightSystemImage: "checklist"

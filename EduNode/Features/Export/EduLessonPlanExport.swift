@@ -104,6 +104,7 @@ enum EduLessonPlanExporter {
         let graph = ParsedGraph(document: document, isChinese: isChinese)
         let mainFlow = graph.mainFlowNodes
         let evaluation = graph.evaluationNodes
+        let evaluationDescriptors = evaluation.map { buildEvaluationDescriptor(for: $0, isChinese: isChinese) }
         let overviewRows = buildLessonOverviewRows(graph: graph, isChinese: isChinese)
 
         let fallbackCourseName = isChinese ? "未命名课程" : "Untitled Course"
@@ -227,12 +228,55 @@ enum EduLessonPlanExporter {
         }()
 
         let evalRows: String = {
-            guard !evaluation.isEmpty else {
+            guard !evaluationDescriptors.isEmpty else {
                 return "<tr><td colspan=\"3\" class=\"muted\">\(escapeHTML(isChinese ? "当前未形成完整评价环节，建议补充评价指标与汇总策略。" : "No complete assessment section detected; consider adding metrics and summary strategy."))</td></tr>"
             }
-            return evaluation.map { node in
-                "<tr><td>\(escapeHTML(node.title))</td><td>\(escapeHTML(node.kindLabel))</td><td>\(escapeHTML(node.shortSummary))</td></tr>"
+            return evaluationDescriptors.map { descriptor in
+                "<tr><td>\(escapeHTML(descriptor.title))</td><td>\(escapeHTML(descriptor.approachSummary))</td><td>\(escapeHTML(descriptor.evidenceSummary))</td></tr>"
             }.joined()
+        }()
+
+        let evaluationDetailSectionHTML: String = {
+            guard !evaluationDescriptors.isEmpty else { return "" }
+            let sections = evaluationDescriptors.map { descriptor in
+                let hasWeightColumn = descriptor.indicators.contains { $0.weight != nil }
+                let headerWeight = hasWeightColumn
+                    ? "<th>\(escapeHTML(isChinese ? "权重" : "Weight"))</th>"
+                    : ""
+                let rows: String = {
+                    guard !descriptor.indicators.isEmpty else {
+                        return "<tr><td colspan=\"\(hasWeightColumn ? 3 : 2)\" class=\"muted\">\(escapeHTML(isChinese ? "未配置指标（请在 Evaluation Indicators 表格中新增指标）" : "No indicators configured (add rows in Evaluation Indicators table)."))</td></tr>"
+                    }
+                    return descriptor.indicators.map { indicator in
+                        let weightCell = hasWeightColumn
+                            ? "<td>\(escapeHTML(indicator.weight ?? "1"))</td>"
+                            : ""
+                        return "<tr><td>\(escapeHTML(indicator.name))</td><td>\(escapeHTML(indicator.typeLabel))</td>\(weightCell)</tr>"
+                    }.joined()
+                }()
+
+                return """
+                <div class="subsec">
+                  <div class="subsec-title">\(escapeHTML(isChinese ? "Evaluation 节点" : "Evaluation Node"))：\(escapeHTML(descriptor.title))</div>
+                  <table class="kv">
+                    <tr><th>\(escapeHTML(isChinese ? "计算公式" : "Formula"))</th><td>\(escapeHTML(descriptor.formula))</td></tr>
+                    <tr><th>\(escapeHTML(isChinese ? "分组策略" : "Grouping"))</th><td>\(escapeHTML(descriptor.grouping))</td></tr>
+                    <tr><th>\(escapeHTML(isChinese ? "输出制式" : "Output Scale"))</th><td>\(escapeHTML(descriptor.outputScale))</td></tr>
+                  </table>
+                  <table class="flow">
+                    <thead>
+                      <tr>
+                        <th>\(escapeHTML(isChinese ? "指标" : "Indicator"))</th>
+                        <th>\(escapeHTML(isChinese ? "类型" : "Type"))</th>
+                        \(headerWeight)
+                      </tr>
+                    </thead>
+                    <tbody>\(rows)</tbody>
+                  </table>
+                </div>
+                """
+            }.joined()
+            return sections
         }()
 
         let evaluationScoreSectionHTML: String = {
@@ -506,6 +550,7 @@ enum EduLessonPlanExporter {
                 </thead>
                 <tbody>\(evalRows)</tbody>
               </table>
+              \(evaluationDetailSectionHTML)
               \(evaluationScoreSectionHTML)
             </section>
 
@@ -540,6 +585,7 @@ enum EduLessonPlanExporter {
         let graph = ParsedGraph(document: document, isChinese: isChinese)
         let mainFlow = graph.mainFlowNodes
         let evaluation = graph.evaluationNodes
+        let evaluationDescriptors = evaluation.map { buildEvaluationDescriptor(for: $0, isChinese: isChinese) }
         let overviewRows = buildLessonOverviewRows(graph: graph, isChinese: isChinese)
 
         let fallbackCourseName = isChinese ? "未命名课程" : "Untitled Course"
@@ -651,13 +697,39 @@ enum EduLessonPlanExporter {
         }
 
         lines.append("## \(isChinese ? "6. 评价与证据" : "6. Assessment & Evidence")")
-        if evaluation.isEmpty {
+        if evaluationDescriptors.isEmpty {
             lines.append("- \(isChinese ? "当前未形成完整评价环节，建议补充评价指标与汇总策略。" : "No complete assessment section detected; consider adding metrics and summary strategy.")")
         } else {
             lines.append("| \(isChinese ? "评价环节" : "Assessment Stage") | \(isChinese ? "评价方式" : "Assessment Approach") | \(isChinese ? "证据与说明" : "Evidence & Notes") |")
             lines.append("|---|---|---|")
-            for node in evaluation {
-                lines.append("| \(escapeTable(node.title)) | \(escapeTable(node.kindLabel)) | \(escapeTable(node.shortSummary)) |")
+            for descriptor in evaluationDescriptors {
+                lines.append("| \(escapeTable(descriptor.title)) | \(escapeTable(descriptor.approachSummary)) | \(escapeTable(descriptor.evidenceSummary)) |")
+            }
+            lines.append("")
+            for descriptor in evaluationDescriptors {
+                lines.append("### \(isChinese ? "Evaluation 节点" : "Evaluation Node")：\(descriptor.title)")
+                lines.append("- \(isChinese ? "计算公式" : "Formula"): \(descriptor.formula)")
+                lines.append("- \(isChinese ? "分组策略" : "Grouping"): \(descriptor.grouping)")
+                lines.append("- \(isChinese ? "输出制式" : "Output Scale"): \(descriptor.outputScale)")
+                if descriptor.indicators.isEmpty {
+                    lines.append("- \(isChinese ? "未配置指标（请在 Evaluation Indicators 表格中新增指标）" : "No indicators configured (add rows in Evaluation Indicators table).")")
+                } else {
+                    let hasWeightColumn = descriptor.indicators.contains { $0.weight != nil }
+                    if hasWeightColumn {
+                        lines.append("| \(isChinese ? "指标" : "Indicator") | \(isChinese ? "类型" : "Type") | \(isChinese ? "权重" : "Weight") |")
+                        lines.append("|---|---|---|")
+                        for indicator in descriptor.indicators {
+                            lines.append("| \(escapeTable(indicator.name)) | \(escapeTable(indicator.typeLabel)) | \(escapeTable(indicator.weight ?? "1")) |")
+                        }
+                    } else {
+                        lines.append("| \(isChinese ? "指标" : "Indicator") | \(isChinese ? "类型" : "Type") |")
+                        lines.append("|---|---|")
+                        for indicator in descriptor.indicators {
+                            lines.append("| \(escapeTable(indicator.name)) | \(escapeTable(indicator.typeLabel)) |")
+                        }
+                    }
+                }
+                lines.append("")
             }
         }
         if let snapshot = evaluationSnapshot, !snapshot.isEmpty {
@@ -814,6 +886,151 @@ private struct LessonOverviewRow {
     let knowledge: String
     let toolkits: [String]
     let coreContent: String
+}
+
+private struct LessonPlanEvaluationIndicator {
+    let name: String
+    let typeLabel: String
+    let summaryTypeLabel: String
+    let weight: String?
+}
+
+private struct LessonPlanEvaluationDescriptor {
+    let title: String
+    let formula: String
+    let grouping: String
+    let outputScale: String
+    let approachSummary: String
+    let evidenceSummary: String
+    let indicators: [LessonPlanEvaluationIndicator]
+}
+
+private extension EduLessonPlanExporter {
+    static func buildEvaluationDescriptor(
+        for node: ParsedGraphNode,
+        isChinese: Bool
+    ) -> LessonPlanEvaluationDescriptor {
+        let notSet = isChinese ? "未设置" : "Not set"
+        let formula = nonEmpty(
+            node.formOptionFields.first(where: { $0.id == "evaluation_formula" })?.selectedOption ?? "",
+            fallback: notSet
+        )
+        let grouping = nonEmpty(
+            node.formOptionFields.first(where: { $0.id == "evaluation_grouping" })?.selectedOption ?? "",
+            fallback: notSet
+        )
+        let outputScale = nonEmpty(
+            node.formOptionFields.first(where: { $0.id == "evaluation_output_scale" })?.selectedOption ?? "",
+            fallback: notSet
+        )
+
+        let indicatorsRaw = node.formTextFields.first(where: { $0.id == "evaluation_indicators" })?.value ?? ""
+        let indicators = parseLessonPlanEvaluationIndicators(from: indicatorsRaw, isChinese: isChinese)
+
+        let approachSummary = [formula, grouping, outputScale]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0 != notSet }
+            .joined(separator: " / ")
+
+        let evidenceSummary: String = {
+            guard !indicators.isEmpty else { return node.shortSummary }
+            let preview = indicators.prefix(3).map { indicator in
+                isChinese
+                    ? "\(indicator.name)（\(indicator.summaryTypeLabel)）"
+                    : "\(indicator.name) (\(indicator.summaryTypeLabel))"
+            }
+            if indicators.count > 3 {
+                let suffix = isChinese ? " 等 \(indicators.count) 项" : " +\(indicators.count - 3) more"
+                return preview.joined(separator: isChinese ? "、" : ", ") + suffix
+            }
+            return preview.joined(separator: isChinese ? "、" : ", ")
+        }()
+
+        return LessonPlanEvaluationDescriptor(
+            title: node.title,
+            formula: formula,
+            grouping: grouping,
+            outputScale: outputScale,
+            approachSummary: approachSummary.isEmpty ? node.kindLabel : approachSummary,
+            evidenceSummary: evidenceSummary,
+            indicators: indicators
+        )
+    }
+
+    static func parseLessonPlanEvaluationIndicators(
+        from raw: String,
+        isChinese: Bool
+    ) -> [LessonPlanEvaluationIndicator] {
+        let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        return normalized
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { rawLine -> LessonPlanEvaluationIndicator? in
+                let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !line.isEmpty else { return nil }
+
+                let normalizedLine = line
+                    .replacingOccurrences(of: "｜", with: "|")
+                    .replacingOccurrences(of: "：", with: ":")
+
+                var components = normalizedLine
+                    .split(separator: "|", omittingEmptySubsequences: false)
+                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+
+                if components.count == 1 && normalizedLine.contains(":") {
+                    components = normalizedLine
+                        .split(separator: ":", omittingEmptySubsequences: false)
+                        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                }
+
+                guard let nameRaw = components.first else { return nil }
+                let name = nameRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return nil }
+
+                var typeToken = components.count > 1 ? components[1] : "score"
+                var weightToken: String? = components.count > 2 ? components[2] : nil
+
+                if components.count == 2 && typeToken.contains("/") {
+                    let parts = typeToken
+                        .split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+                        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                    typeToken = parts.first ?? "score"
+                    if parts.count > 1 {
+                        weightToken = parts[1]
+                    }
+                }
+
+                let isCompletion = isCompletionEvaluationIndicatorType(typeToken)
+                let typeLabel = isCompletion
+                    ? (isChinese ? "完成制（0/5）" : "Completion (0/5)")
+                    : (isChinese ? "分数制（0-5）" : "Score (0-5)")
+                let summaryTypeLabel = isCompletion
+                    ? (isChinese ? "完成" : "Completion")
+                    : (isChinese ? "分数" : "Score")
+
+                return LessonPlanEvaluationIndicator(
+                    name: name,
+                    typeLabel: typeLabel,
+                    summaryTypeLabel: summaryTypeLabel,
+                    weight: normalizedEvaluationWeight(weightToken)
+                )
+            }
+    }
+
+    static func isCompletionEvaluationIndicatorType(_ raw: String) -> Bool {
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let completionTokens = ["completion", "complete", "done", "yes/no", "binary", "完成", "达成", "是否完成", "完成制"]
+        return completionTokens.contains(where: { normalized.contains($0) })
+    }
+
+    static func normalizedEvaluationWeight(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let value = Double(trimmed), value > 0 else { return nil }
+        if value == value.rounded() {
+            return "\(Int(value))"
+        }
+        return String(value)
+    }
 }
 
 private struct ParsedGraph {
@@ -1019,10 +1236,6 @@ private struct ParsedGraphNode {
 
     var isEvaluationLike: Bool {
         nodeType == EduNodeType.evaluation
-            || nodeType == EduNodeType.metricValue
-            || nodeType == EduNodeType.evaluationMetric
-            || nodeType == EduNodeType.evaluationSummary
-            || (role?.contains("evaluation") == true)
     }
 
     var kindLabel: String {
