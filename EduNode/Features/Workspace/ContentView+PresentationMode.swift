@@ -70,10 +70,28 @@ extension ContentView {
     }
 
     func editorConnectionAppearance(
-        for _: NodeConnection,
+        for connection: NodeConnection,
         sourceNodeType: String?,
         targetNodeType: String?
     ) -> NodeEditorConnectionAppearance? {
+        if let previewState = connection.previewState {
+            switch previewState {
+            case "add":
+                return NodeEditorConnectionAppearance(
+                    color: Color.green.opacity(connection.previewIsFocused == true ? 0.98 : 0.86),
+                    lineWidth: connection.previewIsFocused == true ? 5 : 4,
+                    dash: []
+                )
+            case "remove":
+                return NodeEditorConnectionAppearance(
+                    color: Color.red.opacity(connection.previewIsFocused == true ? 0.96 : 0.84),
+                    lineWidth: connection.previewIsFocused == true ? 4.6 : 3.8,
+                    dash: [12, 8]
+                )
+            default:
+                break
+            }
+        }
         let involvesEvaluation = sourceNodeType == EduNodeType.evaluation || targetNodeType == EduNodeType.evaluation
         guard involvesEvaluation else { return nil }
         return NodeEditorConnectionAppearance(
@@ -110,6 +128,7 @@ extension ContentView {
         }
 
         activePresentationStylingFileID = nil
+        workspaceAgentSidebarFileID = nil
         let activationToken = UUID()
         presentationModeActivationToken = activationToken
         presentationModeLoadingFileID = file.id
@@ -193,7 +212,9 @@ extension ContentView {
         let nativeTextOverridesBySlideID = presentationNativeTextOverridesBySlideID(fileID: file.id, groups: groups)
         let nativeContentOverridesBySlideID = presentationNativeContentOverridesBySlideID(fileID: file.id, groups: groups)
         let nativeLayoutOverridesBySlideID = presentationNativeLayoutOverridesBySlideID(fileID: file.id, groups: groups)
+        let slideGroupIDBySlideID = Dictionary(uniqueKeysWithValues: zip(slides.map(\.id), groups.map(\.id)))
         presentationPreviewPayload = EduPresentationPreviewPayload(
+            sourceFile: file,
             courseName: file.name,
             baseFileName: sanitizedExportBaseName(file.name),
             slides: slides,
@@ -202,7 +223,15 @@ extension ContentView {
             overlayHTMLBySlideID: overlayHTMLBySlideID,
             nativeTextOverridesBySlideID: nativeTextOverridesBySlideID,
             nativeContentOverridesBySlideID: nativeContentOverridesBySlideID,
-            nativeLayoutOverridesBySlideID: nativeLayoutOverridesBySlideID
+            nativeLayoutOverridesBySlideID: nativeLayoutOverridesBySlideID,
+            slideGroupIDBySlideID: slideGroupIDBySlideID,
+            onApplyOverrides: { overrides in
+                applyPresentationAgentOverrides(
+                    fileID: file.id,
+                    slideGroupIDBySlideID: slideGroupIDBySlideID,
+                    overridesBySlideID: overrides
+                )
+            }
         )
     }
 
@@ -216,15 +245,10 @@ extension ContentView {
         let resolvedContext = context ?? EduLessonPlanContext(file: file)
         let resolvedBaseName = baseName ?? sanitizedExportBaseName(file.name)
         let evaluationSnapshot = evaluationScoreSnapshot(for: file, graphData: sourceData)
-        let renderedHTML = EduLessonPlanExporter.html(
+        lessonPlanSetupPayload = EduLessonPlanSetupPayload(
+            sourceFile: file,
             context: resolvedContext,
             graphData: sourceData,
-            evaluationSnapshot: evaluationSnapshot
-        )
-        lessonPlanPreviewPayload = EduLessonPlanPreviewPayload(
-            context: resolvedContext,
-            graphData: sourceData,
-            html: renderedHTML,
             baseFileName: resolvedBaseName,
             evaluationSnapshot: evaluationSnapshot
         )

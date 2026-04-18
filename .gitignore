@@ -3,6 +3,7 @@
 # Xcode
 DerivedData/
 build/
+tmp/
 xcuserdata/
 *.xcuserstate
 
@@ -10,4 +11,4 @@ xcuserdata/
 .build/
 .swiftpm/
 Packages/
-
+EduNode/.env

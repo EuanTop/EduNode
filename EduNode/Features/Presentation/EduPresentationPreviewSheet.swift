@@ -10,6 +10,7 @@ import PDFKit
 
 struct EduPresentationPreviewPayload: Identifiable {
     let id = UUID()
+    let sourceFile: GNodeWorkspaceFile
     let courseName: String
     let baseFileName: String
     let slides: [EduPresentationComposedSlide]
@@ -19,6 +20,8 @@ struct EduPresentationPreviewPayload: Identifiable {
     let nativeTextOverridesBySlideID: [UUID: [PresentationNativeElement: PresentationTextStyleConfig]]
     let nativeContentOverridesBySlideID: [UUID: [PresentationNativeElement: String]]
     let nativeLayoutOverridesBySlideID: [UUID: [PresentationNativeElement: PresentationNativeLayoutOverride]]
+    let slideGroupIDBySlideID: [UUID: UUID]
+    let onApplyOverrides: ([UUID: [PresentationNativeElement: String]]) -> Void
 }
 
 struct EduPresentationPreviewSheet: View {
@@ -31,6 +34,7 @@ struct EduPresentationPreviewSheet: View {
     @State private var exportContentType: UTType = .html
     @State private var exportFilename = "presentation.html"
     @State private var isExportingPDF = false
+    @State private var showingAgentSheet = false
     @State private var cachedPDFHash: Int?
     @State private var cachedPDFData: Data?
 
@@ -97,9 +101,26 @@ struct EduPresentationPreviewSheet: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    exportActions
+                    HStack(spacing: 10) {
+                        Button {
+                            showingAgentSheet = true
+                        } label: {
+                            Label("AI", systemImage: "sparkles")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        exportActions
+                    }
                 }
             }
+        }
+        .sheet(isPresented: $showingAgentSheet) {
+            EduPresentationAgentSheet(
+                file: payload.sourceFile,
+                slides: payload.slides,
+                initialContentOverridesBySlideID: payload.nativeContentOverridesBySlideID,
+                slideGroupIDBySlideID: payload.slideGroupIDBySlideID,
+                onApplyOverrides: payload.onApplyOverrides
+            )
         }
         .fileExporter(
             isPresented: $showExporter,

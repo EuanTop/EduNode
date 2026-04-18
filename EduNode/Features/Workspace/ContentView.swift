@@ -43,8 +43,14 @@ struct ContentView: View {
     @State var docsPreferredNodeType: String?
     @State var showingOnboardingGuide = false
     @State var showingSidebarImporter = false
+    @State var lessonPlanSetupPayload: EduLessonPlanSetupPayload?
     @State var lessonPlanPreviewPayload: EduLessonPlanPreviewPayload?
     @State var presentationPreviewPayload: EduPresentationPreviewPayload?
+    @State var workspaceAgentSidebarFileID: UUID?
+    @State var workspaceAgentConversationByFile: [UUID: [EduAgentConversationMessage]] = [:]
+    @State var workspaceAgentPendingResponseByFile: [UUID: EduAgentGraphOperationEnvelope] = [:]
+    @State var workspaceAgentReviewIndexByFile: [UUID: Int] = [:]
+    @State var agentGraphUndoStackByFile: [UUID: [EduAgentGraphUndoSnapshot]] = [:]
     @State var showingPresentationEmptyAlert = false
     @State var activePresentationModeFileID: UUID?
     @State var activePresentationStylingFileID: UUID?
@@ -522,6 +528,9 @@ struct ContentView: View {
         .onChange(of: selectedFileID) { _, _ in
             isSidebarBasicInfoExpanded = false
             selectedModelTemplatePreviewID = nil
+            if workspaceAgentSidebarFileID != nil {
+                workspaceAgentSidebarFileID = selectedFileID
+            }
             requestCameraFocusOnFirstNodeForSelectedFile()
             handleTutorialSelectionChange()
         }
@@ -686,8 +695,13 @@ struct ContentView: View {
         ) {
             presentationStylingFullScreenPage
         }
-        .sheet(item: $lessonPlanPreviewPayload) { payload in
-            EduLessonPlanPreviewSheet(payload: payload)
+        .sheet(item: $lessonPlanSetupPayload) { payload in
+            EduLessonPlanExportSetupSheet(payload: payload) { previewPayload in
+                lessonPlanPreviewPayload = previewPayload
+            }
+        }
+        .fullScreenCover(item: $lessonPlanPreviewPayload) { payload in
+            EduLessonPlanWorkbenchView(payload: payload)
         }
         .sheet(item: $presentationPreviewPayload) { payload in
             EduPresentationPreviewSheet(payload: payload)
@@ -801,98 +815,132 @@ struct ContentView: View {
                 isChinese: isChineseUI()
             )
             let isPresentationModeActive = activePresentationModeFileID == file.id
-            ZStack {
-                NodeEditorView(
-                    documentID: file.id,
-                    documentData: file.data,
-                    toolbarLeadingPadding: 20 + topToolbarLeadingReservedWidth,
-                    toolbarTrailingPadding: 20,
-                    toolbarTopPadding: toolbarTopPadding,
-                    showImportButton: false,
-                    showClearButton: !isPresentationModeActive,
-                    showExportButton: !isPresentationModeActive,
-                    showStatsOverlay: false,
-                    exportActions: editorExportActions(for: file),
-                    toolbarActions: editorToolbarActions(for: file),
-                    cameraRequest: cameraRequest,
-                    selectionRequest: selectionRequest,
-                    customNodeMenuSections: eduNodeMenuSections,
-                    topCenterOverlay: isPresentationModeActive
-                        ? nil
-                        : AnyView(
-                            EduFlowProgressView(
-                                states: flowStates(for: file),
-                                onToggleManual: { step in
-                                    handleFlowStepTap(step, for: file)
-                                }
+            let reviewTarget = isPresentationModeActive ? nil : currentWorkspaceAgentReviewTarget(for: file)
+            let previewDocumentData = reviewTarget?.previewData
+            GeometryReader { detailGeometry in
+                ZStack {
+                    NodeEditorView(
+                        documentID: file.id,
+                        documentData: previewDocumentData ?? file.data,
+                        toolbarLeadingPadding: 20 + topToolbarLeadingReservedWidth,
+                        toolbarTrailingPadding: 20,
+                        toolbarTopPadding: toolbarTopPadding,
+                        showImportButton: false,
+                        showClearButton: !isPresentationModeActive,
+                        showExportButton: !isPresentationModeActive,
+                        showStatsOverlay: false,
+                        exportActions: editorExportActions(for: file),
+                        toolbarActions: editorToolbarActions(for: file),
+                        cameraRequest: cameraRequest,
+                        selectionRequest: selectionRequest,
+                        customNodeMenuSections: eduNodeMenuSections,
+                        topCenterOverlay: isPresentationModeActive
+                            ? nil
+                            : AnyView(
+                                EduFlowProgressView(
+                                    states: flowStates(for: file),
+                                    onToggleManual: { step in
+                                        handleFlowStepTap(step, for: file)
+                                    }
+                                )
+                                .padding(.trailing, 6)
+                            ),
+                        onStatsChanged: { stats in
+                            editorStatsByFileID[file.id] = stats
+                            handleTutorialStatsChange(fileID: file.id, stats: stats)
+                        },
+                        connectionAppearanceProvider: { connection, sourceNodeType, targetNodeType in
+                            editorConnectionAppearance(
+                                for: connection,
+                                sourceNodeType: sourceNodeType,
+                                targetNodeType: targetNodeType
                             )
-                            .padding(.trailing, 6)
-                        ),
-                    onStatsChanged: { stats in
-                        editorStatsByFileID[file.id] = stats
-                        handleTutorialStatsChange(fileID: file.id, stats: stats)
-                    },
-                    connectionAppearanceProvider: { connection, sourceNodeType, targetNodeType in
-                        editorConnectionAppearance(
-                            for: connection,
-                            sourceNodeType: sourceNodeType,
-                            targetNodeType: targetNodeType
-                        )
-                    },
-                    onDocumentDataChange: { data in
-                        persistWorkspaceFileData(id: file.id, data: data)
-                    },
-                    onNodeSelected: { nodeID in
-                        guard activePresentationModeFileID == file.id else { return }
-                        let rawDeck = EduPresentationPlanner.makeDeck(graphData: file.data)
-                        let deck = filteredPresentationDeck(for: file.id, from: rawDeck)
-                        let groups = presentationGroups(for: file.id, deck: deck)
-                        if let matched = groups.first(where: { $0.sourceSlides.contains(where: { $0.id == nodeID }) }) {
-                            guard selectedPresentationGroupIDByFile[file.id] != matched.id else { return }
-                            selectedPresentationGroupIDByFile[file.id] = matched.id
-                            persistPresentationState(fileID: file.id)
+                        },
+                        onDocumentDataChange: { data in
+                            guard previewDocumentData == nil else { return }
+                            persistWorkspaceFileData(id: file.id, data: data)
+                        },
+                        onNodeSelected: { nodeID in
+                            guard activePresentationModeFileID == file.id else { return }
+                            let rawDeck = EduPresentationPlanner.makeDeck(graphData: file.data)
+                            let deck = filteredPresentationDeck(for: file.id, from: rawDeck)
+                            let groups = presentationGroups(for: file.id, deck: deck)
+                            if let matched = groups.first(where: { $0.sourceSlides.contains(where: { $0.id == nodeID }) }) {
+                                guard selectedPresentationGroupIDByFile[file.id] != matched.id else { return }
+                                selectedPresentationGroupIDByFile[file.id] = matched.id
+                                persistPresentationState(fileID: file.id)
+                            }
                         }
-                    }
-                )
-                .id(file.id)
-                .ignoresSafeArea(edges: [.top, .bottom])
-                .toolbar(.hidden, for: .navigationBar)
-
-                if isPresentationModeActive && !slideGroups.isEmpty {
-                    presentationTrackingPanel(
-                        file: file,
-                        groups: slideGroups,
-                        topPadding: toolbarTopPadding,
-                        graphData: file.data
                     )
-                    .zIndex(2100)
+                    .id(file.id)
+                    .ignoresSafeArea(edges: [.top, .bottom])
+                    .toolbar(.hidden, for: .navigationBar)
 
-                    if activePresentationStylingFileID != file.id {
-                        presentationStylingFloatingEntryButton(
+                    if isPresentationModeActive && !slideGroups.isEmpty {
+                        presentationTrackingPanel(
+                            file: file,
+                            groups: slideGroups,
+                            topPadding: toolbarTopPadding,
+                            graphData: file.data
+                        )
+                        .zIndex(2100)
+
+                        if activePresentationStylingFileID != file.id {
+                            presentationStylingFloatingEntryButton(
+                                fileID: file.id,
+                                groups: slideGroups
+                            )
+                            .onPreferenceChange(TutorialDesignButtonFramePreferenceKey.self) { frame in
+                                guard frame.width > 1, frame.height > 1 else { return }
+                                tutorialDesignButtonFrameInGlobal = frame
+                            }
+                            .zIndex(2050)
+                        }
+
+                        presentationFilmstrip(
                             fileID: file.id,
-                            groups: slideGroups
+                            courseName: file.name,
+                            deck: deck,
+                            groups: slideGroups,
+                            slides: composedSlides
                         )
-                        .onPreferenceChange(TutorialDesignButtonFramePreferenceKey.self) { frame in
-                            guard frame.width > 1, frame.height > 1 else { return }
-                            tutorialDesignButtonFrameInGlobal = frame
-                        }
-                        .zIndex(2050)
+                        .zIndex(2000)
                     }
 
-                    presentationFilmstrip(
-                        fileID: file.id,
-                        courseName: file.name,
-                        deck: deck,
-                        groups: slideGroups,
-                        slides: composedSlides
+                    editorStatsOverlay(
+                        stats: statsForDisplay(for: file)
                     )
-                    .zIndex(2000)
-                }
+                    .zIndex(2200)
 
-                editorStatsOverlay(
-                    stats: statsForDisplay(for: file)
-                )
-                .zIndex(2200)
+                    if !isPresentationModeActive && !isWorkspaceAgentSidebarVisible(for: file) {
+                        EduWorkspaceAgentFloatingButton(
+                            isChinese: isChineseUI(),
+                            containerSize: detailGeometry.size,
+                            safeAreaInsets: detailGeometry.safeAreaInsets
+                        ) {
+                            openWorkspaceAgent(for: file)
+                        }
+                        .zIndex(2300)
+                    }
+
+                    if isWorkspaceAgentSidebarVisible(for: file) {
+                        workspaceAgentSidebar(
+                            file: file,
+                            availableWidth: detailGeometry.size.width,
+                            topPadding: toolbarTopPadding
+                        )
+                        .zIndex(2400)
+                    }
+
+                    if let reviewTarget {
+                        workspaceAgentReviewBar(
+                            file: file,
+                            target: reviewTarget
+                        )
+                        .zIndex(2350)
+                    }
+                }
+                .animation(.spring(response: 0.28, dampingFraction: 0.88), value: workspaceAgentSidebarFileID)
             }
             .background(Color(white: 0.1))
         } else {
