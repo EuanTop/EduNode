@@ -5,6 +5,9 @@ import SwiftData
 import UIKit
 import WebKit
 #endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 struct EduLessonPlanSetupPayload: Identifiable {
     let id = UUID()
@@ -361,6 +364,10 @@ struct EduLessonPlanWorkbenchView: View {
                     .padding(18)
             }
 
+            if shouldShowPreviewRunningOverlay {
+                generationLoadingOverlay
+            }
+
             if isExportingPDF {
                 ZStack {
                     Color.black.opacity(0.26).ignoresSafeArea()
@@ -385,9 +392,13 @@ struct EduLessonPlanWorkbenchView: View {
             && viewModel.lastError == nil
     }
 
+    private var shouldShowPreviewRunningOverlay: Bool {
+        viewModel.isRunning && !shouldShowReferenceLoadingPlaceholder
+    }
+
     private var previewPlaceholder: some View {
         VStack(spacing: 16) {
-            if viewModel.isPreparingReference {
+            if viewModel.isPreparingReference || viewModel.isRunning {
                 ProgressView()
                     .controlSize(.large)
             } else {
@@ -406,11 +417,44 @@ struct EduLessonPlanWorkbenchView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private var generationLoadingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.24)
+                .ignoresSafeArea()
+
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.large)
+                Text(isChinese ? "正在生成教案" : "Generating Lesson Plan")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                Text(
+                    isChinese
+                        ? "系统正在综合节点图、模板结构与补充信息，更新当前预览。"
+                        : "The system is synthesizing the graph, template structure, and follow-up inputs to refresh the preview."
+                )
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.78))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 16)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .padding(18)
+    }
+
     private var previewPlaceholderTitle: String {
         if viewModel.isPreparingReference {
             return isChinese
                 ? "正在准备参考教案预览"
                 : "Preparing the reference-based preview"
+        }
+        if viewModel.isRunning {
+            return isChinese
+                ? "正在生成正式教案"
+                : "Generating the final lesson plan"
         }
         return isChinese
             ? "等待补齐信息后生成正式教案"
@@ -422,6 +466,11 @@ struct EduLessonPlanWorkbenchView: View {
             return isChinese
                 ? "系统会先学习参考教案的结构、内容组织与文风，再结合当前节点图生成更贴近的正式稿。"
                 : "The system first learns the reference lesson plan's structure, content organization, and tone, then uses the current graph to generate a closer final draft."
+        }
+        if viewModel.isRunning {
+            return isChinese
+                ? "系统正在整合参考教案结构、教师补充信息与当前节点图，请稍候。"
+                : "The system is combining the reference structure, teacher follow-up inputs, and the current graph. Please wait."
         }
         return isChinese
             ? "参考模板已经识别完成，但系统还在等待教师补齐关键缺失项。右侧完成补问后，正式稿会自动进入预览。"
@@ -440,8 +489,6 @@ struct EduLessonPlanWorkbenchView: View {
                                 referenceSummaryCard(referenceDocument)
                             }
 
-                            readinessCard
-
                             if let lastError = viewModel.lastError {
                                 EduAgentStatusCard(
                                     title: isChinese ? "请求失败" : "Request Failed",
@@ -450,17 +497,13 @@ struct EduLessonPlanWorkbenchView: View {
                                 )
                             }
 
-                            if !viewModel.unresolvedItems.isEmpty {
-                                unresolvedItemsCard
-                            }
-
-                            if let activeItem = viewModel.activeFollowUpItem {
-                                followUpCard(for: activeItem)
-                            }
-
                             ForEach(viewModel.conversation) { message in
                                 lessonConversationRow(message)
                                     .id(message.id)
+                            }
+
+                            if viewModel.hasReferenceFlow && !viewModel.unresolvedItems.isEmpty {
+                                followUpWorkbenchCard
                             }
 
                             Color.clear
@@ -490,29 +533,54 @@ struct EduLessonPlanWorkbenchView: View {
     }
 
     private var sidebarHeader: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(isChinese ? "教案 Agent" : "Lesson Plan Agent")
-                    .font(.headline)
-                Text(currentModelText)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(currentModelColor)
-                    .lineLimit(1)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(isChinese ? "教案 Agent" : "Lesson Plan Agent")
+                        .font(.headline)
+                    Text(currentModelText)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(currentModelColor)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Button {
+                    viewModel.showingSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                        .background(Color.white.opacity(0.06), in: Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
             }
-            Spacer()
+
             Button {
-                viewModel.showingSettings = true
+                copyToClipboard(viewModel.debugTraceText)
             } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 34, height: 34)
-                    .background(Color.white.opacity(0.06), in: Circle())
-                    .overlay(
-                        Circle()
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                    )
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.on.doc")
+                    Text(isChinese ? "复制调试日志" : "Copy Debug Trace")
+                        .font(.caption.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
             }
             .buttonStyle(.plain)
+
+            if viewModel.hasReferenceFlow {
+                sidebarReadinessStrip
+            }
         }
         .padding(.horizontal, 16)
         .padding(.top, 16)
@@ -590,11 +658,34 @@ struct EduLessonPlanWorkbenchView: View {
         let messageSegments = viewModel.conversation.map { message in
             "\(message.id.uuidString):\(message.role.rawValue):\(message.content.count)"
         }
+        let unresolvedSegments = viewModel.unresolvedItems.map { item in
+            "\(item.id):\(viewModel.answersByID[item.id]?.count ?? 0):\(viewModel.skippedItemIDs.contains(item.id) ? "skip" : "open")"
+        }
+        let suggestionSegments = viewModel.followUpSuggestionStatusByID.keys.sorted().map { key in
+            let stateLabel: String
+            switch viewModel.followUpSuggestionStatusByID[key] {
+            case .some(.loading):
+                stateLabel = "loading"
+            case .some(.ready(let suggestion)):
+                stateLabel = "ready:\(suggestion.suggestedAnswer.count)"
+            case .some(.failed(let message)):
+                stateLabel = "failed:\(message.count)"
+            case .some(.unavailable(let message)):
+                stateLabel = "unavailable:\(message.count)"
+            case .none:
+                stateLabel = "none"
+            }
+            return "\(key):\(stateLabel)"
+        }
         return (messageSegments + [
             viewModel.lastError ?? "",
             viewModel.generatedMarkdown == nil ? "draft:baseline" : "draft:generated",
             viewModel.isPreparingReference ? "preparing" : "idle",
-            viewModel.isRunning ? "running" : "stopped"
+            viewModel.isRunning ? "running" : "stopped",
+            "focused:\(viewModel.focusedMissingItemID ?? "none")",
+            "draftAnswer:\(viewModel.currentAnswerDraft.count)",
+            "unresolved:\(unresolvedSegments.joined(separator: ","))",
+            "suggestions:\(suggestionSegments.joined(separator: ","))"
         ]).joined(separator: "|")
     }
 
@@ -638,12 +729,15 @@ struct EduLessonPlanWorkbenchView: View {
         )
     }
 
-    private var readinessCard: some View {
+    private var sidebarReadinessStrip: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(isChinese ? "生成就绪度" : "Generation Readiness")
-                    .font(.headline)
+                Text(isChinese ? "生成就绪进度" : "Generation Readiness")
+                    .font(.caption.weight(.semibold))
                 Spacer()
+                Text("\(viewModel.readiness.resolvedItems)/\(viewModel.readiness.totalItems)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 EduAgentBadge(
                     text: readinessBadgeText,
                     tint: readinessBadgeTint
@@ -654,11 +748,6 @@ struct EduLessonPlanWorkbenchView: View {
                 tint: readinessBadgeTint
             )
             HStack(spacing: 8) {
-                EduAgentMetricBadge(
-                    title: isChinese ? "已处理" : "Resolved",
-                    value: "\(viewModel.readiness.resolvedItems)/\(viewModel.readiness.totalItems)",
-                    tint: .teal
-                )
                 if viewModel.unresolvedCoreCount > 0 || viewModel.unresolvedSupportiveCount > 0 {
                     EduAgentMetricBadge(
                         title: isChinese ? "核心待补" : "Core left",
@@ -675,10 +764,11 @@ struct EduLessonPlanWorkbenchView: View {
                 }
             }
             Text(readinessSummaryText)
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(14)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
@@ -687,7 +777,7 @@ struct EduLessonPlanWorkbenchView: View {
         )
     }
 
-    private var unresolvedItemsCard: some View {
+    private var followUpWorkbenchCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(isChinese ? "待补问信息" : "Follow-up Items")
@@ -697,6 +787,11 @@ struct EduLessonPlanWorkbenchView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Text(readinessSummaryText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             ForEach(viewModel.unresolvedItems) { item in
                 Button {
                     viewModel.beginEditing(item)
@@ -715,12 +810,28 @@ struct EduLessonPlanWorkbenchView: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
+                        if viewModel.activeFollowUpItem?.id == item.id {
+                            Image(systemName: "pencil.circle.fill")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.teal)
+                        }
                     }
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .background(
+                        (viewModel.activeFollowUpItem?.id == item.id ? Color.teal.opacity(0.1) : Color.white.opacity(0.04)),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    )
                 }
                 .buttonStyle(.plain)
+            }
+
+            if let activeItem = viewModel.activeFollowUpItem {
+                Divider()
+                    .overlay(Color.white.opacity(0.08))
+                    .padding(.vertical, 2)
+
+                followUpEditorSection(for: activeItem)
             }
         }
         .padding(14)
@@ -732,7 +843,7 @@ struct EduLessonPlanWorkbenchView: View {
         )
     }
 
-    private func followUpCard(for item: EduLessonMissingInfoItem) -> some View {
+    private func followUpEditorSection(for item: EduLessonMissingInfoItem) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
@@ -807,6 +918,10 @@ struct EduLessonPlanWorkbenchView: View {
                         message: message,
                         tint: .orange
                     )
+                    Button(isChinese ? "复制错误详情" : "Copy Error Details") {
+                        copyToClipboard(message)
+                    }
+                    .buttonStyle(EduAgentActionButtonStyle(variant: .secondary))
                     Button(isChinese ? "重新生成建议" : "Retry Suggestion") {
                         Task {
                             await viewModel.prepareFollowUpSuggestionIfNeeded(for: item, force: true)
@@ -922,6 +1037,15 @@ struct EduLessonPlanWorkbenchView: View {
         } else {
             action()
         }
+    }
+
+    private func copyToClipboard(_ text: String) {
+#if canImport(UIKit)
+        UIPasteboard.general.string = text
+#elseif canImport(AppKit)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+#endif
     }
 
     private func exportMarkdown() {

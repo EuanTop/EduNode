@@ -96,6 +96,47 @@ enum EduAgentSettingsStore {
     }
 }
 
+private enum EduAgentProviderPreset: CaseIterable {
+    case openAICompatible
+    case claudeCompatible
+
+    func providerName(isChinese: Bool) -> String {
+        switch self {
+        case .openAICompatible:
+            return "OpenAI-Compatible"
+        case .claudeCompatible:
+            return "Claude-Compatible"
+        }
+    }
+
+    var baseURL: String {
+        switch self {
+        case .openAICompatible:
+            return "https://api.openai.com/v1"
+        case .claudeCompatible:
+            return "https://www.right.codes/claude/v1/messages"
+        }
+    }
+
+    var model: String {
+        switch self {
+        case .openAICompatible:
+            return "gpt-4.1"
+        case .claudeCompatible:
+            return "claude-3-5-sonnet-latest"
+        }
+    }
+
+    func title(isChinese: Bool) -> String {
+        switch self {
+        case .openAICompatible:
+            return "OpenAI-Compatible"
+        case .claudeCompatible:
+            return "Claude-Compatible"
+        }
+    }
+}
+
 struct EduAgentConnectionValidationRecord: Codable, Equatable {
     let signature: String
     let testedAt: Date
@@ -257,6 +298,7 @@ struct EduAgentSettingsSheet: View {
     private var configSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle(isChinese ? "基础配置" : "Provider")
+            presetSection
             settingsTextField(
                 title: isChinese ? "Provider 名称" : "Provider Name",
                 text: $draft.providerName,
@@ -276,6 +318,42 @@ struct EduAgentSettingsSheet: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.white.opacity(0.08), lineWidth: 1)
         )
+    }
+
+    private var presetSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(isChinese ? "快速预设" : "Quick Presets")
+                .font(.subheadline.weight(.semibold))
+
+            HStack(spacing: 8) {
+                ForEach(EduAgentProviderPreset.allCases, id: \.self) { preset in
+                    Button {
+                        applyPreset(preset)
+                    } label: {
+                        Text(preset.title(isChinese: isChinese))
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 34)
+                            .background(
+                                isPresetSelected(preset)
+                                    ? Color.teal.opacity(0.22)
+                                    : Color.white.opacity(0.04),
+                                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(
+                                        isPresetSelected(preset)
+                                            ? Color.teal.opacity(0.6)
+                                            : Color.white.opacity(0.1),
+                                        lineWidth: 1
+                                    )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 
     private var modelField: some View {
@@ -418,8 +496,8 @@ struct EduAgentSettingsSheet: View {
                         get: { Double(draft.maxTokens) },
                         set: { draft.maxTokens = Int($0.rounded()) }
                     ),
-                    in: 1024...8192,
-                    step: 256
+                    in: 1024...32768,
+                    step: 512
                 )
             }
 
@@ -565,6 +643,20 @@ struct EduAgentSettingsSheet: View {
         Text(text)
             .font(.headline)
             .foregroundStyle(.white)
+    }
+
+    private func isPresetSelected(_ preset: EduAgentProviderPreset) -> Bool {
+        draft.providerName == preset.providerName(isChinese: isChinese)
+            && draft.trimmedBaseURLString == preset.baseURL
+    }
+
+    private func applyPreset(_ preset: EduAgentProviderPreset) {
+        draft.providerName = preset.providerName(isChinese: isChinese)
+        draft.baseURLString = preset.baseURL
+        draft.model = preset.model
+        availableModels = []
+        isModelListExpanded = false
+        modelRefreshMessage = nil
     }
 
     @MainActor

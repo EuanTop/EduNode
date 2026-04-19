@@ -1832,6 +1832,7 @@ struct EduAgentStatusCard: View {
             Text(message)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .textSelection(.enabled)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)

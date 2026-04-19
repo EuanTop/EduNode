@@ -15,18 +15,72 @@ struct EduLessonFollowUpPlanningResponse: Decodable {
     let groundedEvidence: [String]
     let cautionPoints: [String]
 
+    init(
+        planningSummary: String,
+        groundedEvidence: [String],
+        cautionPoints: [String]
+    ) {
+        self.planningSummary = planningSummary
+        self.groundedEvidence = groundedEvidence
+        self.cautionPoints = cautionPoints
+    }
+
     enum CodingKeys: String, CodingKey {
         case planningSummary = "planning_summary"
         case groundedEvidence = "grounded_evidence"
         case cautionPoints = "caution_points"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        planningSummary = ((try? container.decode(String.self, forKey: .planningSummary))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)) ?? ""
+        groundedEvidence = Self.decodeStringArray(container: container, key: .groundedEvidence)
+        cautionPoints = Self.decodeStringArray(container: container, key: .cautionPoints)
+    }
+
+    private static func decodeStringArray(
+        container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> [String] {
+        if let value = try? container.decode([String].self, forKey: key) {
+            return value.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        }
+        if let single = try? container.decode(String.self, forKey: key) {
+            let trimmed = single.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? [] : [trimmed]
+        }
+        return []
     }
 }
 
 struct EduLessonFollowUpSuggestionResponse: Decodable {
     let suggestedAnswer: String
 
-    enum CodingKeys: String, CodingKey {
+    init(suggestedAnswer: String) {
+        self.suggestedAnswer = suggestedAnswer
+    }
+
+    private enum CodingKeys: String, CodingKey {
         case suggestedAnswer = "suggested_answer"
+        case answer
+        case draft
+        case text
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let candidates: [CodingKeys] = [.suggestedAnswer, .answer, .draft, .text]
+        for key in candidates {
+            if let value = try? container.decode(String.self, forKey: key) {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    suggestedAnswer = trimmed
+                    return
+                }
+            }
+        }
+        suggestedAnswer = ""
     }
 }
 
@@ -105,7 +159,8 @@ enum EduLessonPlanMaterializationPromptBuilder {
         skippedItemIDs: Set<String>,
         supplementaryMaterial: String,
         userDirective: String,
-        referenceDocument: EduLessonReferenceDocument? = nil
+        referenceDocument: EduLessonReferenceDocument? = nil,
+        compactContext: Bool = false
     ) -> [EduLLMMessage] {
         let snapshot = EduAgentContextBuilder.workspaceSnapshot(
             file: file,
@@ -117,32 +172,79 @@ enum EduLessonPlanMaterializationPromptBuilder {
             answersByID: answersByID,
             skippedItemIDs: skippedItemIDs
         )
+        let highPriorityDigestText = highPriorityContextDigest(
+            file: file,
+            template: template,
+            teacherResponses: teacherResponses
+        )
 
-        let rawTemplateText = template.rawText.count > 9000
-            ? String(template.rawText.prefix(9000)) + "\n..."
+        let rawTemplateMax = compactContext ? 2600 : 5200
+        let rawTemplateText = template.rawText.count > rawTemplateMax
+            ? String(template.rawText.prefix(rawTemplateMax)) + "\n..."
             : template.rawText
         let directive = userDirective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? defaultDirective
             : userDirective.trimmingCharacters(in: .whitespacesAndNewlines)
-        let referenceExcerpt = referenceDocument?.markdownExcerptForPrompt ?? "(none)"
+        let referenceExcerpt = compactContext
+            ? boundedPromptText(referenceDocument?.markdownExcerptForPrompt ?? "(none)", maxChars: 2200)
+            : boundedPromptText(referenceDocument?.markdownExcerptForPrompt ?? "(none)", maxChars: 9000)
         let referenceStyleProfile = referenceDocument.map {
-            EduAgentContextBuilder.encodedJSONString($0.styleProfile)
+            boundedPromptText(
+                EduAgentContextBuilder.encodedJSONString($0.styleProfile),
+                maxChars: compactContext ? 2000 : 8000
+            )
         } ?? "(none)"
         let referenceSchema = referenceDocument.map {
-            EduAgentContextBuilder.encodedJSONString($0.templateDocument.schema)
+            boundedPromptText(
+                EduAgentContextBuilder.encodedJSONString($0.templateDocument.schema),
+                maxChars: compactContext ? 2400 : 7600
+            )
         } ?? "(none)"
         let referenceSectionOrder = referenceDocument?.templateDocument.schema.outlineText ?? "(none)"
         let referenceFrontMatter = referenceDocument.map {
-            EduAgentContextBuilder.encodedJSONString($0.templateDocument.schema.frontMatterFieldLabels)
+            boundedPromptText(
+                EduAgentContextBuilder.encodedJSONString($0.templateDocument.schema.frontMatterFieldLabels),
+                maxChars: compactContext ? 1200 : 10000
+            )
         } ?? "(none)"
         let referenceProcessColumns = referenceDocument.map {
-            EduAgentContextBuilder.encodedJSONString($0.templateDocument.schema.teachingProcessColumnTitles)
+            boundedPromptText(
+                EduAgentContextBuilder.encodedJSONString($0.templateDocument.schema.teachingProcessColumnTitles),
+                maxChars: compactContext ? 1200 : 10000
+            )
         } ?? "(none)"
         let referenceSectionExemplars = referenceDocument.map {
-            EduAgentContextBuilder.encodedJSONString($0.styleProfile.sectionExemplars)
+            boundedPromptText(
+                EduAgentContextBuilder.encodedJSONString($0.styleProfile.sectionExemplars),
+                maxChars: compactContext ? 2000 : 6200
+            )
         } ?? "(none)"
         let referenceChecklist = referenceDocument?.complianceChecklistText ?? "(none)"
         let referenceSource = referenceDocument?.sourceName ?? "(none)"
+        let workspaceSnapshotText = boundedPromptText(
+            EduAgentContextBuilder.encodedJSONString(snapshot),
+            maxChars: compactContext ? 2600 : 14000
+        )
+        let metadataText = boundedPromptText(
+            EduAgentContextBuilder.encodedJSONString(metadata),
+            maxChars: compactContext ? 1400 : 10000
+        )
+        let templateSchemaText = boundedPromptText(
+            EduAgentContextBuilder.encodedJSONString(template.schema),
+            maxChars: compactContext ? 2200 : 9000
+        )
+        let teacherResponsesText = boundedPromptText(
+            EduAgentContextBuilder.encodedJSONString(teacherResponses),
+            maxChars: compactContext ? 2000 : 9000
+        )
+        let baselineMarkdownText = boundedPromptText(
+            baselineMarkdown,
+            maxChars: compactContext ? 2600 : 12000
+        )
+        let supplementaryText = boundedPromptText(
+            normalizedSupplementaryMaterial(supplementaryMaterial),
+            maxChars: compactContext ? 1800 : 12000
+        )
 
         return [
             .init(
@@ -152,6 +254,8 @@ enum EduLessonPlanMaterializationPromptBuilder {
                     You materialize a teacher-facing lesson plan from a pedagogical graph and a teacher-provided template.
                     Treat the template as a genre and section-structure constraint with high priority.
                     Stay grounded in the graph, the course metadata, and the teacher's follow-up answers.
+                    Treat the reference/template text as structural and stylistic guidance only, not as ground-truth topic facts.
+                    If the reference/template topic conflicts with the live graph topic, always follow the live graph topic and keep only the reference structure/style.
                     Use a silent plan-and-solve workflow internally: first map every required template slot, then ground each slot in graph/metadata/teacher evidence, then draft, and finally run a structural compliance check.
                     If a reference lesson-plan document is provided, align your section logic, wording register, field expectations, and section openings with it without copying institution-specific identifiers.
                     Use the section exemplar with the same title to imitate rhetorical opening, paragraph density, and wording register without copying its concrete facts.
@@ -165,7 +269,9 @@ enum EduLessonPlanMaterializationPromptBuilder {
                     If the template contains diagram-oriented sections that cannot be rendered visually in markdown, keep the exact section title and provide a compact text-based substitute instead of dropping the section.
                     If a teacher skipped an item, do not invent detailed facts. Use a concise neutral placeholder only when the section would otherwise collapse.
                     Preserve explicit alignment among goals, activity flow, and evaluation evidence.
+                    Prioritize the "High-priority context digest JSON" block first when context is long, then use larger JSON blocks as supporting evidence.
                     Before finalizing, silently verify that every template section title appears once and in the correct order.
+                    Never ask the user to choose between multiple topics or provide additional context; resolve conflicts internally and generate directly.
                     Do not wrap JSON in markdown fences.
                     Output strict JSON only:
                     {
@@ -179,23 +285,26 @@ enum EduLessonPlanMaterializationPromptBuilder {
             .init(
                 role: "user",
                 content: """
+                High-priority context digest JSON:
+                \(highPriorityDigestText)
+
                 Workspace snapshot JSON:
-                \(EduAgentContextBuilder.encodedJSONString(snapshot))
+                \(workspaceSnapshotText)
 
                 Additional course metadata JSON:
-                \(EduAgentContextBuilder.encodedJSONString(metadata))
+                \(metadataText)
 
                 Template schema JSON:
-                \(EduAgentContextBuilder.encodedJSONString(template.schema))
+                \(templateSchemaText)
 
                 Template outline text:
                 \(template.schema.outlineText)
 
                 Teacher follow-up answers JSON:
-                \(EduAgentContextBuilder.encodedJSONString(teacherResponses))
+                \(teacherResponsesText)
 
                 Auto-generated baseline markdown:
-                \(baselineMarkdown)
+                \(baselineMarkdownText)
 
                 Template raw text excerpt:
                 \(rawTemplateText)
@@ -228,11 +337,68 @@ enum EduLessonPlanMaterializationPromptBuilder {
                 \(referenceExcerpt)
 
                 Supplementary material:
-                \(normalizedSupplementaryMaterial(supplementaryMaterial))
+                \(supplementaryText)
+
+                User directive:
+                \(directive)
                 """
-            ),
-            .init(role: "user", content: directive)
+            )
         ]
+    }
+
+    private static func highPriorityContextDigest(
+        file: GNodeWorkspaceFile,
+        template: EduLessonTemplateDocument,
+        teacherResponses: [EduLessonMaterializationTeacherResponse]
+    ) -> String {
+        let goals = file.goalsText
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let answered = teacherResponses
+            .filter { $0.status == "answered" }
+            .map { item in
+                EduLessonPromptTeacherAnswerDigest(
+                    itemID: item.itemID,
+                    title: item.title,
+                    answer: boundedPromptText(item.answer, maxChars: 360)
+                )
+            }
+
+        let unresolved = teacherResponses
+            .filter { $0.status != "answered" }
+            .map { item in
+                EduLessonPromptUnresolvedDigest(
+                    itemID: item.itemID,
+                    status: item.status,
+                    question: boundedPromptText(item.question, maxChars: 220)
+                )
+            }
+
+        let digest = EduLessonPromptHighPriorityDigest(
+            courseName: file.name,
+            subject: file.subject,
+            gradeMode: file.gradeMode,
+            gradeMin: file.gradeMin,
+            gradeMax: file.gradeMax,
+            durationMinutes: file.lessonDurationMinutes,
+            studentCount: file.studentCount,
+            lessonType: file.lessonType,
+            teachingStyle: file.teachingStyle,
+            requireStructuredFlow: file.requireStructuredFlow,
+            goals: goals,
+            templateSectionOrder: template.schema.outlineText,
+            templateFrontMatterLabels: template.schema.frontMatterFieldLabels,
+            templateTeachingProcessColumns: template.schema.teachingProcessColumnTitles,
+            answeredTeacherItems: answered,
+            unresolvedTeacherItems: unresolved
+        )
+
+        return boundedPromptText(
+            EduAgentContextBuilder.encodedJSONString(digest),
+            maxChars: 7200
+        )
     }
 
     static func repairMessages(
@@ -255,6 +421,7 @@ enum EduLessonPlanMaterializationPromptBuilder {
                     You repair a teacher-facing lesson plan so it fully complies with a reference lesson-plan template.
                     Keep the pedagogical content grounded in the live graph and keep previously written lesson-specific substance whenever possible.
                     Your main goal is structural fidelity: section titles, section order, front-matter labels, internal subsection labels, and teaching-process columns must match the reference exactly.
+                    Keep topic facts anchored to the live graph context; do not import unrelated topic facts from the reference text.
                     Use a silent plan-and-solve workflow internally: diagnose the compliance gaps, map them onto the exact reference schema, repair the affected slots, and then re-check the repaired draft before returning it.
                     Do not add new top-level sections beyond the reference list.
                     Do not paraphrase template titles.
@@ -263,6 +430,7 @@ enum EduLessonPlanMaterializationPromptBuilder {
                     If the reference includes supplementary sections after the teaching process, keep those trailing sections in the repaired result.
                     For administrative values not provided by the teacher, keep the field blank instead of inventing facts.
                     Fix only what is necessary to satisfy the compliance issues and preserve quality.
+                    Do not ask clarification questions.
                     Do not wrap JSON in markdown fences.
                     Output strict JSON only:
                     {
@@ -423,6 +591,7 @@ enum EduLessonPlanMaterializationPromptBuilder {
                     You draft one teacher-editable answer for a missing lesson-plan item.
                     Use the provided planning summary as an internal scaffold, but do not restate hidden reasoning.
                     Keep the answer grounded, concise, and immediately editable by the teacher.
+                    Keep the suggested_answer concise: <= 220 Chinese characters (or <= 120 English words).
                     Match the reference section's wording register and genre expectations without copying institution-specific facts.
                     If key specifics are still missing, keep the answer neutrally editable instead of inventing details.
                     Use the user's UI language when inferable from the prompt context.
@@ -485,6 +654,12 @@ enum EduLessonPlanMaterializationPromptBuilder {
         return trimmed.isEmpty ? "(none)" : trimmed
     }
 
+    private static func boundedPromptText(_ text: String, maxChars: Int) -> String {
+        guard maxChars > 0 else { return "" }
+        guard text.count > maxChars else { return text }
+        return String(text.prefix(maxChars)) + "\n...[truncated]"
+    }
+
     private static func metadataSnapshot(for file: GNodeWorkspaceFile) -> EduLessonMaterializationMetadataSnapshot {
         EduLessonMaterializationMetadataSnapshot(
             lessonType: file.lessonType,
@@ -525,4 +700,35 @@ enum EduLessonPlanMaterializationPromptBuilder {
             )
         }
     }
+}
+
+private struct EduLessonPromptTeacherAnswerDigest: Encodable {
+    let itemID: String
+    let title: String
+    let answer: String
+}
+
+private struct EduLessonPromptUnresolvedDigest: Encodable {
+    let itemID: String
+    let status: String
+    let question: String
+}
+
+private struct EduLessonPromptHighPriorityDigest: Encodable {
+    let courseName: String
+    let subject: String
+    let gradeMode: String
+    let gradeMin: Int
+    let gradeMax: Int
+    let durationMinutes: Int
+    let studentCount: Int
+    let lessonType: String
+    let teachingStyle: String
+    let requireStructuredFlow: Bool
+    let goals: [String]
+    let templateSectionOrder: String
+    let templateFrontMatterLabels: [String]
+    let templateTeachingProcessColumns: [String]
+    let answeredTeacherItems: [EduLessonPromptTeacherAnswerDigest]
+    let unresolvedTeacherItems: [EduLessonPromptUnresolvedDigest]
 }

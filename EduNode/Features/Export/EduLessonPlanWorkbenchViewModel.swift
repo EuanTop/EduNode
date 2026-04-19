@@ -1,6 +1,13 @@
 import Foundation
 import Combine
 
+struct EduLessonAgentTraceEvent: Identifiable, Equatable {
+    let id = UUID()
+    let timestamp: Date
+    let stage: String
+    let detail: String
+}
+
 struct EduLessonPlanReferenceAttachment: Identifiable, Hashable {
     let id: UUID
     let fileName: String
@@ -50,6 +57,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
     @Published var isRunning = false
     @Published var lastError: String?
     @Published var showingSettings = false
+    @Published var debugTraceEvents: [EduLessonAgentTraceEvent] = []
 
     private var didBootstrap = false
 
@@ -175,9 +183,32 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
             : "The preview updates live as the agent revises the lesson plan."
     }
 
+    var debugTraceText: String {
+        let formatter = Self.traceDateFormatter
+        var lines: [String] = []
+        lines.append("[EduNode][LessonPlanWorkbenchTrace]")
+        lines.append("file=\(file.name)")
+        lines.append("hasReference=\(hasReferenceFlow)")
+        lines.append("ready=\(readiness.resolvedItems)/\(readiness.totalItems)")
+        lines.append("running=\(isRunning)")
+        lines.append("preparingReference=\(isPreparingReference)")
+        lines.append("lastError=\(lastError ?? "")")
+        for event in debugTraceEvents {
+            lines.append("\(formatter.string(from: event.timestamp)) | \(event.stage) | \(event.detail)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static let traceDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return formatter
+    }()
+
     func bootstrapIfNeeded() {
         guard !didBootstrap else { return }
         didBootstrap = true
+        appendTrace(stage: "bootstrap", detail: "begin hasReference=\(referenceAttachment != nil)")
 
         if let referenceAttachment {
             conversation = [
@@ -204,6 +235,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
     }
 
     func reloadSettingsFromStore() {
+        appendTrace(stage: "settings", detail: "reload from store")
         lastError = nil
         followUpSuggestionStatusByID = [:]
         if let activeFollowUpItem {
@@ -214,6 +246,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
     }
 
     func beginEditing(_ item: EduLessonMissingInfoItem) {
+        appendTrace(stage: "followup", detail: "begin editing item=\(item.id)")
         let existingAnswer = answersByID[item.id] ?? ""
         focusedMissingItemID = item.id
         answersByID.removeValue(forKey: item.id)
@@ -224,6 +257,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
     func saveAnswer(for item: EduLessonMissingInfoItem) {
         let trimmed = currentAnswerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        appendTrace(stage: "followup", detail: "save answer item=\(item.id) chars=\(trimmed.count)")
         invalidateGeneratedDraftIfNeeded()
         answersByID[item.id] = trimmed
         skippedItemIDs.remove(item.id)
@@ -246,6 +280,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
     }
 
     func skip(_ item: EduLessonMissingInfoItem) {
+        appendTrace(stage: "followup", detail: "skip item=\(item.id)")
         invalidateGeneratedDraftIfNeeded()
         answersByID.removeValue(forKey: item.id)
         skippedItemIDs.insert(item.id)
@@ -275,12 +310,19 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
 
         let settings = EduAgentSettingsStore.load()
         guard settings.isConfigured else {
+            appendTrace(stage: "send", detail: "blocked: settings not configured")
             lastError = isChinese ? "请先配置 LLM 模型。" : "Configure the LLM first."
             return
         }
 
+        appendTrace(
+            stage: "send",
+            detail: "start mode=\(referenceDocument != nil && generatedMarkdown == nil ? "generate" : "revise") inputChars=\(trimmedInput.count)"
+        )
+
         if referenceDocument != nil && generatedMarkdown == nil {
             guard readiness.isReady else {
+                appendTrace(stage: "send", detail: "blocked: unresolved follow-up items")
                 lastError = isChinese ? "还有未处理的模板补问项。" : "Some template follow-up items are still unresolved."
                 return
             }
@@ -303,6 +345,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
     ) async {
         isPreparingReference = true
         lastError = nil
+        appendTrace(stage: "reference", detail: "parse start file=\(attachment.fileName) bytes=\(attachment.data.count)")
 
         do {
             let parsed = try await EduMinerUClient().parseReferencePDF(
@@ -336,6 +379,10 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
                 prefilledCount: prefilledAnswers.count
             )
             conversation.append(.init(role: .assistant, content: summary))
+            appendTrace(
+                stage: "reference",
+                detail: "parse success sections=\(referenceDocument.styleProfile.sectionCount) missingItems=\(missingItems.count)"
+            )
 
             if readiness.isReady {
                 let settings = EduAgentSettingsStore.load()
@@ -357,6 +404,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
             }
         } catch {
             lastError = error.localizedDescription
+            appendTrace(stage: "reference", detail: "parse failed error=\(error.localizedDescription)")
             conversation.append(
                 .init(
                     role: .assistant,
@@ -377,11 +425,51 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
         guard let referenceDocument else { return }
         isRunning = true
         lastError = nil
+        appendTrace(
+            stage: "generate",
+            detail: "start unresolved=\(unresolvedItems.count) directiveChars=\(directive.count)"
+        )
 
         do {
-            let client = EduOpenAICompatibleClient(settings: settings)
-            let reply = try await client.complete(
-                messages: EduLessonPlanMaterializationPromptBuilder.materializationMessages(
+            var generationSettings = settings
+            generationSettings.maxTokens = max(settings.maxTokens, 12000)
+            let client = EduOpenAICompatibleClient(settings: generationSettings)
+            let materializationMessages = EduLessonPlanMaterializationPromptBuilder.materializationMessages(
+                settings: generationSettings,
+                file: file,
+                baselineMarkdown: baselineMarkdown,
+                template: referenceDocument.templateDocument,
+                missingItems: missingItems,
+                answersByID: answersByID,
+                skippedItemIDs: skippedItemIDs,
+                supplementaryMaterial: "",
+                userDirective: directive,
+                referenceDocument: referenceDocument,
+                compactContext: false
+            )
+            let structured = try await decodeStructuredWithJSONRetry(
+                client: client,
+                settings: generationSettings,
+                messages: materializationMessages,
+                as: EduLessonMaterializationResponse.self,
+                compactOnRetry: false
+            )
+            appendTrace(
+                stage: "generate",
+                detail: "structured decode success assistantChars=\(structured.assistantReply.count) markdownChars=\(structured.generatedMarkdown.count)"
+            )
+            var alignedMarkdown = structured.generatedMarkdown
+            var assistantReply = structured.assistantReply
+
+            if shouldRetryForLowSubstance(markdown: alignedMarkdown, assistantReply: assistantReply) {
+                appendTrace(stage: "generate", detail: "low-substance detected, retry with compact context")
+                let qualityDirective = mergedDirective(
+                    base: directive,
+                    fallback: isChinese
+                        ? "必须直接生成完整中文教案，不得索要额外输入或反问。若参考模板主题与当前图谱主题冲突，以当前图谱和课程元数据为准，仅复用模板结构与文风。每个主要章节至少写1-3句实质内容，避免只保留标题或空字段。"
+                        : "Generate the full lesson plan directly from the provided context. Do not ask for additional input or clarification. If the reference template topic conflicts with the live graph topic, prioritize the live graph and keep only the reference structure/style. Each major section must contain 1-3 substantive sentences rather than title-only placeholders."
+                )
+                let compactMessages = EduLessonPlanMaterializationPromptBuilder.materializationMessages(
                     settings: settings,
                     file: file,
                     baselineMarkdown: baselineMarkdown,
@@ -390,22 +478,46 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
                     answersByID: answersByID,
                     skippedItemIDs: skippedItemIDs,
                     supplementaryMaterial: "",
-                    userDirective: directive,
-                    referenceDocument: referenceDocument
+                    userDirective: qualityDirective,
+                    referenceDocument: referenceDocument,
+                    compactContext: true
                 )
-            )
-            let structured = try EduAgentJSONParser.decodeFirstJSONObject(
-                EduLessonMaterializationResponse.self,
-                from: reply
-            )
-            generatedMarkdown = try await referenceAlignedMarkdownIfNeeded(
-                structured.generatedMarkdown,
+                let compactStructured = try await decodeStructuredWithJSONRetry(
+                    client: client,
+                    settings: generationSettings,
+                    messages: compactMessages,
+                    as: EduLessonMaterializationResponse.self,
+                    compactOnRetry: false
+                )
+                appendTrace(
+                    stage: "generate",
+                    detail: "compact retry decode success assistantChars=\(compactStructured.assistantReply.count) markdownChars=\(compactStructured.generatedMarkdown.count)"
+                )
+                alignedMarkdown = compactStructured.generatedMarkdown
+                assistantReply = compactStructured.assistantReply
+
+                if shouldRetryForLowSubstance(markdown: alignedMarkdown, assistantReply: assistantReply) {
+                    appendTrace(stage: "generate", detail: "retry still low-substance, throwing fallback error")
+                    throw EduAgentClientError.requestFailed(
+                        isChinese
+                            ? "已重试但结果仍接近模板空架子。请在‘优化教案’输入框补充一条具体指令（如：按45分钟写出每一步师生活动与评价证据），再试一次。"
+                            : "Retried generation, but the result is still mostly a template skeleton. Add a concrete instruction (for example, step-by-step 45-minute activities with assessment evidence) and retry."
+                    )
+                }
+            }
+
+            alignedMarkdown = try await referenceAlignedMarkdownIfNeeded(
+                alignedMarkdown,
                 settings: settings
             )
-            conversation.append(.init(role: .assistant, content: structured.assistantReply))
+
+            generatedMarkdown = alignedMarkdown
+            conversation.append(.init(role: .assistant, content: assistantReply))
             userInput = ""
+            appendTrace(stage: "generate", detail: "success finalMarkdownChars=\(alignedMarkdown.count)")
         } catch {
             lastError = error.localizedDescription
+            appendTrace(stage: "generate", detail: "failed error=\(error.localizedDescription)")
         }
 
         isRunning = false
@@ -417,6 +529,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
     ) async {
         isRunning = true
         lastError = nil
+        appendTrace(stage: "revise", detail: "start requestChars=\(request.count)")
 
         let history = conversation
         conversation.append(.init(role: .user, content: request))
@@ -424,28 +537,31 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
 
         do {
             let client = EduOpenAICompatibleClient(settings: settings)
-            let reply = try await client.complete(
-                messages: EduAgentPromptBuilder.lessonPlanRevisionMessages(
-                    settings: settings,
-                    file: file,
-                    lessonPlanMarkdown: previewMarkdown,
-                    conversation: history,
-                    userRequest: request,
-                    supplementaryMaterial: "",
-                    referenceDocument: referenceDocument
-                )
+            let revisionMessages = EduAgentPromptBuilder.lessonPlanRevisionMessages(
+                settings: settings,
+                file: file,
+                lessonPlanMarkdown: previewMarkdown,
+                conversation: history,
+                userRequest: request,
+                supplementaryMaterial: "",
+                referenceDocument: referenceDocument
             )
-            let structured = try EduAgentJSONParser.decodeFirstJSONObject(
-                EduAgentLessonPlanRevisionResponse.self,
-                from: reply
+            let structured = try await decodeStructuredWithJSONRetry(
+                client: client,
+                settings: settings,
+                messages: revisionMessages,
+                as: EduAgentLessonPlanRevisionResponse.self,
+                compactOnRetry: false
             )
             generatedMarkdown = try await referenceAlignedMarkdownIfNeeded(
                 structured.revisedMarkdown,
                 settings: settings
             )
             conversation.append(.init(role: .assistant, content: structured.assistantReply))
+            appendTrace(stage: "revise", detail: "success revisedMarkdownChars=\(structured.revisedMarkdown.count)")
         } catch {
             lastError = error.localizedDescription
+            appendTrace(stage: "revise", detail: "failed error=\(error.localizedDescription)")
         }
 
         isRunning = false
@@ -505,51 +621,534 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
         }
 
         followUpSuggestionStatusByID[item.id] = .loading
+        appendTrace(stage: "followup", detail: "suggestion start item=\(item.id) force=\(force)")
 
         do {
             guard let referenceDocument else { return }
             let client = EduOpenAICompatibleClient(settings: settings)
-            let planningReply = try await client.complete(
-                messages: EduLessonPlanMaterializationPromptBuilder.followUpPlanningMessages(
-                    settings: settings,
-                    file: file,
-                    baselineMarkdown: baselineMarkdown,
-                    referenceDocument: referenceDocument,
-                    missingItems: missingItems,
-                    answersByID: answersByID,
-                    skippedItemIDs: skippedItemIDs,
-                    targetItem: item
-                )
+            let planningMessages = EduLessonPlanMaterializationPromptBuilder.followUpPlanningMessages(
+                settings: settings,
+                file: file,
+                baselineMarkdown: baselineMarkdown,
+                referenceDocument: referenceDocument,
+                missingItems: missingItems,
+                answersByID: answersByID,
+                skippedItemIDs: skippedItemIDs,
+                targetItem: item
             )
-            let planning = try EduAgentJSONParser.decodeFirstJSONObject(
-                EduLessonFollowUpPlanningResponse.self,
-                from: planningReply
+            let planning = try await decodeStructuredWithJSONRetry(
+                client: client,
+                settings: settings,
+                messages: planningMessages,
+                as: EduLessonFollowUpPlanningResponse.self,
+                compactOnRetry: false
             )
 
-            let suggestionReply = try await client.complete(
-                messages: EduLessonPlanMaterializationPromptBuilder.followUpSuggestionMessages(
-                    settings: settings,
-                    file: file,
-                    baselineMarkdown: baselineMarkdown,
-                    referenceDocument: referenceDocument,
-                    targetItem: item,
-                    planning: planning
-                )
+            let suggestionMessages = EduLessonPlanMaterializationPromptBuilder.followUpSuggestionMessages(
+                settings: settings,
+                file: file,
+                baselineMarkdown: baselineMarkdown,
+                referenceDocument: referenceDocument,
+                targetItem: item,
+                planning: planning
             )
-            let suggestion = try EduAgentJSONParser.decodeFirstJSONObject(
-                EduLessonFollowUpSuggestionResponse.self,
-                from: suggestionReply
+            let suggestion = try await decodeStructuredWithJSONRetry(
+                client: client,
+                settings: settings,
+                messages: suggestionMessages,
+                as: EduLessonFollowUpSuggestionResponse.self,
+                compactOnRetry: true
             )
+
+            let cleanedSummary = planning.planningSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cleanedAnswer = suggestion.suggestedAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleanedSummary.isEmpty, !cleanedAnswer.isEmpty else {
+                throw EduAgentClientError.invalidStructuredResponse
+            }
 
             followUpSuggestionStatusByID[item.id] = .ready(
                 EduLessonFollowUpSuggestion(
-                    planningSummary: planning.planningSummary.trimmingCharacters(in: .whitespacesAndNewlines),
-                    suggestedAnswer: suggestion.suggestedAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
+                    planningSummary: cleanedSummary,
+                    suggestedAnswer: cleanedAnswer
                 )
             )
+            appendTrace(stage: "followup", detail: "suggestion success item=\(item.id) answerChars=\(cleanedAnswer.count)")
         } catch {
             followUpSuggestionStatusByID[item.id] = .failed(error.localizedDescription)
+            appendTrace(stage: "followup", detail: "suggestion failed item=\(item.id) error=\(error.localizedDescription)")
         }
+    }
+
+    private func appendTrace(stage: String, detail: String) {
+        debugTraceEvents.append(
+            EduLessonAgentTraceEvent(
+                timestamp: Date(),
+                stage: stage,
+                detail: detail
+            )
+        )
+        if debugTraceEvents.count > 480 {
+            debugTraceEvents.removeFirst(debugTraceEvents.count - 480)
+        }
+    }
+
+    private func formatMessagesForTrace(_ messages: [EduLLMMessage]) -> String {
+        var lines: [String] = []
+        lines.append("messages.count=\(messages.count)")
+        for (index, message) in messages.enumerated() {
+            lines.append("--- message[\(index)] role=\(message.role) chars=\(message.content.count)")
+            lines.append(message.content)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func decodeStructuredWithJSONRetry<T: Decodable>(
+        client: EduOpenAICompatibleClient,
+        settings: EduAgentProviderSettings,
+        messages: [EduLLMMessage],
+        as type: T.Type,
+        compactOnRetry: Bool
+    ) async throws -> T {
+        let flowID = String(UUID().uuidString.prefix(8))
+        appendTrace(
+            stage: "llm.request",
+            detail: "flow=\(flowID) step=initial type=\(String(describing: type)) maxTokens=\(settings.maxTokens)\n\(formatMessagesForTrace(messages))"
+        )
+        let firstReply = try await client.complete(messages: messages)
+        appendTrace(
+            stage: "llm.response",
+            detail: "flow=\(flowID) step=initial type=\(String(describing: type)) chars=\(firstReply.count)\n\(firstReply)"
+        )
+        if let decoded = try? EduAgentJSONParser.decodeFirstJSONObject(type, from: firstReply) {
+            appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=initial result=success")
+            return decoded
+        }
+        if type == EduLessonFollowUpPlanningResponse.self,
+           let lenient = decodeFollowUpPlanningLenient(from: firstReply) as? T {
+            appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=initial result=lenient-success")
+            return lenient
+        }
+        if type == EduLessonFollowUpSuggestionResponse.self,
+           let lenient = decodeFollowUpSuggestionLenient(from: firstReply) as? T {
+            appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=initial result=lenient-success")
+            return lenient
+        }
+        if type == EduLessonMaterializationResponse.self,
+           let lenient = decodeMaterializationLenient(from: firstReply) as? T {
+            appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=initial result=lenient-success")
+            return lenient
+        }
+        if type == EduAgentLessonPlanRevisionResponse.self,
+           let lenient = decodeLessonRevisionLenient(from: firstReply) as? T {
+            appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=initial result=lenient-success")
+            return lenient
+        }
+        appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=initial result=failed")
+
+#if DEBUG
+        let firstExcerpt = String(firstReply.prefix(900)).replacingOccurrences(of: "\n", with: "\\n")
+        print("[EduNode][FollowUpSuggestion][first-parse-failed] type=\(String(describing: type))")
+        print("[EduNode][FollowUpSuggestion][first-reply]\(firstExcerpt)")
+#endif
+
+        let retryInstruction: String
+        if type == EduLessonMaterializationResponse.self {
+            retryInstruction = "Return only one valid JSON object with keys assistant_reply and generated_markdown. Do not ask for more inputs, do not explain what you need, and do not include markdown fences or extra prose. Treat all required context as already provided."
+        } else if type == EduAgentLessonPlanRevisionResponse.self {
+            retryInstruction = "Return only one valid JSON object with keys assistant_reply and revised_markdown. Do not ask follow-up questions, and do not include markdown fences or extra prose."
+        } else if compactOnRetry {
+            retryInstruction = "Return only one valid JSON object that matches the required schema. Do not include markdown fences or extra prose. Keep each string field concise and directly editable."
+        } else {
+            retryInstruction = "Return only one valid JSON object that matches the required schema. Do not include markdown fences or extra prose."
+        }
+
+        let retryMessages = messages + [
+            .init(
+                role: "user",
+                content: retryInstruction
+            )
+        ]
+
+        var retrySettings = settings
+        retrySettings.maxTokens = preferredRetryMaxTokens(
+            settings: settings,
+            compactOnRetry: compactOnRetry,
+            stage: 1
+        )
+        let retryClient = EduOpenAICompatibleClient(settings: retrySettings)
+        appendTrace(
+            stage: "llm.request",
+            detail: "flow=\(flowID) step=retry1 type=\(String(describing: type)) maxTokens=\(retrySettings.maxTokens)\n\(formatMessagesForTrace(retryMessages))"
+        )
+        let retryReply = try await retryClient.complete(messages: retryMessages)
+        appendTrace(
+            stage: "llm.response",
+            detail: "flow=\(flowID) step=retry1 type=\(String(describing: type)) chars=\(retryReply.count)\n\(retryReply)"
+        )
+        do {
+            let decoded = try EduAgentJSONParser.decodeFirstJSONObject(type, from: retryReply)
+            appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=retry1 result=success")
+            return decoded
+        } catch {
+            if type == EduLessonFollowUpPlanningResponse.self,
+               let lenient = decodeFollowUpPlanningLenient(from: retryReply) as? T {
+                appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=retry1 result=lenient-success")
+                return lenient
+            }
+            if type == EduLessonFollowUpSuggestionResponse.self,
+               let lenient = decodeFollowUpSuggestionLenient(from: retryReply) as? T {
+                appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=retry1 result=lenient-success")
+                return lenient
+            }
+            if type == EduLessonMaterializationResponse.self,
+               let lenient = decodeMaterializationLenient(from: retryReply) as? T {
+                appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=retry1 result=lenient-success")
+                return lenient
+            }
+            if type == EduAgentLessonPlanRevisionResponse.self,
+               let lenient = decodeLessonRevisionLenient(from: retryReply) as? T {
+                appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=retry1 result=lenient-success")
+                return lenient
+            }
+            appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=retry1 result=failed")
+
+            let secondRetryMessages = retryMessages + [
+                .init(
+                    role: "user",
+                    content: "Your last response could not be parsed. Return only one compact valid JSON object. Escape quotes inside strings."
+                )
+            ]
+            var secondRetrySettings = settings
+            secondRetrySettings.maxTokens = preferredRetryMaxTokens(
+                settings: settings,
+                compactOnRetry: compactOnRetry,
+                stage: 2
+            )
+            let secondRetryClient = EduOpenAICompatibleClient(settings: secondRetrySettings)
+            appendTrace(
+                stage: "llm.request",
+                detail: "flow=\(flowID) step=retry2 type=\(String(describing: type)) maxTokens=\(secondRetrySettings.maxTokens)\n\(formatMessagesForTrace(secondRetryMessages))"
+            )
+            let secondRetryReply = try await secondRetryClient.complete(messages: secondRetryMessages)
+            appendTrace(
+                stage: "llm.response",
+                detail: "flow=\(flowID) step=retry2 type=\(String(describing: type)) chars=\(secondRetryReply.count)\n\(secondRetryReply)"
+            )
+            if let decoded = try? EduAgentJSONParser.decodeFirstJSONObject(type, from: secondRetryReply) {
+                appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=retry2 result=success")
+                return decoded
+            }
+            if type == EduLessonFollowUpPlanningResponse.self,
+               let lenient = decodeFollowUpPlanningLenient(from: secondRetryReply) as? T {
+                appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=retry2 result=lenient-success")
+                return lenient
+            }
+            if type == EduLessonFollowUpSuggestionResponse.self,
+               let lenient = decodeFollowUpSuggestionLenient(from: secondRetryReply) as? T {
+                appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=retry2 result=lenient-success")
+                return lenient
+            }
+            if type == EduLessonMaterializationResponse.self,
+               let lenient = decodeMaterializationLenient(from: secondRetryReply) as? T {
+                appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=retry2 result=lenient-success")
+                return lenient
+            }
+            if type == EduAgentLessonPlanRevisionResponse.self,
+               let lenient = decodeLessonRevisionLenient(from: secondRetryReply) as? T {
+                appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=retry2 result=lenient-success")
+                return lenient
+            }
+            appendTrace(stage: "llm.decode", detail: "flow=\(flowID) step=retry2 result=failed")
+#if DEBUG
+            let retryExcerpt = String(retryReply.prefix(900)).replacingOccurrences(of: "\n", with: "\\n")
+            print("[EduNode][FollowUpSuggestion][retry-parse-failed] type=\(String(describing: type))")
+            print("[EduNode][FollowUpSuggestion][retry-reply]\(retryExcerpt)")
+#endif
+            throw error
+        }
+    }
+
+    private func decodeFollowUpSuggestionLenient(from raw: String) -> EduLessonFollowUpSuggestionResponse? {
+        let keys = ["\"suggested_answer\"", "\"answer\"", "\"draft\"", "\"text\""]
+        for key in keys {
+            guard let keyRange = raw.range(of: key) else { continue }
+            let afterKey = raw[keyRange.upperBound...]
+            guard let colon = afterKey.firstIndex(of: ":") else { continue }
+            var valueSlice = afterKey[raw.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if valueSlice.hasPrefix("\"") {
+                valueSlice.removeFirst()
+                let chars = Array(valueSlice)
+                var output = ""
+                var escaped = false
+                var index = 0
+
+                func isLikelyJSONStringTerminatorQuote(at quoteIndex: Int, in source: [Character]) -> Bool {
+                    var lookahead = quoteIndex + 1
+                    while lookahead < source.count,
+                          source[lookahead].isWhitespace {
+                        lookahead += 1
+                    }
+                    if lookahead >= source.count {
+                        return true
+                    }
+                    let next = source[lookahead]
+                    return next == "," || next == "}" || next == "]" || next == "\n" || next == "\r"
+                }
+
+                while index < chars.count {
+                    let ch = chars[index]
+                    if escaped {
+                        switch ch {
+                        case "n": output.append("\n")
+                        case "t": output.append("\t")
+                        case "r": output.append("\r")
+                        case "\"": output.append("\"")
+                        case "\\": output.append("\\")
+                        default: output.append(ch)
+                        }
+                        escaped = false
+                        index += 1
+                        continue
+                    }
+                    if ch == "\\" {
+                        escaped = true
+                        index += 1
+                        continue
+                    }
+                    if ch == "\"" {
+                        if isLikelyJSONStringTerminatorQuote(at: index, in: chars) {
+                            break
+                        }
+                        output.append(ch)
+                        index += 1
+                        continue
+                    }
+                    output.append(ch)
+                    index += 1
+                }
+                let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return EduLessonFollowUpSuggestionResponse(suggestedAnswer: trimmed)
+                }
+            } else {
+                if let end = valueSlice.firstIndex(where: { $0 == "\n" || $0 == "}" }) {
+                    valueSlice = String(valueSlice[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                if !valueSlice.isEmpty {
+                    return EduLessonFollowUpSuggestionResponse(suggestedAnswer: valueSlice)
+                }
+            }
+        }
+        return nil
+    }
+
+    private func decodeFollowUpPlanningLenient(from raw: String) -> EduLessonFollowUpPlanningResponse? {
+        let source = raw.replacingOccurrences(of: "\r\n", with: "\n")
+
+        func extractBlock(for key: String, nextKey: String?) -> String? {
+            guard let keyRange = source.range(of: "\"\(key)\"") else { return nil }
+            let after = source[keyRange.upperBound...]
+            guard let colon = after.firstIndex(of: ":") else { return nil }
+            let valueStart = source.index(after: colon)
+            if let nextKey,
+               let nextRange = source.range(of: "\"\(nextKey)\"", range: valueStart..<source.endIndex) {
+                return String(source[valueStart..<nextRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return String(source[valueStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        func extractPrimaryString(_ block: String) -> String {
+            let trimmed = block.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let firstQuote = trimmed.firstIndex(of: "\"") else {
+                return trimmed
+            }
+            let tail = trimmed[trimmed.index(after: firstQuote)...]
+            if let endQuote = tail.firstIndex(of: "\"") {
+                let candidate = String(tail[..<endQuote]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !candidate.isEmpty { return candidate }
+            }
+            return trimmed
+        }
+
+        let planningSummary = extractBlock(for: "planning_summary", nextKey: "grounded_evidence")
+            .map(extractPrimaryString)
+            .map { $0.replacingOccurrences(of: "\\n", with: "\n") }
+            ?? ""
+
+        guard !planningSummary.isEmpty else { return nil }
+
+        return EduLessonFollowUpPlanningResponse(
+            planningSummary: planningSummary,
+            groundedEvidence: [],
+            cautionPoints: []
+        )
+    }
+
+    private func decodeMaterializationLenient(from raw: String) -> EduLessonMaterializationResponse? {
+        let keys = ["\"generated_markdown\"", "\"generatedMarkdown\"", "\"markdown\""]
+        for key in keys {
+            guard let extractedMarkdown = extractJSONStringValue(for: key, in: raw) else { continue }
+            let normalized = extractedMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty else { continue }
+
+            let assistant = extractJSONStringValue(for: "\"assistant_reply\"", in: raw)
+                ?? (isChinese ? "已根据上下文生成教案草稿。" : "Generated a lesson-plan draft from the provided context.")
+            return EduLessonMaterializationResponse(
+                assistantReply: assistant.trimmingCharacters(in: .whitespacesAndNewlines),
+                generatedMarkdown: normalized
+            )
+        }
+        return nil
+    }
+
+    private func decodeLessonRevisionLenient(from raw: String) -> EduAgentLessonPlanRevisionResponse? {
+        let keys = ["\"revised_markdown\"", "\"revisedMarkdown\"", "\"markdown\""]
+        for key in keys {
+            guard let revised = extractJSONStringValue(for: key, in: raw) else { continue }
+            let normalized = revised.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty else { continue }
+            let assistant = extractJSONStringValue(for: "\"assistant_reply\"", in: raw)
+                ?? (isChinese ? "已按你的要求更新教案。" : "Updated the lesson plan as requested.")
+            return EduAgentLessonPlanRevisionResponse(
+                assistantReply: assistant.trimmingCharacters(in: .whitespacesAndNewlines),
+                revisedMarkdown: normalized
+            )
+        }
+        return nil
+    }
+
+    private func extractJSONStringValue(for key: String, in raw: String) -> String? {
+        guard let keyRange = raw.range(of: key) else { return nil }
+        let afterKey = raw[keyRange.upperBound...]
+        guard let colon = afterKey.firstIndex(of: ":") else { return nil }
+        var valueSlice = afterKey[raw.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard valueSlice.hasPrefix("\"") else { return nil }
+        valueSlice.removeFirst()
+
+        let chars = Array(valueSlice)
+        var output = ""
+        var escaped = false
+        var index = 0
+
+        func isLikelyJSONStringTerminatorQuote(at quoteIndex: Int, in source: [Character]) -> Bool {
+            var lookahead = quoteIndex + 1
+            while lookahead < source.count,
+                  source[lookahead].isWhitespace {
+                lookahead += 1
+            }
+            if lookahead >= source.count {
+                return true
+            }
+            let next = source[lookahead]
+            return next == "," || next == "}" || next == "]" || next == "\n" || next == "\r"
+        }
+
+        while index < chars.count {
+            let ch = chars[index]
+            if escaped {
+                switch ch {
+                case "n": output.append("\n")
+                case "t": output.append("\t")
+                case "r": output.append("\r")
+                case "\"": output.append("\"")
+                case "\\": output.append("\\")
+                default: output.append(ch)
+                }
+                escaped = false
+                index += 1
+                continue
+            }
+            if ch == "\\" {
+                escaped = true
+                index += 1
+                continue
+            }
+            if ch == "\"" {
+                if isLikelyJSONStringTerminatorQuote(at: index, in: chars) {
+                    break
+                }
+                output.append(ch)
+                index += 1
+                continue
+            }
+            output.append(ch)
+            index += 1
+        }
+
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func preferredRetryMaxTokens(
+        settings: EduAgentProviderSettings,
+        compactOnRetry: Bool,
+        stage: Int
+    ) -> Int {
+        let floor: Int
+        if compactOnRetry {
+            floor = stage == 1 ? 10000 : 16000
+        } else {
+            floor = stage == 1 ? 20000 : 32000
+        }
+        return min(64000, max(settings.maxTokens, floor))
+    }
+
+    private func shouldRetryForLowSubstance(markdown: String, assistantReply: String) -> Bool {
+        if indicatesMissingContext(assistantReply) {
+            return true
+        }
+
+        let lines = markdown.components(separatedBy: .newlines)
+        let nonEmptyLines = lines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let headingLikeLines = nonEmptyLines.filter { $0.hasPrefix("#") || $0.hasPrefix("【") || $0.hasPrefix("[") }
+        let valueLikeLines = nonEmptyLines.filter { line in
+            if line.hasPrefix("#") { return false }
+            if line.hasSuffix(":") || line.hasSuffix("：") { return false }
+            if line == "[what]" || line == "[why]" || line == "[how]" { return false }
+            return line.count >= 8
+        }
+
+        let plainTextCharCount = nonEmptyLines
+            .filter { !$0.hasPrefix("#") }
+            .joined()
+            .count
+
+        if plainTextCharCount < 220 {
+            return true
+        }
+        if valueLikeLines.count < 8 {
+            return true
+        }
+        if headingLikeLines.count >= max(1, valueLikeLines.count) {
+            return true
+        }
+        return false
+    }
+
+    private func indicatesMissingContext(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.contains("no pedagogical graph")
+            || lower.contains("no template")
+            || lower.contains("no course metadata")
+            || lower.contains("please share those inputs")
+            || lower.contains("don't have access")
+            || lower.contains("do not have access")
+            || lower.contains("nothing was attached")
+            || lower.contains("please provide the pedagogical graph")
+            || lower.contains("please share")
+            || text.contains("未提供")
+            || text.contains("请提供")
+            || text.contains("请粘贴")
+    }
+
+    private func mergedDirective(base: String, fallback: String) -> String {
+        let trimmedBase = base.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedBase.isEmpty {
+            return fallback
+        }
+        return trimmedBase + "\n\n" + fallback
     }
 
     private func invalidateGeneratedDraftIfNeeded() {
@@ -578,7 +1177,11 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
             markdown: candidateMarkdown,
             settings: settings,
             file: file,
-            referenceDocument: referenceDocument
+            referenceDocument: referenceDocument,
+            trace: { [weak self] detail in
+                guard let self else { return }
+                self.appendTrace(stage: "alignment.llm", detail: detail)
+            }
         )
     }
 }

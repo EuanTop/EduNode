@@ -847,6 +847,97 @@ struct AgentFeatureTests {
         ))
     }
 
+    @Test func followUpSuggestionSmokeWithRealCanvasAndReferenceWhenLLMEnvIsPresent() async throws {
+        let env = smokeEnvironment()
+        guard let baseURL = env["EDUNODE_LLM_BASE_URL"],
+              let model = env["EDUNODE_LLM_MODEL"],
+              let apiKey = env["EDUNODE_LLM_API_KEY"],
+              !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        let templatePath = env["EDUNODE_REFERENCE_TEMPLATE_PATH"]
+            ?? "/Users/euan/Downloads/WWDC SSC26/教案示例/真实英语教案模版.pdf"
+        guard FileManager.default.fileExists(atPath: templatePath) else {
+            return
+        }
+
+        let templateURL = URL(fileURLWithPath: templatePath)
+        let extractedText = try EduLessonTemplateDocumentLoader.extractText(from: templateURL)
+        let reference = try EduLessonReferenceDocument.build(
+            sourceName: templateURL.lastPathComponent,
+            extractedMarkdown: extractedText
+        )
+
+        let file = makeZhuhaiBirdWorkshopFile()
+        let context = EduLessonPlanContext(file: file)
+        let baselineMarkdown = EduLessonPlanExporter.markdown(
+            context: context,
+            graphData: file.data
+        )
+        let missingItems = EduLessonMaterializationAnalyzer.missingInfoItems(
+            template: reference.templateDocument,
+            file: file,
+            baselineMarkdown: baselineMarkdown
+        )
+        let targetItem = try #require(
+            missingItems.first(where: { $0.sectionKind == .textAnalysisWhat })
+                ?? missingItems.first
+        )
+
+        var answersByID = resolvedSmokeAnswers(for: missingItems, file: file)
+        answersByID.removeValue(forKey: targetItem.id)
+
+        let settings = EduAgentProviderSettings(
+            providerName: "Claude-Compatible",
+            baseURLString: baseURL,
+            model: model,
+            apiKey: apiKey,
+            temperature: 0.2,
+            maxTokens: 2000,
+            timeoutSeconds: 180,
+            additionalSystemPrompt: ""
+        )
+        let client = EduOpenAICompatibleClient(settings: settings)
+
+        let planningReply = try await client.complete(
+            messages: EduLessonPlanMaterializationPromptBuilder.followUpPlanningMessages(
+                settings: settings,
+                file: file,
+                baselineMarkdown: baselineMarkdown,
+                referenceDocument: reference,
+                missingItems: missingItems,
+                answersByID: answersByID,
+                skippedItemIDs: [],
+                targetItem: targetItem
+            )
+        )
+        let planning = try EduAgentJSONParser.decodeFirstJSONObject(
+            EduLessonFollowUpPlanningResponse.self,
+            from: planningReply
+        )
+
+        let suggestionReply = try await client.complete(
+            messages: EduLessonPlanMaterializationPromptBuilder.followUpSuggestionMessages(
+                settings: settings,
+                file: file,
+                baselineMarkdown: baselineMarkdown,
+                referenceDocument: reference,
+                targetItem: targetItem,
+                planning: planning
+            )
+        )
+        let suggestion = try EduAgentJSONParser.decodeFirstJSONObject(
+            EduLessonFollowUpSuggestionResponse.self,
+            from: suggestionReply
+        )
+
+        #expect(!planning.planningSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(!suggestion.suggestedAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
     @Test func canvasNormalizerRemapsBirdClassificationPracticeToToolkit() throws {
         let envelope = EduAgentGraphOperationEnvelope(
             assistantReply: "我会补一个鸟类分类练习节点。",

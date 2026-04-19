@@ -5,7 +5,8 @@ enum EduLessonTemplateAlignmentService {
         markdown candidateMarkdown: String,
         settings: EduAgentProviderSettings,
         file: GNodeWorkspaceFile,
-        referenceDocument: EduLessonReferenceDocument
+        referenceDocument: EduLessonReferenceDocument,
+        trace: ((String) -> Void)? = nil
     ) async throws -> String {
         let initialReport = EduLessonTemplateComplianceChecker.validate(
             markdown: candidateMarkdown,
@@ -34,17 +35,26 @@ enum EduLessonTemplateAlignmentService {
 
         do {
             let client = EduOpenAICompatibleClient(settings: settings)
-            let repairReply = try await client.complete(
-                messages: EduLessonPlanMaterializationPromptBuilder.repairMessages(
-                    settings: settings,
-                    file: file,
-                    currentMarkdown: structurallyAligned,
-                    referenceDocument: referenceDocument,
-                    complianceReport: structuralReport.withAdditionalMissingTitles(
-                        emptyInitiallyMissingTitles
-                    )
+            let repairMessages = EduLessonPlanMaterializationPromptBuilder.repairMessages(
+                settings: settings,
+                file: file,
+                currentMarkdown: structurallyAligned,
+                referenceDocument: referenceDocument,
+                complianceReport: structuralReport.withAdditionalMissingTitles(
+                    emptyInitiallyMissingTitles
                 )
             )
+            var traceLines: [String] = []
+            traceLines.append("[alignment.request] messages.count=\(repairMessages.count)")
+            for (index, message) in repairMessages.enumerated() {
+                traceLines.append("--- message[\(index)] role=\(message.role) chars=\(message.content.count)")
+                traceLines.append(message.content)
+            }
+            trace?(traceLines.joined(separator: "\n"))
+            let repairReply = try await client.complete(
+                messages: repairMessages
+            )
+            trace?("[alignment.response] chars=\(repairReply.count)\n\(repairReply)")
             let repaired = try EduAgentJSONParser.decodeFirstJSONObject(
                 EduLessonMaterializationResponse.self,
                 from: repairReply
@@ -54,6 +64,7 @@ enum EduLessonTemplateAlignmentService {
                 referenceDocument: referenceDocument
             )
         } catch {
+            trace?("[alignment.error] \(error.localizedDescription)")
             return structurallyAligned
         }
     }
