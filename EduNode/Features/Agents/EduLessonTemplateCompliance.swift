@@ -56,6 +56,23 @@ struct EduLessonTemplateComplianceReport: Hashable, Sendable {
 
         return lines.joined(separator: "\n")
     }
+
+    func withAdditionalMissingTitles(_ titles: [String]) -> EduLessonTemplateComplianceReport {
+        guard !titles.isEmpty else { return self }
+        let mergedMissingTitles = Array(NSOrderedSet(array: missingSectionTitles + titles)) as? [String]
+            ?? (missingSectionTitles + titles)
+        return EduLessonTemplateComplianceReport(
+            missingFrontMatterFields: missingFrontMatterFields,
+            frontMatterOrderMismatches: frontMatterOrderMismatches,
+            missingSectionTitles: mergedMissingTitles,
+            sectionOrderMismatches: sectionOrderMismatches,
+            missingAnalysisSubsectionTitles: missingAnalysisSubsectionTitles,
+            analysisOrderMismatches: analysisOrderMismatches,
+            missingTeachingProcessColumns: missingTeachingProcessColumns,
+            missingLearnerAnalysisLabels: missingLearnerAnalysisLabels,
+            missingKeyPointDifficultyLabels: missingKeyPointDifficultyLabels
+        )
+    }
 }
 
 enum EduLessonTemplateComplianceChecker {
@@ -455,7 +472,7 @@ enum EduLessonTemplateStructuralNormalizer {
         var seenAnyLabel = false
 
         for rawLine in lines {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            let line = canonicalizedLine(rawLine)
             guard !line.isEmpty else { continue }
             if let matchedLabel = labels.first(where: { label in
                 line.localizedCaseInsensitiveContains(trimmedTitleLabel(label))

@@ -99,6 +99,41 @@ struct AgentFeatureTests {
         #expect(document.schema.sections.contains(where: { $0.kind == .sourceText }))
     }
 
+    @Test func templateParserHandlesMinerUStyleMarkdownTablesAndHashHeadings() throws {
+        let text = """
+        # 英语教师职业技能训练课程期末考核打分表
+        <table><tr><td colspan="2">教师姓名: 张老师 学生年级: 高一</td></tr><tr><td colspan="2">教材版本: 外研版必修三 单元及语篇: U6 Developing Ideas---Stars after the Storm</td></tr><tr><td colspan="2">课型及主题: 阅读课 人与自然</td></tr><tr><td colspan="2">指导思想/设计理念</td></tr><tr><td colspan="2">本课以核心素养为统领。</td></tr><tr><td colspan="2">文本分析</td></tr><tr><td colspan="6">本课在单元整体教学设计中的位置</td></tr><tr><td colspan="6">【what】
+        本课教学内容聚焦飓风后的希望。</td></tr></table>
+
+        # 【why】
+        文章强调灾后希望与重建。
+
+        # 【how】
+        文章采用时间线推进。
+
+        <table><tr><td colspan="4">结构化知识图表</td></tr><tr><td colspan="4">学情分析</td></tr><tr><td colspan="4">已有知识：学生已了解一般自然灾害概念。</td></tr><tr><td colspan="4">未有知识：学生对飓风文本的深层分析仍不熟悉。</td></tr><tr><td colspan="4">学习目标</td></tr><tr><td colspan="4">在学习本课后，学生能够：</td></tr><tr><td colspan="4">教学重点和难点</td></tr><tr><td colspan="4">教学资源</td></tr><tr><td colspan="4">教学过程（第一课时）</td></tr><tr><td>学习目标</td><td>学习活动、活动层次及时间</td><td>设计意图</td><td>效果评价</td></tr><tr><td colspan="4">作业</td></tr><tr><td colspan="4">Handout</td></tr></table>
+
+        # 教学原文：
+        原文内容
+        """
+
+        let document = try EduLessonTemplateParser.parse(
+            text: text,
+            sourceName: "mineru-template.md"
+        )
+
+        #expect(document.schema.frontMatterFieldLabels == ["教师姓名", "学生年级", "教材版本", "单元及语篇", "课型及主题"])
+        #expect(document.schema.sections.contains(where: { $0.kind == .designRationale && $0.title == "指导思想/设计理念" }))
+        #expect(document.schema.sections.contains(where: { $0.kind == .textAnalysis && $0.title == "文本分析" }))
+        #expect(document.schema.sections.contains(where: { $0.kind == .unitPosition && $0.title == "本课在单元整体教学设计中的位置" }))
+        #expect(document.schema.sections.contains(where: { $0.kind == .textAnalysisWhat && $0.title == "【what】" }))
+        #expect(document.schema.sections.contains(where: { $0.kind == .textAnalysisWhy && $0.title == "【why】" }))
+        #expect(document.schema.sections.contains(where: { $0.kind == .textAnalysisHow && $0.title == "【how】" }))
+        #expect(document.schema.sections.contains(where: { $0.kind == .priorKnowledge && $0.title == "已有知识：" }))
+        #expect(document.schema.sections.contains(where: { $0.kind == .missingKnowledge && $0.title == "未有知识：" }))
+        #expect(document.schema.sections.contains(where: { $0.kind == .sourceText && $0.title == "教学原文：" }))
+    }
+
     @Test func referenceComplianceFlagsMissingTemplateFieldsAndSections() throws {
         let reference = try EduLessonReferenceDocument.build(
             sourceName: "reference.md",
@@ -273,6 +308,68 @@ struct AgentFeatureTests {
         #expect(normalized.contains("作业"))
         #expect(normalized.contains("Handout"))
         #expect(normalized.contains("教学原文"))
+    }
+
+    @Test func structuralNormalizerStripsNestedHashHeadingsFromMineruStyleDraft() throws {
+        let reference = try EduLessonReferenceDocument.build(
+            sourceName: "reference.md",
+            extractedMarkdown: """
+            教师姓名：
+            学生年级：
+            教材版本：
+            单元及语篇：
+            课型及主题：
+            指导思想/设计理念
+            文本分析
+            本课在单元整体教学设计中的位置
+            【what】
+            【why】
+            【how】
+            学情分析
+            已有知识：
+            未有知识：
+            学习目标
+            教学重点和难点
+            教学资源
+            教学过程（第一课时）
+            作业
+            Handout
+            教学原文：
+            """
+        )
+
+        let normalized = EduLessonTemplateStructuralNormalizer.normalize(
+            markdown: """
+            教师姓名：
+            学生年级： 6-13岁
+            教材版本：
+            单元及语篇： 珠海观鸟美育工作坊
+            课型及主题： 综合实践（美育）·人与自然
+
+            ### # 【why】
+            为什么值得学习。
+
+            ### # 【how】
+            如何组织材料。
+
+            ## 学情分析
+            ## 已有知识：学生知道一些基础鸟类。
+            ## 未有知识：学生还不熟悉巢型设计。
+
+            ## 教学原文：
+            原文内容
+            """,
+            referenceDocument: reference
+        )
+
+        #expect(normalized.contains("### 【why】"))
+        #expect(normalized.contains("### 【how】"))
+        #expect(!normalized.contains("### # 【why】"))
+        #expect(!normalized.contains("### # 【how】"))
+        #expect(normalized.contains("已有知识：学生知道一些基础鸟类。"))
+        #expect(normalized.contains("未有知识：学生还不熟悉巢型设计。"))
+        #expect(!normalized.contains("## 已有知识：学生知道一些基础鸟类。"))
+        #expect(!normalized.contains("## 未有知识：学生还不熟悉巢型设计。"))
     }
 
     @Test func materializationAnalyzerAsksForAnalysisAndReflectionButNotProcessWhenGraphExists() throws {
@@ -503,7 +600,7 @@ struct AgentFeatureTests {
     }
 
     @Test func materializationSmokeCanHonorRealReferenceTemplateWhenLLMEnvIsPresent() async throws {
-        let env = ProcessInfo.processInfo.environment
+        let env = smokeEnvironment()
         guard let baseURL = env["EDUNODE_LLM_BASE_URL"],
               let model = env["EDUNODE_LLM_MODEL"],
               let apiKey = env["EDUNODE_LLM_API_KEY"],
@@ -615,6 +712,134 @@ struct AgentFeatureTests {
                 "教学重点和难点",
                 "教学资源",
                 "教学过程（第一课时）",
+                "作业",
+                "Handout",
+                "教学原文"
+            ]
+        ))
+    }
+
+    @Test func mineruBackedAlignmentSmokeRestoresFrontSectionsForZhuhaiWorkshopWhenEnvIsPresent() async throws {
+        let env = smokeEnvironment()
+        guard let baseURL = env["EDUNODE_LLM_BASE_URL"],
+              let model = env["EDUNODE_LLM_MODEL"],
+              let apiKey = env["EDUNODE_LLM_API_KEY"],
+              !baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        let templatePath = env["EDUNODE_REFERENCE_TEMPLATE_PATH"]
+            ?? "/Users/euan/Downloads/WWDC SSC26/教案示例/真实英语教案模版.pdf"
+        guard FileManager.default.fileExists(atPath: templatePath) else {
+            return
+        }
+
+        let templateURL = URL(fileURLWithPath: templatePath)
+        let templateData = try Data(contentsOf: templateURL)
+        let parsed = try await EduMinerUClient().parseReferencePDF(
+            data: templateData,
+            fileName: templateURL.lastPathComponent
+        )
+        let reference = try EduLessonReferenceDocument.build(
+            sourceName: templateURL.lastPathComponent,
+            extractedMarkdown: parsed.markdown
+        )
+
+        let file = makeZhuhaiBirdWorkshopFile()
+        let context = EduLessonPlanContext(file: file)
+        let baselineMarkdown = EduLessonPlanExporter.markdown(
+            context: context,
+            graphData: file.data
+        )
+        let missingItems = EduLessonMaterializationAnalyzer.missingInfoItems(
+            template: reference.templateDocument,
+            file: file,
+            baselineMarkdown: baselineMarkdown
+        )
+        let answersByID = resolvedSmokeAnswers(
+            for: missingItems,
+            file: file
+        )
+
+        let settings = EduAgentProviderSettings(
+            providerName: "OpenAI-Compatible",
+            baseURLString: baseURL,
+            model: model,
+            apiKey: apiKey,
+            temperature: 0.2,
+            maxTokens: 6000,
+            timeoutSeconds: 240,
+            additionalSystemPrompt: ""
+        )
+
+        let reply = try await EduOpenAICompatibleClient(settings: settings).complete(
+            messages: EduLessonPlanMaterializationPromptBuilder.materializationMessages(
+                settings: settings,
+                file: file,
+                baselineMarkdown: baselineMarkdown,
+                template: reference.templateDocument,
+                missingItems: missingItems,
+                answersByID: answersByID,
+                skippedItemIDs: [],
+                supplementaryMaterial: "",
+                userDirective: "请严格贴近参考模板的章节结构与写作风格生成教案，不要省略前置章节，尤其不要从【why】或【how】直接开始。",
+                referenceDocument: reference
+            )
+        )
+
+        let structured = try EduAgentJSONParser.decodeFirstJSONObject(
+            EduLessonMaterializationResponse.self,
+            from: reply
+        )
+        let aligned = try await EduLessonTemplateAlignmentService.align(
+            markdown: structured.generatedMarkdown,
+            settings: settings,
+            file: file,
+            referenceDocument: reference
+        )
+
+        let artifactURL: URL
+        if let outputPath = env["EDUNODE_SMOKE_OUTPUT_PATH"],
+           !outputPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            artifactURL = URL(fileURLWithPath: outputPath)
+        } else {
+            artifactURL = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("edunode-mineru-zhuhai-aligned-smoke.md")
+        }
+        try aligned.write(to: artifactURL, atomically: true, encoding: .utf8)
+        print("EDUNODE_SMOKE_OUTPUT=\(artifactURL.path)")
+
+        let report = EduLessonTemplateComplianceChecker.validate(
+            markdown: aligned,
+            referenceDocument: reference
+        )
+
+        #expect(report.isCompliant)
+        #expect(aligned.contains("指导思想/设计理念"))
+        #expect(aligned.contains("文本分析"))
+        #expect(aligned.contains("本课在单元整体教学设计中的位置"))
+        #expect(aligned.contains("【what】"))
+        #expect(aligned.contains("【why】"))
+        #expect(aligned.contains("【how】"))
+        #expect(!aligned.contains("### # 【why】"))
+        #expect(!aligned.contains("### # 【how】"))
+        #expect(!aligned.contains("## # 教学原文"))
+        #expect(containsTitlesInOrder(
+            aligned,
+            titles: [
+                "指导思想/设计理念",
+                "文本分析",
+                "本课在单元整体教学设计中的位置",
+                "【what】",
+                "【why】",
+                "【how】",
+                "学情分析",
+                "学习目标",
+                "教学重点和难点",
+                "教学资源",
+                "教学过程",
                 "作业",
                 "Handout",
                 "教学原文"
@@ -896,6 +1121,106 @@ private func makeWorkspaceFile(
         formativeCheckIntensity: "medium",
         emphasizeInquiryExperiment: false,
         emphasizeExperienceReflection: false,
+        requireStructuredFlow: true
+    )
+}
+
+private func smokeEnvironment() -> [String: String] {
+    let runtime = ProcessInfo.processInfo.environment
+    let dotEnvValues = loadDotEnvValues()
+    return runtime.merging(dotEnvValues) { current, fallback in
+        current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? fallback : current
+    }
+}
+
+private func loadDotEnvValues() -> [String: String] {
+    let testFileURL = URL(fileURLWithPath: #filePath)
+    let repoRoot = testFileURL.deletingLastPathComponent().deletingLastPathComponent()
+    let candidateURLs = [
+        repoRoot.appendingPathComponent("EduNode/.env"),
+        repoRoot.appendingPathComponent(".env")
+    ]
+
+    for url in candidateURLs {
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8) else {
+            continue
+        }
+        return parseDotEnv(text)
+    }
+    return [:]
+}
+
+private func parseDotEnv(_ text: String) -> [String: String] {
+    text
+        .split(whereSeparator: \.isNewline)
+        .reduce(into: [String: String]()) { partial, rawLine in
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { return }
+
+            let normalizedLine: String
+            if trimmed.hasPrefix("export ") {
+                normalizedLine = String(trimmed.dropFirst("export ".count))
+            } else {
+                normalizedLine = trimmed
+            }
+
+            let segments = normalizedLine.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard segments.count == 2 else { return }
+
+            let key = segments[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else { return }
+
+            var value = segments[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            if (value.hasPrefix("\"") && value.hasSuffix("\"")) || (value.hasPrefix("'") && value.hasSuffix("'")) {
+                value.removeFirst()
+                value.removeLast()
+            }
+            partial[key] = value
+        }
+}
+
+private func makeZhuhaiBirdWorkshopFile() -> GNodeWorkspaceFile {
+    GNodeWorkspaceFile(
+        name: "珠海观鸟美育工作坊",
+        data: EduPlanning.makeZhuhaiBirdSampleDocumentData(isChinese: true),
+        gradeLevel: "age 6-13",
+        gradeMode: "age",
+        gradeMin: 6,
+        gradeMax: 13,
+        subject: "综合实践（美育）",
+        lessonDurationMinutes: 120,
+        allowOvertime: false,
+        periodRange: "器材：望远镜6台、鸟类图鉴3套、巢材包28份；需室内 + 户外场地",
+        studentCount: 28,
+        studentProfile: "年龄跨度较大；低龄组需要更明确的结构支架与助教支持；高龄组可承担展示与讲解任务。",
+        studentPriorKnowledgeLevel: "60",
+        studentMotivationLevel: "85",
+        studentSupportNotes: "低龄组增加助教支持与结构示范。",
+        goalsText: """
+        能够识别并准确读出 7 种那洲常见鸟名，完成留鸟/候鸟分类与举例说明。
+        能够解释那洲气候与地形如何影响鸟类分布，把地理信息与鸟种特征联系起来。
+        能够为目标鸟种选择合适巢型，并说出至少 1 条设计依据。
+        能够在双人协作中完成基础结构、材料填充与创意装饰，并在展览中说明作品亮点。
+        能够在课后利用拍图识鸟持续观察并完成至少 1 次真实记录。
+        """,
+        modelID: "fivee",
+        teacherTeam: "主讲2人，助教9人；签到分组、器材支持、材料巡视、观察记录与展览引导分工协作。",
+        leadTeacherCount: 2,
+        assistantTeacherCount: 9,
+        teacherRolePlan: "主讲负责情境导入、知识讲解、任务说明与展览串联；助教负责低龄组支持、材料巡视、拍图识鸟延伸任务引导。",
+        learningScenario: "",
+        curriculumStandard: "",
+        resourceConstraints: "器材：望远镜6台、鸟类图鉴3套、巢材包28份；需室内 + 户外场地",
+        knowledgeToolkitMarkedDone: true,
+        lessonPlanMarkedDone: false,
+        evaluationMarkedDone: false,
+        totalSessions: 1,
+        lessonType: "singleLesson",
+        teachingStyle: "experientialReflective",
+        formativeCheckIntensity: "medium",
+        emphasizeInquiryExperiment: true,
+        emphasizeExperienceReflection: true,
         requireStructuredFlow: true
     )
 }

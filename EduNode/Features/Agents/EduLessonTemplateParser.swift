@@ -21,6 +21,15 @@ enum EduLessonTemplateImportError: LocalizedError {
     }
 }
 
+private extension String {
+    nonisolated var containsChineseCharacters: Bool {
+        unicodeScalars.contains {
+            ($0.value >= 0x4E00 && $0.value <= 0x9FFF)
+                || ($0.value >= 0x3400 && $0.value <= 0x4DBF)
+        }
+    }
+}
+
 enum EduLessonTemplateSectionKind: String, Codable, Hashable, CaseIterable {
     case courseInfo
     case designRationale
@@ -279,7 +288,12 @@ enum EduLessonTemplateParser {
             if previous?.kind == match.kind {
                 continue
             }
-            detected.append((kind: match.kind, title: trimmed, order: detected.count, startLine: index))
+            detected.append((
+                kind: match.kind,
+                title: canonicalSectionTitle(from: trimmed, kind: match.kind),
+                order: detected.count,
+                startLine: index
+            ))
         }
 
         if detected.isEmpty {
@@ -579,6 +593,17 @@ enum EduLessonTemplateParser {
 
     private nonisolated static func normalize(_ text: String) -> String {
         text
+            .replacingOccurrences(of: "(?i)<br\\s*/?>", with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "(?i)</(td|th|tr|p|div|h[1-6]|li|ul|ol|table|tbody|thead)>", with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "(?i)<(td|th|tr|p|div|h[1-6]|li|ul|ol|table|tbody|thead)[^>]*>", with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "(?i)<[^>]+>", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&#x27;", with: "'")
             .replacingOccurrences(of: "\u{000C}", with: "\n")
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -586,6 +611,49 @@ enum EduLessonTemplateParser {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private nonisolated static func canonicalSectionTitle(
+        from rawLine: String,
+        kind: EduLessonTemplateSectionKind
+    ) -> String {
+        let cleaned = canonicalHeadingCandidate(from: rawLine)
+        guard !cleaned.isEmpty else { return rawLine.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        if requiresFieldStylePrefix(kind) {
+            let labels = headingRules
+                .first(where: { $0.kind == kind })?
+                .aliases
+                .sorted { $0.count > $1.count } ?? []
+            if let matchedAlias = labels.first(where: { alias in
+                let normalizedAlias = normalizedHeading(alias)
+                let normalizedCleaned = normalizedHeading(cleaned)
+                return normalizedCleaned.hasPrefix(normalizedAlias)
+            }) {
+                return matchedAlias.containsChineseCharacters ? matchedAlias + "：" : matchedAlias + ":"
+            }
+        }
+
+        return cleaned
+    }
+
+    private nonisolated static func canonicalHeadingCandidate(from rawLine: String) -> String {
+        var line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        if line.hasPrefix("#") {
+            line = line.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") {
+            line = String(line.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let match = line.range(of: #"^\d+[\.\)]\s*"#, options: .regularExpression) {
+            line.removeSubrange(match)
+            line = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if line.hasPrefix("|"), line.hasSuffix("|") {
+            line = line.trimmingCharacters(in: CharacterSet(charactersIn: "|"))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return line
     }
 
     private nonisolated static func normalizedHeading(_ text: String) -> String {

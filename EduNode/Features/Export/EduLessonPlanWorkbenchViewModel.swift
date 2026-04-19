@@ -574,48 +574,11 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
         settings: EduAgentProviderSettings
     ) async throws -> String {
         guard let referenceDocument else { return candidateMarkdown }
-
-        let initialReport = EduLessonTemplateComplianceChecker.validate(
+        return try await EduLessonTemplateAlignmentService.align(
             markdown: candidateMarkdown,
+            settings: settings,
+            file: file,
             referenceDocument: referenceDocument
         )
-        guard !initialReport.isCompliant else {
-            return candidateMarkdown
-        }
-
-        let structurallyAligned = EduLessonTemplateStructuralNormalizer.normalize(
-            markdown: candidateMarkdown,
-            referenceDocument: referenceDocument
-        )
-        let structuralReport = EduLessonTemplateComplianceChecker.validate(
-            markdown: structurallyAligned,
-            referenceDocument: referenceDocument
-        )
-        if structuralReport.isCompliant {
-            return structurallyAligned
-        }
-
-        do {
-            let client = EduOpenAICompatibleClient(settings: settings)
-            let repairReply = try await client.complete(
-                messages: EduLessonPlanMaterializationPromptBuilder.repairMessages(
-                    settings: settings,
-                    file: file,
-                    currentMarkdown: structurallyAligned,
-                    referenceDocument: referenceDocument,
-                    complianceReport: structuralReport
-                )
-            )
-            let repaired = try EduAgentJSONParser.decodeFirstJSONObject(
-                EduLessonMaterializationResponse.self,
-                from: repairReply
-            )
-            return EduLessonTemplateStructuralNormalizer.normalize(
-                markdown: repaired.generatedMarkdown,
-                referenceDocument: referenceDocument
-            )
-        } catch {
-            return structurallyAligned
-        }
     }
 }
