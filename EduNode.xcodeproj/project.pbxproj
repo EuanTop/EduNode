@@ -206,7 +206,7 @@
 			mainGroup = 003E377C2F41B52D00E20FD0;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				003E38032F44909900E20FD0 /* XCLocalSwiftPackageReference "../GNodeKit" */,
+						003E38032F44909900E20FD0 /* XCRemoteSwiftPackageReference "GNodeKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 003E37862F41B52D00E20FD0 /* Products */;
@@ -622,12 +622,16 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCLocalSwiftPackageReference section */
-		003E38032F44909900E20FD0 /* XCLocalSwiftPackageReference "../GNodeKit" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../GNodeKit;
+/* Begin XCRemoteSwiftPackageReference section */
+		003E38032F44909900E20FD0 /* XCRemoteSwiftPackageReference "GNodeKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/EuanTop/GNodeKit.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
 		};
-/* End XCLocalSwiftPackageReference section */
+/* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		003E38042F44909900E20FD0 /* GNodeKit */ = {

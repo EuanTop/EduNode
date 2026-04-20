@@ -1,0 +1,15 @@
+{
+  "originHash" : "fb88cb7b2614b5536e1a6bc3ab464a33aff0aab02b909afc298895e29029f408",
+  "pins" : [
+    {
+      "identity" : "gnodekit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/EuanTop/GNodeKit.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "efeb42b8d8d33e1fbe7f3e98bd3b67bc5e730095"
+      }
+    }
+  ],
+  "version" : 3
+}

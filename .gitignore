@@ -12,3 +12,10 @@ xcuserdata/
 .swiftpm/
 Packages/
 EduNode/.env
+
+# Local workflow: avoid uploading temporary test edits
+EduNodeTests/AgentFeatureTests.swift
+
+# Smoke test scripts
+Scripts/*smoke*.swift
+Scripts/*smoke*.sh
