@@ -2,7 +2,17 @@
 
 ## 中文说明
 
-EduNode 是一个基于 SwiftUI 的 iOS 项目，用于从节点化教学设计中生成与完善教案。
+面对复杂的教学任务，教师往往需要在教案、课件与教学流程之间反复切换。EduNode 将这些工作统一到一个结构化画布中，并由 Agent 架构贯穿课程设计、内容生成与课堂执行全流程。
+
+在 EduNode 中，课程被拆解为知识点、教学工具与评价节点等最小单元，所有教学流程都可被清晰组织、连接与推演。
+
+在前期，AI 不替代教师，而是辅助思考：系统会基于课程信息推荐合适的教育模型，并生成课程结构模板，让教师不再从空白开始。
+
+在中期，AI 加速产出：通过风格迁移与结构复用，教师可以快速生成统一结构的教案与 PPT，实现从节点画布到教学材料的一体化生产。
+
+在后期，EduNode 进入课堂：课程进度、幻灯片与节点实时同步，支持过程性评价与记录，让课堂执行可追踪、可回溯。
+
+这套持续优化的 Agent 系统结合了多轮迭代，并引入多学科教育专家测试与反馈。EduNode 的目标是减少重复劳动、释放教师精力，让教学回归本质: 围绕知识，服务学生。
 
 ### 演示视频
 
@@ -91,7 +101,17 @@ export EDUNODE_REFERENCE_TEMPLATE_PATH='/absolute/path/to/reference-template.pdf
 
 ## English
 
-EduNode is a SwiftUI iOS project for generating and refining lesson plans from node-based instructional designs.
+Teachers often have to switch repeatedly between lesson plans, slides, and classroom flow management. EduNode unifies this work in a single structured canvas, with an Agent architecture that supports the full workflow from planning to delivery.
+
+In EduNode, a course is decomposed into atomic units such as knowledge points, teaching tools, and assessment nodes. Teaching flow can then be clearly organized, connected, and iterated.
+
+In the early stage, AI does not replace teachers; it supports thinking. Based on course context, EduNode recommends suitable educational models and generates structural templates so teachers do not start from a blank page.
+
+In the middle stage, AI accelerates production. With style transfer and structure reuse, teachers can quickly generate consistent lesson plans and slides, moving from node canvas to teaching materials in one flow.
+
+In the classroom stage, EduNode synchronizes progress, slides, and nodes in real time, making formative assessment executable and trackable.
+
+Behind this experience is a continuously optimized Agent system, iterated across cycles and informed by multidisciplinary education experts. EduNode aims to reduce repetitive workload and return teaching to its essence: knowledge-centered, student-serving practice.
 
 ### Demo Video
 
