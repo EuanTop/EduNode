@@ -4,6 +4,12 @@
 
 EduNode 是一个基于 SwiftUI 的 iOS 项目，用于从节点化教学设计中生成与完善教案。
 
+### 演示视频
+
+[![EduNode Demo Video](https://vumbnail.com/1184658322.jpg)](https://vimeo.com/1184658322)
+
+> 点击预览图跳转到 Vimeo 观看完整演示。
+
 ### 目录结构
 
 - `EduNode/`: App 主代码。
@@ -86,6 +92,12 @@ export EDUNODE_REFERENCE_TEMPLATE_PATH='/absolute/path/to/reference-template.pdf
 ## English
 
 EduNode is a SwiftUI iOS project for generating and refining lesson plans from node-based instructional designs.
+
+### Demo Video
+
+[![EduNode Demo Video](https://vumbnail.com/1184658322.jpg)](https://vimeo.com/1184658322)
+
+> Click the preview image to watch the full demo on Vimeo.
 
 ### Repository Layout
 
