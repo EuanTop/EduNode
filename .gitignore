@@ -13,9 +13,4 @@ xcuserdata/
 Packages/
 EduNode/.env
 
-# Local workflow: avoid uploading temporary test edits
-EduNodeTests/AgentFeatureTests.swift
-
-# Smoke test scripts
-Scripts/*smoke*.swift
-Scripts/*smoke*.sh
+# Keep automated tests and smoke scripts in version control.

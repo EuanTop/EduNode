@@ -2,96 +2,121 @@
 
 [English](README.md) | [中文](README.zh-Hans.md)
 
-面对复杂的教学任务，教师往往需要在教案、课件与教学流程之间反复切换。EduNode 将这些工作统一到一个结构化画布中，并由 Agent 架构贯穿课程设计、内容生成与课堂执行全流程。
+EduNode 是一个面向教师的原生 pedagogical-graph workspace。它把课程设计、教学推进、评价证据与产出物统一到同一块结构化画布里，避免教师在零散文档之间反复切换。
 
-在 EduNode 中，课程被拆解为知识点、教学工具与评价节点等最小单元，所有教学流程都可被清晰组织、连接与推演。
-
-在前期，AI 不替代教师，而是辅助思考：系统会基于课程信息推荐合适的教育模型，并生成课程结构模板，让教师不再从空白开始。
-
-在中期，AI 加速产出：通过风格迁移与结构复用，教师可以快速生成统一结构的教案与 PPT，实现从节点画布到教学材料的一体化生产。
-
-在后期，EduNode 进入课堂：课程进度、幻灯片与节点实时同步，支持过程性评价与记录，让课堂执行可追踪、可回溯。
-
-这套持续优化的 Agent 系统结合了多轮迭代，并引入多学科教育专家测试与反馈。EduNode 的目标是减少重复劳动、释放教师精力，让教学回归本质：围绕知识，服务学生。
-
+EduNode 并不把 AI 仅仅当作一个脱离教学结构的聊天入口，而是把它嵌入教师可审阅、可修改、可追踪的教学结构之中。教师负责教学判断与课程结构，Agent 负责协助推荐图谱调整、补齐缺失信息、对齐参考教案结构，并支持后续产出与优化。
 
 [![EduNode Demo Video](https://vumbnail.com/1184658322.jpg)](https://vimeo.com/1184658322)
 
-> 点击预览图跳转到 Vimeo 观看完整演示。
+> 点击预览图可跳转到 Vimeo 观看完整演示。
 
-### 目录结构
+## EduNode 的核心定位
 
-- `EduNode/`: App 主代码。
-- `EduNodeTests/`: 单元与集成测试。
-- `EduNodeUITests/`: UI 测试。
-- `Scripts/`: 冒烟脚本与辅助脚本。
-- `GNodeKit`: 通过远程 Swift Package 依赖获取（GitHub）。
+- 先结构、后生成：课程首先被建模为 pedagogical graph，而不是直接丢给模型输出整份文档。
+- 教师主导、Agent 辅助：AI 的改动是可提议、可审查、可撤销的，而不是黑箱式代写。
+- 同一工作台贯穿全流程：从建课、搭图、生成教案到展示与课堂执行，保持同一套语义结构。
+- 原生应用而非网页拼装：EduNode 采用 SwiftUI + SwiftData 构建，面向 iPad 与 Mac Catalyst 工作流。
 
-### 环境要求
+## 当前已实现的产品能力
 
-- macOS + Xcode 16 或更高（iOS SDK 17+）。
-- 能正常解析 Swift Package 依赖。
+- 结构化建课表单，覆盖年级范围、课程目标、学情、教师团队、资源约束与教学模型选择。
+- 基于 GNodeKit 的节点画布，以知识节点、Toolkit 或活动节点、评价节点构成有向教学流程。
+- Agent 辅助搭图，支持可视化改动审查、应用或拒绝、以及撤销。
+- 教案工作台，可读取参考 PDF、识别缺失教学信息、进行补问、生成对齐模板结构的教案，并导出 Markdown 或 PDF。
+- 课件链路，可由节点图生成课件幻灯片，支持样式调整与 AI 辅助优化讲稿文案，并导出 HTML 或 PDF。
+- 面向课堂执行的流程追踪与评价支持，包括状态推进、展示模式与细粒度评价指标。
+- 面向首次使用者的 onboarding 与 tutorial 流程。
 
-### 快速开始
+## 架构概览
 
-1. 用 Xcode 打开 `EduNode.xcodeproj`。
-2. 选择 `EduNode` scheme。
-3. Build and Run。
+- 应用架构：SwiftUI 单体原生应用，使用 SwiftData 持久化。
+- 图谱引擎：通过 Swift Package Manager 集成 GNodeKit。
+- LLM 接入：在应用内直接配置并调用 OpenAI-compatible 接口。
+- 参考教案解析：通过 MinerU 完成，依赖运行时 `.env` 配置。
+- 产出链路：从节点图生成教案与展示材料，支持 Markdown、HTML、PDF 等格式。
+- 第一阶段交付策略 - service-oriented monolith：考虑到早期开发成本与迭代速度，当前 Agent 后端直接以 Swift 形式内嵌在应用中。在下一阶段进入前后端分离时，能快速把上述边界提升为独立 API 服务，并把当前的进程内调用替换为网络请求。
 
-### 环境变量配置
+## 环境要求
 
-App 与部分冒烟测试可从 `EduNode/.env` 读取配置。
+- macOS + Xcode 16 或更高版本。
+- App 目标要求 iOS 17.6 及以上 SDK。
+- 若走 Mac Catalyst 工作流，建议 macOS 15 及以上。
+- 若使用远程 LLM 或 MinerU，需要可用网络。
+- Xcode 可正常解析 Swift Package 依赖。
 
-1. 复制 `EduNode/.env.example` 为 `EduNode/.env`。
-2. 按需填写变量。
+## 快速开始
 
-关键变量：
+1. Clone 本仓库。
+2. 使用 Xcode 打开 `EduNode.xcodeproj`。
+3. 让 Xcode 自动解析 `GNodeKit` 依赖。
+4. 选择 `EduNode` scheme。
+5. 在 iPad Simulator、真机 iPad 或 Mac Catalyst 上构建运行。
 
+## 运行时配置
+
+### 应用内模型配置
+
+应用本身的 LLM 配置不是从 `EduNode/.env` 读取的，而是在 EduNode 的 Model Settings 界面中完成。
+
+可配置项包括：
+
+- provider base URL
+- model name
+- API key
+- temperature
+- max tokens
+- timeout
+- optional extra system prompt
+
+应用内配置的密钥通过 Keychain 相关机制存储。
+
+### 用于参考解析与 smoke 的 `.env`
+
+如果你需要参考教案解析或 CLI smoke 工作流，请先复制：
+
+```bash
+cp EduNode/.env.example EduNode/.env
+```
+
+关键变量包括：
+
+- `MINERU_API_TOKEN`
+- `MINERU_API_BASE_URL`
+- `MINERU_APPLY_UPLOAD_URL`
+- `MINERU_BATCH_RESULT_URL_PREFIX`
 - `EDUNODE_LLM_BASE_URL`
 - `EDUNODE_LLM_MODEL`
 - `EDUNODE_LLM_API_KEY`
-- `EDUNODE_REFERENCE_TEMPLATE_PATH`（可选，本地参考 PDF 的绝对路径）
-- `MINERU_API_TOKEN`（可选，MinerU 解析能力）
+- `EDUNODE_REFERENCE_TEMPLATE_PATH`
 
-### 运行测试
+说明：
 
-Xcode 中：Product -> Test
+- App 侧的参考解析器会在应用 Documents 目录或打包资源目录中查找 `.env`。
+- CLI smoke 脚本会直接读取仓库中的 `EduNode/.env`。
 
-命令行：
+## 本地验证
+
+在 Xcode 中运行测试：
+
+- `Product -> Test`
+
+命令行运行：
 
 ```bash
 xcodebuild -project EduNode.xcodeproj -scheme EduNode -destination 'platform=iOS Simulator,name=iPhone 16' test
 ```
 
-### 运行冒烟脚本
+`Scripts/` 目录中保留了一组聚焦本地验证的小型脚本，主要用于模板解析检查、Agent 逻辑 smoke 与核心测试入口。
 
-```bash
-cd Scripts
-./run_agent_logic_smoke.sh
-```
+当前自动化覆盖的重点在于 Agent 逻辑、模板解析、模板合规性检查与教案物化链路。
 
-如需使用真实本地模板：
+## 依赖说明
 
-```bash
-export EDUNODE_REFERENCE_TEMPLATE_PATH='/absolute/path/to/reference-template.pdf'
-```
+EduNode 当前通过远程 Swift Package 方式集成 `GNodeKit`：
 
-### GNodeKit 依赖策略
+- 仓库地址：`https://github.com/EuanTop/GNodeKit.git`
+- 集成方式：Swift Package Manager
 
-本仓库仅支持远程依赖模式：`EduNode` 通过 Swift Package Manager 从 GitHub 拉取 `GNodeKit`。
+## 许可协议
 
-- 依赖仓库：`https://github.com/EuanTop/GNodeKit.git`
-- 当前版本规则：跟踪 `main` 分支（待你发布稳定 tag 后可切回语义化版本）
-- 用户在 clone 本项目后，Xcode 可自动解析并下载依赖
-
-### 安全注意事项
-
-- 不要提交 `EduNode/.env`。
-- 如果真实 API Key 曾在不可信环境出现，务必轮换。
-- `EduNode/.env.example` 只保留占位符。
-
-### Push 前检查
-
-- `git status` 不应包含敏感信息文件。
-- 确认 `EduNode/.env` 始终被忽略。
-- 执行你依赖的测试/冒烟流程。
+本仓库采用 PolyForm Noncommercial 1.0.0 许可。详情见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。

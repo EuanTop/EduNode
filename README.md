@@ -2,95 +2,123 @@
 
 [English](README.md) | [中文](README.zh-Hans.md)
 
-Teachers often have to switch repeatedly between lesson plans, slides, and classroom flow management. EduNode unifies this work in a single structured canvas, with an Agent architecture that supports the full workflow from planning to delivery.
+EduNode is a native pedagogical-graph workspace for teachers. It turns lesson planning into a structured canvas where course intent, instructional moves, assessment evidence, and delivery artifacts can be designed in one place instead of being scattered across disconnected documents.
 
-In EduNode, a course is decomposed into atomic units such as knowledge points, teaching tools, and assessment nodes. Teaching flow can then be clearly organized, connected, and iterated.
-
-In the early stage, AI does not replace teachers; it supports thinking. Based on course context, EduNode recommends suitable educational models and generates structural templates so teachers do not start from a blank page.
-
-In the middle stage, AI accelerates production. With style transfer and structure reuse, teachers can quickly generate consistent lesson plans and slides, moving from node canvas to teaching materials in one flow.
-
-In the classroom stage, EduNode synchronizes progress, slides, and nodes in real time, making formative assessment executable and trackable.
-
-Behind this experience is a continuously optimized Agent system, iterated across cycles and informed by multidisciplinary education experts. EduNode aims to reduce repetitive workload and return teaching to its essence: knowledge-centered, student-serving practice.
+Rather than positioning AI as a detached chat layer, EduNode keeps teachers in control of structure and judgment. Agents help recommend graph changes, fill gaps, align lesson plans to reference templates, and refine delivery materials, while the instructional logic remains explicit and reviewable.
 
 [![EduNode Demo Video](https://vumbnail.com/1184658322.jpg)](https://vimeo.com/1184658322)
 
 > Click the preview image to watch the full demo on Vimeo.
 
-### Repository Layout
+## Why EduNode
 
-- `EduNode/`: App source code.
-- `EduNodeTests/`: Unit and integration tests.
-- `EduNodeUITests/`: UI tests.
-- `Scripts/`: Smoke and helper scripts.
-- `GNodeKit`: Fetched as a remote Swift Package dependency from GitHub.
+- Structure before generation: courses are modeled as a pedagogical graph of knowledge nodes, toolkit or activity nodes, evaluation nodes, and live state.
+- Teacher-governed AI: agent actions are proposed, reviewable, and reversible instead of silently rewriting the course.
+- One workspace across the teaching lifecycle: planning, materialization, presentation, and classroom execution stay connected.
+- Native app, not a web dashboard: EduNode is built as a SwiftUI + SwiftData application for iPad and Mac Catalyst workflows.
 
-### Requirements
+## Current Product Surface
 
-- macOS with Xcode 16+ (iOS SDK 17+).
-- Swift Package dependency resolution enabled in Xcode.
+- Structured course intake with grade range, goals, learner profile, teaching team, resource constraints, and pedagogical-model selection.
+- A graph canvas built on GNodeKit, where knowledge, toolkit, and evaluation nodes can be connected as a directed instructional flow.
+- Agent-assisted canvas co-building with visual change review, apply or dismiss controls, and undo support.
+- A Lesson Plan Workbench that can parse a reference PDF, detect missing instructional information, ask follow-up questions, generate an aligned lesson plan, and export Markdown or PDF.
+- A presentation pipeline that derives courseware slides from the pedagogical graph, supports styling and AI-assisted slide-copy refinement, and exports HTML or PDF.
+- Classroom-facing flow tracking and evaluation support, including progress state, presentation mode, and fine-grained assessment indicators.
+- Onboarding and guided tutorial flows for first-time users.
 
-### Quick Start
+## Architecture at a Glance
 
-1. Open `EduNode.xcodeproj` in Xcode.
-2. Select the `EduNode` scheme.
-3. Build and run.
+- App architecture: single native SwiftUI application with SwiftData persistence.
+- Graph engine: GNodeKit via Swift Package Manager.
+- LLM integration: direct OpenAI-compatible API calls configured inside the app.
+- Reference-template parsing: MinerU, loaded from runtime `.env` settings for parser access.
+- Artifact outputs: graph-grounded lesson plans and presentation decks rendered as Markdown, HTML, and PDF.
+- Phase-1 delivery strategy - service-oriented monolith: to control early development cost and keep iteration speed high, the current Agent backend is implemented directly in Swift inside the application. In the next phase, these boundaries can be lifted into independent API services and the current in-process calls can be replaced with network requests.
 
-### Environment Configuration
+EduNode does not require a custom backend to run locally. External services are used only when you enable remote LLM calls or reference-PDF parsing.
 
-The app and smoke tests can load runtime configuration from `EduNode/.env`.
+## Requirements
 
-1. Copy `EduNode/.env.example` to `EduNode/.env`.
-2. Fill the required values.
+- macOS with Xcode 16 or newer.
+- iOS 17.6+ SDK support for the app target.
+- macOS 15+ if you use the Mac Catalyst workflow.
+- Network access if you want remote LLM calls or MinerU parsing.
+- Swift Package resolution enabled in Xcode.
 
-Key variables:
+## Getting Started
 
+1. Clone the repository.
+2. Open `EduNode.xcodeproj` in Xcode.
+3. Let Xcode resolve the `GNodeKit` Swift Package dependency.
+4. Select the `EduNode` scheme.
+5. Build and run on iPad Simulator, a connected iPad, or Mac Catalyst.
+
+## Runtime Configuration
+
+### In-app model settings
+
+LLM settings for the application are configured inside EduNode's Model Settings UI, not from `EduNode/.env`.
+
+Configure:
+
+- provider base URL
+- model name
+- API key
+- temperature
+- max tokens
+- timeout
+- optional extra system prompt
+
+API keys configured in the app are stored through Keychain-backed settings.
+
+### `.env` for reference parsing and smoke scripts
+
+For reference-template parsing and CLI smoke workflows, copy:
+
+```bash
+cp EduNode/.env.example EduNode/.env
+```
+
+Important variables include:
+
+- `MINERU_API_TOKEN`
+- `MINERU_API_BASE_URL`
+- `MINERU_APPLY_UPLOAD_URL`
+- `MINERU_BATCH_RESULT_URL_PREFIX`
 - `EDUNODE_LLM_BASE_URL`
 - `EDUNODE_LLM_MODEL`
 - `EDUNODE_LLM_API_KEY`
-- `EDUNODE_REFERENCE_TEMPLATE_PATH` (optional absolute path to a local reference PDF)
-- `MINERU_API_TOKEN` (optional, for MinerU-based parsing)
+- `EDUNODE_REFERENCE_TEMPLATE_PATH`
 
-### Running Tests
+Notes:
 
-In Xcode: Product -> Test
+- The app-side reference parser looks for `.env` in the app's Documents directory or bundled resources.
+- The CLI smoke scripts read `EduNode/.env` directly from the repository.
 
-From CLI:
+## Local Verification
+
+Run tests in Xcode:
+
+- `Product -> Test`
+
+Command-line example:
 
 ```bash
 xcodebuild -project EduNode.xcodeproj -scheme EduNode -destination 'platform=iOS Simulator,name=iPhone 16' test
 ```
 
-### Running Smoke Scripts
+Focused local verification scripts are also included under `Scripts/`, primarily for parser inspection, agent-logic smoke checks, and running the core test target.
 
-```bash
-cd Scripts
-./run_agent_logic_smoke.sh
-```
+Current automated coverage is strongest around agent logic, template parsing, compliance checking, and lesson-plan materialization.
 
-To run smoke flows with a real local template:
+## Dependency Notes
 
-```bash
-export EDUNODE_REFERENCE_TEMPLATE_PATH='/absolute/path/to/reference-template.pdf'
-```
+EduNode resolves `GNodeKit` as a remote Swift Package:
 
-### GNodeKit Dependency Strategy
+- Repository: `https://github.com/EuanTop/GNodeKit.git`
+- Integration mode: Swift Package Manager
 
-This repository uses remote dependency mode only: `EduNode` fetches `GNodeKit` via Swift Package Manager from GitHub.
+## License
 
-- Repository URL: `https://github.com/EuanTop/GNodeKit.git`
-- Current rule: track `main` branch (switch back to semantic version once stable tags are published)
-- After cloning, users can resolve and download dependencies directly in Xcode
-
-### Security Notes
-
-- Do not commit `EduNode/.env`.
-- Rotate any real API key that may have been exposed.
-- Keep placeholders only in `EduNode/.env.example`.
-
-### Pre-Push Checklist
-
-- Ensure `git status` has no secret-bearing files.
-- Ensure `EduNode/.env` is ignored.
-- Run the tests/smokes you rely on before pushing.
+This repository is released under the PolyForm Noncommercial 1.0.0 license. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
