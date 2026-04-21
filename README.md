@@ -6,9 +6,9 @@ EduNode is a native pedagogical-graph workspace for teachers. It turns lesson pl
 
 Rather than positioning AI as a detached chat layer, EduNode keeps teachers in control of structure and judgment. Agents help recommend graph changes, fill gaps, align lesson plans to reference templates, and refine delivery materials, while the instructional logic remains explicit and reviewable.
 
-[![EduNode Demo Video](https://vumbnail.com/1184658322.jpg)](https://vimeo.com/1184658322)
+<video src="https://github.com/user-attachments/assets/798fb6d6-a0b0-4691-b222-eb1e468beb5b" controls playsinline width="100%"></video>
 
-> Click the preview image to watch the full demo on Vimeo.
+> [Watch on Vimeo](https://vimeo.com/1184658322)
 
 ## Why EduNode
 
