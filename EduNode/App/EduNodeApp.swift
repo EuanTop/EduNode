@@ -12,9 +12,19 @@ import TipKit
 import UIKit
 #endif
 
+extension Notification.Name {
+    static let eduNodeCommandNewCourse = Notification.Name("edunode.command.newCourse")
+    static let eduNodeCommandImportCourse = Notification.Name("edunode.command.importCourse")
+    static let eduNodeCommandOpenDocumentation = Notification.Name("edunode.command.openDocumentation")
+    static let eduNodeCommandOpenTutorialGuide = Notification.Name("edunode.command.openTutorialGuide")
+    static let eduNodeCommandOpenAccount = Notification.Name("edunode.command.openAccount")
+}
+
 @main
 @MainActor
 struct EduNodeApp: App {
+    @State private var didConfigureWindowChrome = false
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             Item.self,
@@ -24,8 +34,6 @@ struct EduNodeApp: App {
     }()
 
     init() {
-        print("EDUNODE_TEST_PRINT_001")
-        NSLog("%@", "EDUNODE_TEST_PRINT_001")
         bootLog("EduNodeApp.init")
         try? Tips.configure()
         EduNodePluginConfig.configureIfNeeded()
@@ -37,10 +45,41 @@ struct EduNodeApp: App {
                 .preferredColorScheme(.dark)
                 .onAppear {
                     bootLog("WindowGroup.onAppear")
-                    configureCatalystTitlebarIfNeeded()
+                    configureWindowChromeOnceIfNeeded()
                 }
         }
         .modelContainer(sharedModelContainer)
+        .commands {
+            CommandMenu("Course") {
+                Button("New Course") {
+                    NotificationCenter.default.post(name: .eduNodeCommandNewCourse, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: .command)
+
+                Button("Import Course…") {
+                    NotificationCenter.default.post(name: .eduNodeCommandImportCourse, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+            }
+
+            CommandMenu("Guides") {
+                Button("Documentation") {
+                    NotificationCenter.default.post(name: .eduNodeCommandOpenDocumentation, object: nil)
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+
+                Button("Tutorial Guide") {
+                    NotificationCenter.default.post(name: .eduNodeCommandOpenTutorialGuide, object: nil)
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+            }
+
+            CommandMenu("Account") {
+                Button("Account…") {
+                    NotificationCenter.default.post(name: .eduNodeCommandOpenAccount, object: nil)
+                }
+            }
+        }
     }
 
     private func bootLog(_ message: String) {
@@ -123,12 +162,33 @@ struct EduNodeApp: App {
     }
 
     @MainActor
-    private func configureCatalystTitlebarIfNeeded() {
-        #if targetEnvironment(macCatalyst)
+    private func configureWindowChromeOnceIfNeeded() {
+        guard !didConfigureWindowChrome else { return }
+        didConfigureWindowChrome = true
+
+        configureWindowChromeIfNeeded()
+        DispatchQueue.main.async {
+            configureWindowChromeIfNeeded()
+        }
+    }
+
+    @MainActor
+    private func configureWindowChromeIfNeeded() {
+        #if canImport(UIKit)
+        let shouldClearWindowTitle = ProcessInfo.processInfo.isiOSAppOnMac
+
         for case let windowScene as UIWindowScene in UIApplication.shared.connectedScenes {
-            guard let titlebar = windowScene.titlebar else { continue }
-            titlebar.titleVisibility = .hidden
-            titlebar.toolbar = nil
+            if shouldClearWindowTitle {
+                windowScene.title = ""
+            }
+
+            #if targetEnvironment(macCatalyst)
+            if let titlebar = windowScene.titlebar {
+                titlebar.titleVisibility = .hidden
+                titlebar.toolbar = nil
+            }
+            windowScene.title = ""
+            #endif
         }
         #endif
     }

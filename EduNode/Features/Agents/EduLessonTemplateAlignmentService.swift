@@ -3,6 +3,7 @@ import Foundation
 enum EduLessonTemplateAlignmentService {
     static func align(
         markdown candidateMarkdown: String,
+        service: EduBackendLLMService,
         settings: EduAgentProviderSettings,
         file: GNodeWorkspaceFile,
         referenceDocument: EduLessonReferenceDocument,
@@ -34,7 +35,6 @@ enum EduLessonTemplateAlignmentService {
         }
 
         do {
-            let client = EduOpenAICompatibleClient(settings: settings)
             let repairMessages = EduLessonPlanMaterializationPromptBuilder.repairMessages(
                 settings: settings,
                 file: file,
@@ -51,7 +51,7 @@ enum EduLessonTemplateAlignmentService {
                 traceLines.append(message.content)
             }
             trace?(traceLines.joined(separator: "\n"))
-            let repairReply = try await client.complete(
+            let repairReply = try await service.complete(
                 messages: repairMessages
             )
             trace?("[alignment.response] chars=\(repairReply.count)\n\(repairReply)")

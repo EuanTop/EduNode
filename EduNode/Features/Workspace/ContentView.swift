@@ -30,7 +30,7 @@ struct ContentView: View {
     @AppStorage("edunode.tutorial.explore.completed.v1") var didCompleteExplore = false
 
     @State var selectedFileID: UUID?
-    @State var splitVisibility: NavigationSplitViewVisibility = .automatic
+    @State var splitVisibility: NavigationSplitViewVisibility = .all
     @State var showingCreateCourseSheet = false
     @State var creationDraft = CourseCreationDraft()
     @State var showingStudentRosterEdit = false
@@ -43,6 +43,14 @@ struct ContentView: View {
     @State var docsPreferredNodeType: String?
     @State var showingOnboardingGuide = false
     @State var showingSidebarImporter = false
+    @State var showingAccountSheet = false
+    @State var showingStartupAccountGate = false
+    @State var didResolveStartupAccountGate = false
+    @State var backendSessionSnapshot: EduBackendSession?
+    @State var workspaceToolbarExportDocument: EduWorkspaceToolbarExportDocument?
+    @State var workspaceToolbarExportContentType: UTType = .json
+    @State var workspaceToolbarExportFilename = "graph.gnode"
+    @State var showingWorkspaceToolbarExporter = false
     @State var lessonPlanSetupPayload: EduLessonPlanSetupPayload?
     @State var lessonPlanPreviewPayload: EduLessonPlanPreviewPayload?
     @State var presentationPreviewPayload: EduPresentationPreviewPayload?
@@ -118,6 +126,116 @@ struct ContentView: View {
     }
     let presentationFilmstripHeight: CGFloat = 186
     let tutorialRootCoordinateSpaceName = "TutorialRootCoordinateSpace"
+
+    private var sidebarChromeBackground: Color {
+        Color(white: 0.12)
+    }
+
+    private var sidebarLayoutDebugEnabled: Bool {
+        false
+    }
+
+    private var workspaceSidebarColumnWidth: CGFloat {
+        #if targetEnvironment(macCatalyst)
+        return 320
+        #else
+        return 320
+        #endif
+    }
+
+    var workspaceSidebarToggleLeadingPadding: CGFloat {
+        #if targetEnvironment(macCatalyst)
+        return 112
+        #else
+        14
+        #endif
+    }
+
+    private var workspaceSidebarHeaderLeadingPadding: CGFloat {
+        workspaceSidebarToggleLeadingPadding
+    }
+
+    private var workspaceTopToolbarPadding: CGFloat {
+        #if targetEnvironment(macCatalyst)
+        return 18
+        #else
+        return 8
+        #endif
+    }
+
+    var workspaceTopToolbarButtonHeight: CGFloat {
+        #if targetEnvironment(macCatalyst)
+        return 36
+        #else
+        return 32
+        #endif
+    }
+
+    private var workspaceTopRightToolbarButtonWidth: CGFloat {
+        #if targetEnvironment(macCatalyst)
+        return 106
+        #else
+        return 112
+        #endif
+    }
+
+    private var workspaceTopRightToolbarSpacing: CGFloat {
+        #if targetEnvironment(macCatalyst)
+        return 8
+        #else
+        return 10
+        #endif
+    }
+
+    private var workspaceTopRightToolbarTrailingPadding: CGFloat {
+        20
+    }
+
+    private var workspaceTopRightToolbarReservedWidth: CGFloat {
+        (workspaceTopRightToolbarButtonWidth * 3)
+            + (workspaceTopRightToolbarSpacing * 2)
+            + workspaceTopRightToolbarTrailingPadding
+            + 18
+    }
+
+    var usesCustomWorkspaceTopToolbar: Bool {
+        #if targetEnvironment(macCatalyst)
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    private var courseCreationSheetMinHeight: CGFloat? {
+        #if targetEnvironment(macCatalyst)
+        return 760
+        #else
+        return nil
+        #endif
+    }
+
+    private func stableWorkspaceTopInset(_ rawTopInset: CGFloat) -> CGFloat {
+        #if targetEnvironment(macCatalyst)
+        // Catalyst recalculates the titlebar/safe-area after our custom window
+        // chrome is applied. Keeping the workspace chrome independent from that
+        // transient value prevents the sidebar from jumping during launch.
+        return 0
+        #else
+        return rawTopInset
+        #endif
+    }
+
+    private var showsSidebarUtilityHeader: Bool {
+        return true
+    }
+
+    var supportsInlineAccountEntry: Bool {
+        #if targetEnvironment(macCatalyst)
+        return false
+        #else
+        return true
+        #endif
+    }
 
     struct ResolvedPresentationSelection {
         let group: EduPresentationSlideGroup
@@ -479,9 +597,11 @@ struct ContentView: View {
     }
 
     var body: some View {
-        coreLayout
+        rootView
         .onAppear {
             persistenceLog("ContentView.onAppear files=\(workspaceFiles.count)", force: true)
+            refreshBackendSessionSnapshot()
+            resolveStartupAccountGateIfNeeded()
             seedDefaultCourseIfNeeded()
             syncSelectedWorkspaceFile()
             hydratePresentationStateFromStoreIfNeeded()
@@ -491,9 +611,6 @@ struct ContentView: View {
                 withAnimation(.easeInOut(duration: 0.86).repeatForever(autoreverses: true)) {
                     tutorialHintPulsePhase = true
                 }
-            }
-            if !didCompleteOnboarding {
-                showingOnboardingGuide = true
             }
         }
         .onChange(of: workspaceFiles.map(\.id)) { _, _ in
@@ -536,6 +653,10 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             persistenceLog("scenePhase -> \(String(describing: newPhase))", force: true)
+            if newPhase == .active {
+                refreshBackendSessionSnapshot()
+                resolveStartupAccountGateIfNeeded()
+            }
             if newPhase == .inactive || newPhase == .background {
                 persistAllPresentationStates()
             }
@@ -555,63 +676,78 @@ struct ContentView: View {
         .onChange(of: presentationPreviewPayload?.id) { _, _ in
             handleTutorialPreviewStateChange()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .eduNodeCommandNewCourse)) { _ in
+            presentCreateCourseSheet()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .eduNodeCommandImportCourse)) { _ in
+            showingSidebarImporter = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .eduNodeCommandOpenDocumentation)) { _ in
+            showingDocs = true
+            handleDocsOpenedDuringTutorial()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .eduNodeCommandOpenTutorialGuide)) { _ in
+            showingOnboardingGuide = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .eduNodeCommandOpenAccount)) { _ in
+            showingAccountSheet = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .eduNodeBackendSessionDidChange)) { _ in
+            refreshBackendSessionSnapshot()
+        }
+    }
+
+    @ViewBuilder
+    var rootView: some View {
+        if !didResolveStartupAccountGate {
+            startupLaunchPlaceholder
+        } else if showingStartupAccountGate {
+            startupAccountGateView
+        } else {
+            coreLayout
+        }
+    }
+
+    var startupLaunchPlaceholder: some View {
+        ZStack {
+            Color(white: 0.08)
+                .ignoresSafeArea()
+            ProgressView()
+                .tint(.white)
+                .controlSize(.large)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    var startupAccountGateView: some View {
+        EduAgentSettingsSheet(
+            onSaved: {
+                showingStartupAccountGate = false
+                didResolveStartupAccountGate = true
+                refreshBackendSessionSnapshot()
+            },
+            allowsContinueWithoutAccount: true,
+            onContinueWithoutAccount: {
+                showingStartupAccountGate = false
+                didResolveStartupAccountGate = true
+                refreshBackendSessionSnapshot()
+            }
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .preferredColorScheme(.dark)
     }
 
     var coreLayout: some View {
-        GeometryReader { rootGeometry in
-            ZStack {
-                NavigationSplitView(columnVisibility: $splitVisibility) {
-                    sidebarView
-                } detail: {
-                    let topToolbarPadding = rootGeometry.safeAreaInsets.top + 8
-                    detailView(
-                        toolbarTopPadding: topToolbarPadding
-                    )
-                }
-                .navigationSplitViewStyle(.balanced)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                // Custom sidebar toggle (system nav bar is fully hidden to avoid
-                // its invisible hit area blocking custom toolbar taps on iPadOS).
-                if splitVisibility == .detailOnly {
-                    VStack(spacing: 0) {
-                        HStack(spacing: 0) {
-                            sidebarToggleButton
-                                .padding(.leading, 20)
-                            Spacer()
-                        }
-                        .padding(.top, rootGeometry.safeAreaInsets.top + 8)
-                        Spacer()
-                    }
-                    .ignoresSafeArea(edges: .top)
-                    .zIndex(5000)
-                }
-
-                if presentationModeLoadingFileID != nil {
-                    presentationPreparingOverlay
-                        .zIndex(6000)
-                }
-
-                if showingOnboardingGuide {
-                    onboardingGuideOverlay
-                        .zIndex(6100)
-                }
-
-                if shouldShowTutorialDesignButtonSpotlight {
-                    tutorialDesignButtonSpotlightOverlay()
-                        .zIndex(6040)
-                        .transition(.opacity)
-                }
-
-                if activeTutorial != nil
-                    && !isTutorialInDocsPhase
-                    && !showingCreateCourseSheet {
-                    tutorialCoachMarkOverlay
-                        .zIndex(6050)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+        Group {
+            #if targetEnvironment(macCatalyst)
+            workspaceChrome(topSafeInset: 0)
+                .ignoresSafeArea(.container, edges: .top)
+            #else
+            GeometryReader { rootGeometry in
+                workspaceChrome(topSafeInset: stableWorkspaceTopInset(rootGeometry.safeAreaInsets.top))
             }
-            .coordinateSpace(name: tutorialRootCoordinateSpaceName)
+            .ignoresSafeArea(.container, edges: .top)
+            #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingCreateCourseSheet) {
@@ -626,6 +762,7 @@ struct ContentView: View {
                 },
                 requiredModelID: activeTutorial == .practice ? tutorialPracticeRequiredModelID : nil
             )
+            .frame(minHeight: courseCreationSheetMinHeight)
             .presentationDetents([.large])
             .preferredColorScheme(.dark)
         }
@@ -644,6 +781,7 @@ struct ContentView: View {
                     saveStudentRoster(newRoster)
                 }
             )
+            .frame(minHeight: courseCreationSheetMinHeight)
             .presentationDetents([.large])
             .preferredColorScheme(.dark)
         }
@@ -659,6 +797,7 @@ struct ContentView: View {
                 },
                 isEditing: true
             )
+            .frame(minHeight: courseCreationSheetMinHeight)
             .presentationDetents([.large])
             .preferredColorScheme(.dark)
         }
@@ -678,6 +817,17 @@ struct ContentView: View {
             case .failure:
                 break
             }
+        }
+        .sheet(
+            isPresented: $showingAccountSheet,
+            onDismiss: { refreshBackendSessionSnapshot() }
+        ) {
+            EduAgentSettingsSheet(
+                onSaved: {
+                    refreshBackendSessionSnapshot()
+                }
+            )
+            .preferredColorScheme(.dark)
         }
         .fullScreenCover(isPresented: $showingDocs) {
             docsContent
@@ -733,73 +883,380 @@ struct ContentView: View {
                 Text(String(format: S("flow.confirm.message"), step.title(S)))
             }
         }
+        .fileExporter(
+            isPresented: $showingWorkspaceToolbarExporter,
+            document: workspaceToolbarExportDocument,
+            contentType: workspaceToolbarExportContentType,
+            defaultFilename: workspaceToolbarExportFilename
+        ) { _ in
+            workspaceToolbarExportDocument = nil
+        }
     }
 
-    var sidebarView: some View {
-        List(selection: $selectedFileID) {
-            ForEach(workspaceFiles, id: \.id) { file in
-                sidebarFileRow(file)
-                .tag(file.id as UUID?)
-                .contextMenu {
-                    Button(role: .destructive) {
-                        deleteWorkspaceFile(file)
-                    } label: {
-                        Label(S("app.files.delete"), systemImage: "trash")
-                    }
+    private func workspaceChrome(topSafeInset: CGFloat) -> some View {
+        ZStack {
+            #if targetEnvironment(macCatalyst)
+            HStack(spacing: 0) {
+                if splitVisibility != .detailOnly {
+                    sidebarView(topInset: topSafeInset)
+                        .frame(width: workspaceSidebarColumnWidth)
+                        .zIndex(30)
+
+                    Rectangle()
+                        .fill(Color.white.opacity(0.08))
+                        .frame(width: 1)
+                        .zIndex(29)
                 }
-                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                    Button(role: .destructive) {
-                        deleteWorkspaceFile(file)
-                    } label: {
-                        Label(S("app.files.delete"), systemImage: "trash")
+
+                detailView(toolbarTopPadding: topSafeInset + workspaceTopToolbarPadding)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .zIndex(0)
+            }
+            .background(Color(white: 0.1))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            #else
+            NavigationSplitView(columnVisibility: $splitVisibility) {
+                sidebarView(topInset: topSafeInset)
+                    .navigationSplitViewColumnWidth(
+                        min: workspaceSidebarColumnWidth,
+                        ideal: workspaceSidebarColumnWidth,
+                        max: workspaceSidebarColumnWidth
+                    )
+            } detail: {
+                detailView(toolbarTopPadding: topSafeInset + workspaceTopToolbarPadding)
+            }
+            .navigationSplitViewStyle(.balanced)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            #endif
+
+            // Custom sidebar toggle (system nav bar is fully hidden to avoid
+            // its invisible hit area blocking custom toolbar taps on iPadOS).
+            if splitVisibility == .detailOnly {
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        sidebarToggleButton
+                            .padding(.leading, workspaceSidebarToggleLeadingPadding)
+                        Spacer()
                     }
+                    .padding(.top, topSafeInset + workspaceTopToolbarPadding)
+                    Spacer()
                 }
+                .ignoresSafeArea(edges: .top)
+                .zIndex(5000)
             }
 
+            if presentationModeLoadingFileID != nil {
+                presentationPreparingOverlay
+                    .zIndex(6000)
+            }
+
+            if showingOnboardingGuide {
+                onboardingGuideOverlay
+                    .zIndex(6100)
+            }
+
+            if shouldShowTutorialDesignButtonSpotlight {
+                tutorialDesignButtonSpotlightOverlay()
+                    .zIndex(6040)
+                    .transition(.opacity)
+            }
+
+            if activeTutorial != nil
+                && !isTutorialInDocsPhase
+                && !showingCreateCourseSheet {
+                tutorialCoachMarkOverlay
+                    .zIndex(6050)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
-        .navigationTitle(S("app.files.title"))
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                HStack(spacing: 4) {
-                    Button {
-                        showingDocs = true
-                        handleDocsOpenedDuringTutorial()
-                    } label: {
-                        Label(S("app.sidebar.docs"), systemImage: "book.closed")
-                    }
+        .coordinateSpace(name: tutorialRootCoordinateSpaceName)
+    }
 
-                    Button {
-                        showingOnboardingGuide = true
-                    } label: {
-                        Label(
-                            isChineseUI() ? "教程引导" : "Tutorial Guide",
-                            systemImage: "questionmark.circle"
-                        )
+    func sidebarView(topInset: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            if showsSidebarUtilityHeader {
+                sidebarHeaderBar(topInset: topInset)
+            }
+
+            #if targetEnvironment(macCatalyst)
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(workspaceFiles, id: \.id) { file in
+                        Button {
+                            selectedFileID = file.id
+                        } label: {
+                            sidebarFileRow(file)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(selectedFileID == file.id ? Color.accentColor.opacity(0.28) : Color.clear)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                deleteWorkspaceFile(file)
+                            } label: {
+                                Label(S("app.files.delete"), systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+            .background(sidebarLayoutDebugEnabled ? Color.blue.opacity(0.22) : sidebarChromeBackground)
+            #else
+            List(selection: $selectedFileID) {
+                ForEach(workspaceFiles, id: \.id) { file in
+                    sidebarFileRow(file)
+                    .tag(file.id as UUID?)
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            deleteWorkspaceFile(file)
+                        } label: {
+                            Label(S("app.files.delete"), systemImage: "trash")
+                        }
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            deleteWorkspaceFile(file)
+                        } label: {
+                            Label(S("app.files.delete"), systemImage: "trash")
+                        }
                     }
                 }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(sidebarLayoutDebugEnabled ? Color.blue.opacity(0.22) : sidebarChromeBackground)
+            #endif
+        }
+        .frame(width: workspaceSidebarColumnWidth)
+        .background(sidebarLayoutDebugEnabled ? Color.red.opacity(0.16) : sidebarChromeBackground)
+        .toolbar(.hidden, for: .navigationBar)
+    }
 
-            ToolbarItem(placement: .topBarTrailing) {
+    private func sidebarHeaderBar(topInset: CGFloat) -> some View {
+        HStack(spacing: 10) {
+            sidebarVisibilityButton(
+                systemImage: "sidebar.left",
+                accessibilityLabel: isChineseUI() ? "隐藏侧栏" : "Hide Sidebar"
+            ) {
+                withAnimation { splitVisibility = .detailOnly }
+            }
+
+            sidebarCommandButtonGroup
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, workspaceSidebarHeaderLeadingPadding)
+        .padding(.trailing, 14)
+        .padding(.top, topInset + workspaceTopToolbarPadding)
+        .padding(.bottom, 10)
+        .background(sidebarLayoutDebugEnabled ? Color.green.opacity(0.28) : sidebarChromeBackground)
+    }
+
+    private var sidebarCommandButtonGroup: some View {
+        HStack(spacing: 10) {
+            Button {
+                showingDocs = true
+                handleDocsOpenedDuringTutorial()
+            } label: {
+                sidebarHeaderIconButton(systemImage: "book.closed")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(S("app.sidebar.docs"))
+
+            Button {
+                showingOnboardingGuide = true
+            } label: {
+                sidebarHeaderIconButton(systemImage: "questionmark.circle")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isChineseUI() ? "说明" : "Guide")
+
+            Menu {
                 Button {
                     presentCreateCourseSheet()
                 } label: {
                     Label(S("app.files.newCourse"), systemImage: "plus")
                 }
-                .contextMenu {
+
+                Button {
+                    showingSidebarImporter = true
+                } label: {
+                    Label(S("app.files.import"), systemImage: "square.and.arrow.down")
+                }
+            } label: {
+                sidebarHeaderIconButton(systemImage: "plus")
+            }
+            .menuStyle(.button)
+            .accessibilityLabel(S("app.files.newCourse"))
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func sidebarVisibilityButton(
+        systemImage: String,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: workspaceTopToolbarButtonHeight, height: workspaceTopToolbarButtonHeight)
+                .foregroundStyle(.white.opacity(0.92))
+                .background(Color.white.opacity(0.07), in: Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func sidebarHeaderIconButton(systemImage: String) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 14, weight: .semibold))
+            .frame(width: workspaceTopToolbarButtonHeight, height: workspaceTopToolbarButtonHeight)
+        .foregroundStyle(.white.opacity(0.92))
+        .background(Color.white.opacity(0.07), in: Circle())
+        .overlay(
+            Circle()
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func workspaceTopRightToolbar(file: GNodeWorkspaceFile, topPadding: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: workspaceTopRightToolbarSpacing) {
+                Spacer(minLength: 0)
+
+                workspaceTopToolbarButton(
+                    title: isChineseUI() ? "清空" : "Clear",
+                    systemImage: "trash",
+                    accent: .red,
+                    width: workspaceTopRightToolbarButtonWidth
+                ) {
+                    persistWorkspaceFileData(id: file.id, data: emptyDocumentData())
+                }
+
+                Menu {
                     Button {
-                        presentCreateCourseSheet()
+                        prepareWorkspaceToolbarExport(
+                            data: file.data,
+                            contentType: .json,
+                            defaultFilename: "\(sanitizedExportBaseName(file.name)).gnode"
+                        )
                     } label: {
-                        Label(S("app.files.newCourse"), systemImage: "plus")
+                        Label("GNode", systemImage: "link.badge.plus")
                     }
 
-                    Button {
-                        showingSidebarImporter = true
-                    } label: {
-                        Label(S("app.files.import"), systemImage: "square.and.arrow.down")
+                    ForEach(editorExportActions(for: file), id: \.id) { action in
+                        Button {
+                            guard let data = action.buildData(file.data) else { return }
+                            prepareWorkspaceToolbarExport(
+                                data: data,
+                                contentType: action.contentType,
+                                defaultFilename: action.defaultFilename
+                            )
+                        } label: {
+                            Label(action.title, systemImage: action.systemImage)
+                        }
                     }
+                } label: {
+                    workspaceTopToolbarLabel(
+                        title: isChineseUI() ? "导出" : "Export",
+                        systemImage: "square.and.arrow.up",
+                        accent: .green,
+                        width: workspaceTopRightToolbarButtonWidth
+                    )
+                }
+                .buttonStyle(.plain)
+
+                workspaceTopToolbarButton(
+                    title: S("app.presentation.button"),
+                    systemImage: "play.rectangle.on.rectangle",
+                    accent: .orange,
+                    width: workspaceTopRightToolbarButtonWidth
+                ) {
+                    handlePresentationButtonTap(for: file)
                 }
             }
+            .padding(.top, topPadding)
+            .padding(.trailing, workspaceTopRightToolbarTrailingPadding)
+
+            Spacer(minLength: 0)
         }
+    }
+
+    private func workspaceTopToolbarButton(
+        title: String,
+        systemImage: String,
+        accent: Color,
+        width: CGFloat,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            workspaceTopToolbarLabel(
+                title: title,
+                systemImage: systemImage,
+                accent: accent,
+                width: width
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func workspaceTopToolbarLabel(
+        title: String,
+        systemImage: String,
+        accent: Color,
+        width: CGFloat
+    ) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(accent)
+
+            Text(title)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white.opacity(0.92))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+        }
+        .padding(.horizontal, 8)
+        .frame(width: width, height: workspaceTopToolbarButtonHeight)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func prepareWorkspaceToolbarExport(
+        data: Data,
+        contentType: UTType,
+        defaultFilename: String
+    ) {
+        workspaceToolbarExportDocument = EduWorkspaceToolbarExportDocument(data: data)
+        workspaceToolbarExportContentType = contentType
+        workspaceToolbarExportFilename = defaultFilename
+        showingWorkspaceToolbarExporter = true
+    }
+
+    private func refreshBackendSessionSnapshot() {
+        backendSessionSnapshot = EduBackendSessionStore.load()
+    }
+
+    private func resolveStartupAccountGateIfNeeded() {
+        guard !didResolveStartupAccountGate else { return }
+        showingStartupAccountGate = backendSessionSnapshot == nil
+        didResolveStartupAccountGate = true
     }
 
     @ViewBuilder
@@ -823,14 +1280,16 @@ struct ContentView: View {
                         documentID: file.id,
                         documentData: previewDocumentData ?? file.data,
                         toolbarLeadingPadding: 20 + topToolbarLeadingReservedWidth,
-                        toolbarTrailingPadding: 20,
+                        toolbarTrailingPadding: usesCustomWorkspaceTopToolbar
+                            ? workspaceTopRightToolbarReservedWidth
+                            : 20,
                         toolbarTopPadding: toolbarTopPadding,
                         showImportButton: false,
-                        showClearButton: !isPresentationModeActive,
-                        showExportButton: !isPresentationModeActive,
+                        showClearButton: !isPresentationModeActive && !usesCustomWorkspaceTopToolbar,
+                        showExportButton: !isPresentationModeActive && !usesCustomWorkspaceTopToolbar,
                         showStatsOverlay: false,
                         exportActions: editorExportActions(for: file),
-                        toolbarActions: editorToolbarActions(for: file),
+                        toolbarActions: usesCustomWorkspaceTopToolbar ? [] : editorToolbarActions(for: file),
                         cameraRequest: cameraRequest,
                         selectionRequest: selectionRequest,
                         customNodeMenuSections: eduNodeMenuSections,
@@ -875,6 +1334,11 @@ struct ContentView: View {
                     .id(file.id)
                     .ignoresSafeArea(edges: [.top, .bottom])
                     .toolbar(.hidden, for: .navigationBar)
+
+                    if !isPresentationModeActive && usesCustomWorkspaceTopToolbar {
+                        workspaceTopRightToolbar(file: file, topPadding: toolbarTopPadding)
+                            .zIndex(2450)
+                    }
 
                     if isPresentationModeActive && !slideGroups.isEmpty {
                         presentationTrackingPanel(
@@ -927,7 +1391,9 @@ struct ContentView: View {
                         workspaceAgentSidebar(
                             file: file,
                             availableWidth: detailGeometry.size.width,
-                            topPadding: toolbarTopPadding
+                            topPadding: usesCustomWorkspaceTopToolbar
+                                ? toolbarTopPadding + workspaceTopToolbarButtonHeight + 14
+                                : toolbarTopPadding
                         )
                         .zIndex(2400)
                     }
@@ -980,7 +1446,7 @@ struct ContentView: View {
         if #available(iOS 17.0, macOS 14.0, *) {
             ZStack {
                 if let docsPreferredNodeType {
-                    NodeDocumentationView(
+                    EduDocumentationView(
                         selectedNodeType: docsPreferredNodeType,
                         onSelectionChange: { selectedType in
                             handleDocsSelectionDuringTutorial(selectedType)
@@ -994,15 +1460,15 @@ struct ContentView: View {
                         }
                     )
                 } else {
-                    NodeDocumentationView(
+                    EduDocumentationView(
+                        onSelectionChange: { selectedType in
+                            handleDocsSelectionDuringTutorial(selectedType)
+                        },
                         onClose: {
                             if isTutorialInDocsPhase {
                                 endTutorial(completed: false)
                             }
                             showingDocs = false
-                        },
-                        onSelectionChange: { selectedType in
-                            handleDocsSelectionDuringTutorial(selectedType)
                         }
                     )
                 }
@@ -1026,15 +1492,19 @@ struct ContentView: View {
             Color.black.opacity(0.56)
                 .ignoresSafeArea()
 
-            VStack(alignment: .leading, spacing: 14) {
-                onboardingHeaderSection(chinese: chinese)
-                onboardingStepsSection(chinese: chinese)
-                onboardingButtonsSection(chinese: chinese)
-                    .padding(.top, 4)
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    onboardingHeaderSection(chinese: chinese)
+                    onboardingStepsSection(chinese: chinese)
+                    onboardingButtonsSection(chinese: chinese)
+                        .padding(.top, 4)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 22)
+                .padding(.vertical, 20)
             }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 20)
             .frame(maxWidth: 640, alignment: .leading)
+            .frame(maxHeight: 560)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -1093,16 +1563,29 @@ struct ContentView: View {
     @ViewBuilder
     func onboardingButtonsSection(chinese: Bool) -> some View {
         VStack(spacing: 8) {
-            onboardingBasicsButton(chinese: chinese)
-            onboardingPracticeButton(chinese: chinese)
-            onboardingExploreButton(chinese: chinese)
+            ViewThatFits {
+                HStack(alignment: .center, spacing: 12) {
+                    onboardingBasicsButton(chinese: chinese)
+                    onboardingPracticeButton(chinese: chinese)
+                    onboardingExploreButton(chinese: chinese)
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
 
-            Button(chinese ? "稍后再看" : "Maybe Later") {
-                dismissOnboardingGuideForNow()
+                VStack(spacing: 8) {
+                    onboardingBasicsButton(chinese: chinese)
+                    onboardingPracticeButton(chinese: chinese)
+                    onboardingExploreButton(chinese: chinese)
+                }
             }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.white.opacity(0.76))
-            .buttonStyle(.plain)
+
+            Button {
+                dismissOnboardingGuideForNow()
+            } label: {
+                Text(chinese ? "稍后再看" : "Maybe Later")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+            }
+            .buttonStyle(EduAgentActionButtonStyle(variant: .secondary))
             .padding(.top, 4)
         }
     }
@@ -1124,9 +1607,11 @@ struct ContentView: View {
                      : (didCompleteBasics ? "Redo Basics" : "5-Min Basics"))
                     .font(.subheadline.weight(.semibold))
             }
-            .frame(maxWidth: .infinity, minHeight: 34)
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(EduAgentActionButtonStyle(variant: .primary))
+        .frame(minWidth: 168, maxWidth: .infinity)
     }
 
     func onboardingPracticeButton(chinese: Bool) -> some View {
@@ -1146,9 +1631,11 @@ struct ContentView: View {
                      : (didCompletePractice ? "Redo Practice" : "Practice"))
                     .font(.subheadline.weight(.semibold))
             }
-            .frame(maxWidth: .infinity, minHeight: 34)
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(EduAgentActionButtonStyle(variant: .secondary))
+        .frame(minWidth: 168, maxWidth: .infinity)
     }
 
     func onboardingExploreButton(chinese: Bool) -> some View {
@@ -1168,9 +1655,11 @@ struct ContentView: View {
                      : (didCompleteExplore ? "View Example Again" : "Explore Bird Example"))
                     .font(.subheadline.weight(.semibold))
             }
-            .frame(maxWidth: .infinity, minHeight: 34)
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(EduAgentActionButtonStyle(variant: .secondary))
+        .frame(minWidth: 168, maxWidth: .infinity)
     }
 
     @ViewBuilder
@@ -1515,4 +2004,25 @@ struct ContentView: View {
         return tutorialPracticeAutofillTextForCurrentStep(isChinese: isChineseUI()) != nil
     }
 
+}
+
+struct EduWorkspaceToolbarExportDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json, .plainText, .pdf] }
+
+    let data: Data
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        self.data = data
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
+    }
 }

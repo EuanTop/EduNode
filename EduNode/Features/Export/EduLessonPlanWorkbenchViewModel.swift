@@ -77,6 +77,29 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
         Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
     }
 
+    private var backendLLMService: EduBackendLLMService? {
+        EduBackendLLMService()
+    }
+
+    private var hasBackendSession: Bool {
+        EduBackendSessionStore.load() != nil
+    }
+
+    private var backendPromptSettings: EduAgentProviderSettings {
+        let cachedModel = EduBackendRuntimeStatusStore.load()?.activeModel
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return EduAgentProviderSettings(
+            providerName: "EduNode Backend",
+            baseURLString: EduBackendServiceConfig.loadOptional()?.baseURL.absoluteString ?? "backend",
+            model: cachedModel.isEmpty ? "backend-model" : cachedModel,
+            apiKey: "session",
+            temperature: 0.35,
+            maxTokens: 3200,
+            timeoutSeconds: 120,
+            additionalSystemPrompt: ""
+        )
+    }
+
     var previewMarkdown: String {
         let generated = generatedMarkdown?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let candidate = generated.isEmpty ? baselineMarkdown : generated
@@ -238,6 +261,14 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
         appendTrace(stage: "settings", detail: "reload from store")
         lastError = nil
         followUpSuggestionStatusByID = [:]
+        if let referenceAttachment,
+           referenceDocument == nil,
+           !isPreparingReference {
+            Task {
+                await prepareReferenceFlow(using: referenceAttachment)
+            }
+            return
+        }
         if let activeFollowUpItem {
             Task {
                 await prepareFollowUpSuggestionIfNeeded(for: activeFollowUpItem, force: true)
@@ -308,10 +339,10 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
             return
         }
 
-        let settings = EduAgentSettingsStore.load()
-        guard settings.isConfigured else {
-            appendTrace(stage: "send", detail: "blocked: settings not configured")
-            lastError = isChinese ? "请先配置 LLM 模型。" : "Configure the LLM first."
+        let settings = backendPromptSettings
+        guard let service = backendLLMService, hasBackendSession else {
+            appendTrace(stage: "send", detail: "blocked: backend unavailable")
+            lastError = isChinese ? "请先登录 EduNode 账户后再使用教案生成。" : "Sign in to your EduNode account before generating lesson plans."
             return
         }
 
@@ -327,6 +358,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
                 return
             }
             await generateReferenceGroundedDraft(
+                service: service,
                 settings: settings,
                 directive: trimmedInput
             )
@@ -335,6 +367,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
 
         guard !trimmedInput.isEmpty else { return }
         await reviseCurrentDraft(
+            service: service,
             settings: settings,
             request: trimmedInput
         )
@@ -347,8 +380,25 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
         lastError = nil
         appendTrace(stage: "reference", detail: "parse start file=\(attachment.fileName) bytes=\(attachment.data.count)")
 
+        guard hasBackendSession else {
+            isPreparingReference = false
+            lastError = isChinese ? "请先登录 EduNode 账户，再解析参考教案。" : "Sign in to your EduNode account before parsing the reference lesson plan."
+            conversation.append(
+                .init(
+                    role: .assistant,
+                    content: isChinese
+                        ? "当前已附加参考教案。登录 EduNode 账户后，系统就会继续学习这份参考教案的结构与文风。"
+                        : "A reference lesson plan is attached. Sign in to your EduNode account and the system will continue learning its structure and writing style."
+                )
+            )
+            return
+        }
+
         do {
-            let parsed = try await EduMinerUClient().parseReferencePDF(
+            guard let service = backendLLMService, hasBackendSession else {
+                throw EduBackendAPIError.authenticationRequired
+            }
+            let parsed = try await service.parseReferencePDF(
                 data: attachment.data,
                 fileName: attachment.fileName
             )
@@ -385,10 +435,10 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
             )
 
             if readiness.isReady {
-                let settings = EduAgentSettingsStore.load()
-                if settings.isConfigured {
+                if let service = backendLLMService, hasBackendSession {
                     await generateReferenceGroundedDraft(
-                        settings: settings,
+                        service: service,
+                        settings: backendPromptSettings,
                         directive: ""
                     )
                 } else {
@@ -396,8 +446,8 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
                         .init(
                             role: .assistant,
                             content: isChinese
-                                ? "参考教案已经解析完成；请先配置 LLM，再生成正式教案。"
-                                : "The reference lesson plan is parsed. Configure the LLM to generate the final lesson plan."
+                                ? "参考教案已经解析完成；请登录 EduNode 账户后再生成正式教案。"
+                                : "The reference lesson plan is parsed. Sign in to your EduNode account to generate the final lesson plan."
                         )
                     )
                 }
@@ -419,6 +469,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
     }
 
     private func generateReferenceGroundedDraft(
+        service: EduBackendLLMService,
         settings: EduAgentProviderSettings,
         directive: String
     ) async {
@@ -433,7 +484,6 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
         do {
             var generationSettings = settings
             generationSettings.maxTokens = max(settings.maxTokens, 12000)
-            let client = EduOpenAICompatibleClient(settings: generationSettings)
             let materializationMessages = EduLessonPlanMaterializationPromptBuilder.materializationMessages(
                 settings: generationSettings,
                 file: file,
@@ -448,7 +498,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
                 compactContext: false
             )
             let structured = try await decodeStructuredWithJSONRetry(
-                client: client,
+                service: service,
                 settings: generationSettings,
                 messages: materializationMessages,
                 as: EduLessonMaterializationResponse.self,
@@ -483,7 +533,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
                     compactContext: true
                 )
                 let compactStructured = try await decodeStructuredWithJSONRetry(
-                    client: client,
+                    service: service,
                     settings: generationSettings,
                     messages: compactMessages,
                     as: EduLessonMaterializationResponse.self,
@@ -508,6 +558,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
 
             alignedMarkdown = try await referenceAlignedMarkdownIfNeeded(
                 alignedMarkdown,
+                service: service,
                 settings: settings
             )
 
@@ -524,6 +575,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
     }
 
     private func reviseCurrentDraft(
+        service: EduBackendLLMService,
         settings: EduAgentProviderSettings,
         request: String
     ) async {
@@ -536,7 +588,6 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
         userInput = ""
 
         do {
-            let client = EduOpenAICompatibleClient(settings: settings)
             let revisionMessages = EduAgentPromptBuilder.lessonPlanRevisionMessages(
                 settings: settings,
                 file: file,
@@ -547,7 +598,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
                 referenceDocument: referenceDocument
             )
             let structured = try await decodeStructuredWithJSONRetry(
-                client: client,
+                service: service,
                 settings: settings,
                 messages: revisionMessages,
                 as: EduAgentLessonPlanRevisionResponse.self,
@@ -555,6 +606,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
             )
             generatedMarkdown = try await referenceAlignedMarkdownIfNeeded(
                 structured.revisedMarkdown,
+                service: service,
                 settings: settings
             )
             conversation.append(.init(role: .assistant, content: structured.assistantReply))
@@ -601,12 +653,12 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
         guard referenceDocument != nil else { return }
         guard !isResolved(item) else { return }
 
-        let settings = EduAgentSettingsStore.load()
-        guard settings.isConfigured else {
+        let settings = backendPromptSettings
+        guard let service = backendLLMService, hasBackendSession else {
             followUpSuggestionStatusByID[item.id] = .unavailable(
                 isChinese
-                    ? "配置 LLM 后，这里会基于模板与当前节点图生成补齐建议。"
-                    : "Configure the LLM to generate a template-aware follow-up suggestion here."
+                    ? "登录 EduNode 账户后，这里会基于模板与当前节点图生成补齐建议。"
+                    : "Sign in to your EduNode account to generate template-aware follow-up suggestions here."
             )
             return
         }
@@ -625,7 +677,6 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
 
         do {
             guard let referenceDocument else { return }
-            let client = EduOpenAICompatibleClient(settings: settings)
             let planningMessages = EduLessonPlanMaterializationPromptBuilder.followUpPlanningMessages(
                 settings: settings,
                 file: file,
@@ -637,7 +688,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
                 targetItem: item
             )
             let planning = try await decodeStructuredWithJSONRetry(
-                client: client,
+                service: service,
                 settings: settings,
                 messages: planningMessages,
                 as: EduLessonFollowUpPlanningResponse.self,
@@ -653,7 +704,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
                 planning: planning
             )
             let suggestion = try await decodeStructuredWithJSONRetry(
-                client: client,
+                service: service,
                 settings: settings,
                 messages: suggestionMessages,
                 as: EduLessonFollowUpSuggestionResponse.self,
@@ -703,7 +754,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
     }
 
     private func decodeStructuredWithJSONRetry<T: Decodable>(
-        client: EduOpenAICompatibleClient,
+        service: EduBackendLLMService,
         settings: EduAgentProviderSettings,
         messages: [EduLLMMessage],
         as type: T.Type,
@@ -714,7 +765,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
             stage: "llm.request",
             detail: "flow=\(flowID) step=initial type=\(String(describing: type)) maxTokens=\(settings.maxTokens)\n\(formatMessagesForTrace(messages))"
         )
-        let firstReply = try await client.complete(messages: messages)
+        let firstReply = try await service.complete(messages: messages)
         appendTrace(
             stage: "llm.response",
             detail: "flow=\(flowID) step=initial type=\(String(describing: type)) chars=\(firstReply.count)\n\(firstReply)"
@@ -775,12 +826,11 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
             compactOnRetry: compactOnRetry,
             stage: 1
         )
-        let retryClient = EduOpenAICompatibleClient(settings: retrySettings)
         appendTrace(
             stage: "llm.request",
             detail: "flow=\(flowID) step=retry1 type=\(String(describing: type)) maxTokens=\(retrySettings.maxTokens)\n\(formatMessagesForTrace(retryMessages))"
         )
-        let retryReply = try await retryClient.complete(messages: retryMessages)
+        let retryReply = try await service.complete(messages: retryMessages)
         appendTrace(
             stage: "llm.response",
             detail: "flow=\(flowID) step=retry1 type=\(String(describing: type)) chars=\(retryReply.count)\n\(retryReply)"
@@ -824,12 +874,11 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
                 compactOnRetry: compactOnRetry,
                 stage: 2
             )
-            let secondRetryClient = EduOpenAICompatibleClient(settings: secondRetrySettings)
             appendTrace(
                 stage: "llm.request",
                 detail: "flow=\(flowID) step=retry2 type=\(String(describing: type)) maxTokens=\(secondRetrySettings.maxTokens)\n\(formatMessagesForTrace(secondRetryMessages))"
             )
-            let secondRetryReply = try await secondRetryClient.complete(messages: secondRetryMessages)
+            let secondRetryReply = try await service.complete(messages: secondRetryMessages)
             appendTrace(
                 stage: "llm.response",
                 detail: "flow=\(flowID) step=retry2 type=\(String(describing: type)) chars=\(secondRetryReply.count)\n\(secondRetryReply)"
@@ -1170,11 +1219,13 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
 
     private func referenceAlignedMarkdownIfNeeded(
         _ candidateMarkdown: String,
+        service: EduBackendLLMService,
         settings: EduAgentProviderSettings
     ) async throws -> String {
         guard let referenceDocument else { return candidateMarkdown }
         return try await EduLessonTemplateAlignmentService.align(
             markdown: candidateMarkdown,
+            service: service,
             settings: settings,
             file: file,
             referenceDocument: referenceDocument,

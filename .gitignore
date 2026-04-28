@@ -12,5 +12,6 @@ xcuserdata/
 .swiftpm/
 Packages/
 EduNode/.env
+Server/.env
 
 # Keep automated tests and smoke scripts in version control.

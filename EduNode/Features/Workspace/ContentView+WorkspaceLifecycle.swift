@@ -178,20 +178,22 @@ extension ContentView {
     func sidebarModelTemplatePreviewRow(rule: EduModelRule) -> some View {
         let chinese = isChineseUI()
         let isSelected = selectedModelTemplatePreviewID == rule.id
+        let primaryForeground = isSelected ? Color.white.opacity(0.96) : Color.primary
+        let secondaryForeground = isSelected ? Color.white.opacity(0.72) : Color.secondary
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: isSelected ? "square.grid.3x3.fill" : "square.grid.3x3")
-                .foregroundColor(isSelected ? .accentColor : .secondary)
+                .foregroundColor(isSelected ? primaryForeground : secondaryForeground)
                 .font(.body.weight(.semibold))
                 .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(rule.displayName(isChinese: chinese))
                     .font(isSelected ? .body.weight(.semibold) : .body)
-                    .foregroundColor(isSelected ? .accentColor : .primary)
+                    .foregroundColor(primaryForeground)
                     .lineLimit(1)
                 Text(rule.templateFocus(isChinese: chinese))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(secondaryForeground)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -199,7 +201,7 @@ extension ContentView {
             if isSelected {
                 Text(chinese ? "预览中" : "Preview")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(primaryForeground)
             }
         }
         .contentShape(Rectangle())
@@ -400,7 +402,6 @@ extension ContentView {
     }
 
     func seedDefaultCourseIfNeeded() {
-        guard !didSeedDefaultCourse else { return }
         let descriptor = FetchDescriptor<GNodeWorkspaceFile>()
         if let existing = try? modelContext.fetch(descriptor), !existing.isEmpty {
             didSeedDefaultCourse = true
@@ -1446,18 +1447,20 @@ extension ContentView {
     func sidebarFileRow(_ file: GNodeWorkspaceFile) -> some View {
         let isSelected = selectedFileID == file.id
         let iconName = subjectIconName(for: file.subject, filled: isSelected)
+        let primaryForeground = isSelected ? Color.white.opacity(0.96) : Color.primary
+        let secondaryForeground = isSelected ? Color.white.opacity(0.72) : Color.secondary
 
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: iconName)
-                    .foregroundColor(isSelected ? .accentColor : .secondary)
+                    .foregroundColor(isSelected ? primaryForeground : secondaryForeground)
                     .font(.body.weight(.semibold))
                     .padding(.top, 1)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(file.name)
                         .font(isSelected ? .body.weight(.semibold) : .body)
-                        .foregroundColor(isSelected ? .accentColor : .primary)
+                        .foregroundColor(primaryForeground)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1469,7 +1472,7 @@ extension ContentView {
                     } label: {
                         Image(systemName: "gearshape")
                             .font(.body)
-                            .foregroundStyle(Color.accentColor)
+                            .foregroundStyle(primaryForeground)
                     }
                     .buttonStyle(.plain)
                     .padding(.top, 1)
@@ -1790,11 +1793,11 @@ Extend learning with monthly photo bird identification
                 HStack(spacing: 8) {
                     Text(S("flow.basicInfo"))
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(Color.white.opacity(0.92))
                     Spacer(minLength: 8)
                     Image(systemName: isSidebarBasicInfoExpanded ? "chevron.down" : "chevron.right")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(Color.white.opacity(0.82))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())

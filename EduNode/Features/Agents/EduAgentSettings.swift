@@ -234,40 +234,61 @@ private enum KeychainStore {
 struct EduAgentSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
-    @State private var draft = EduAgentSettingsStore.load()
-    @State private var isTesting = false
-    @State private var testMessage: String?
-    @State private var testSucceeded = false
-    @State private var availableModels: [String] = []
-    @State private var isRefreshingModels = false
-    @State private var modelRefreshMessage: String?
-    @State private var autoTestTaskID = UUID()
-    @State private var revealAPIKey = false
-    @State private var isModelListExpanded = false
+    @State private var email = ""
+    @State private var password = ""
+    @State private var isPasswordVisible = false
+    @State private var currentSession: EduBackendSession?
+    @State private var isAuthenticating = false
+    @State private var lastError: String?
+    @State private var infoMessage: String?
 
     let onSaved: (() -> Void)?
+    let allowsContinueWithoutAccount: Bool
+    let onContinueWithoutAccount: (() -> Void)?
 
-    init(onSaved: (() -> Void)? = nil) {
+    init(
+        onSaved: (() -> Void)? = nil,
+        allowsContinueWithoutAccount: Bool = false,
+        onContinueWithoutAccount: (() -> Void)? = nil
+    ) {
         self.onSaved = onSaved
+        self.allowsContinueWithoutAccount = allowsContinueWithoutAccount
+        self.onContinueWithoutAccount = onContinueWithoutAccount
     }
 
     private var isChinese: Bool {
         Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
     }
 
+    private var backendConfiguration: EduBackendServiceConfig? {
+        EduBackendServiceConfig.loadOptional()
+    }
+
     var body: some View {
+        Group {
+            if allowsContinueWithoutAccount {
+                startupGateBody
+            } else {
+                accountSheetBody
+            }
+        }
+        .preferredColorScheme(.dark)
+        .task {
+            hydrateSession()
+        }
+        .onDisappear {
+            clearDraftCredentials()
+        }
+    }
+
+    private var accountSheetBody: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    configSection
-                    tuningSection
-                    promptSection
-                    testSection
-                }
-                .padding(20)
+                contentStack
+                    .padding(20)
             }
             .background(Color(white: 0.08).ignoresSafeArea())
-            .navigationTitle(isChinese ? "模型设置" : "Model Settings")
+            .navigationTitle(isChinese ? "账户" : "Account")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -275,458 +296,369 @@ struct EduAgentSettingsSheet: View {
                         dismiss()
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(isChinese ? "保存" : "Save") {
-                        EduAgentSettingsStore.save(draft)
-                        onSaved?()
-                        dismiss()
-                    }
-                    .fontWeight(.semibold)
-                }
             }
         }
-        .preferredColorScheme(.dark)
-        .task(id: autoTestTaskID) {
-            await runAutoConnectionTestIfNeeded()
-        }
-        .onChange(of: draft.providerName) { _, _ in scheduleAutoConnectionTest() }
-        .onChange(of: draft.baseURLString) { _, _ in scheduleAutoConnectionTest() }
-        .onChange(of: draft.model) { _, _ in scheduleAutoConnectionTest() }
-        .onChange(of: draft.apiKey) { _, _ in scheduleAutoConnectionTest() }
     }
 
-    private var configSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionTitle(isChinese ? "基础配置" : "Provider")
-            presetSection
-            settingsTextField(
-                title: isChinese ? "Provider 名称" : "Provider Name",
-                text: $draft.providerName,
-                placeholder: "OpenAI-Compatible"
-            )
-            settingsTextField(
-                title: isChinese ? "Base URL" : "Base URL",
-                text: $draft.baseURLString,
-                placeholder: "https://api.openai.com/v1"
-            )
-            apiKeyField
-            modelField
-        }
-        .padding(16)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
-    }
+    private var startupGateBody: some View {
+        ZStack {
+            Color(white: 0.08)
+                .ignoresSafeArea()
 
-    private var presetSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(isChinese ? "快速预设" : "Quick Presets")
-                .font(.subheadline.weight(.semibold))
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: max(geometry.size.height * 0.16, 56))
 
-            HStack(spacing: 8) {
-                ForEach(EduAgentProviderPreset.allCases, id: \.self) { preset in
-                    Button {
-                        applyPreset(preset)
-                    } label: {
-                        Text(preset.title(isChinese: isChinese))
-                            .font(.caption.weight(.semibold))
+                        contentStack
+                            .frame(maxWidth: 560)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 34)
-                            .background(
-                                isPresetSelected(preset)
-                                    ? Color.teal.opacity(0.22)
-                                    : Color.white.opacity(0.04),
-                                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(
-                                        isPresetSelected(preset)
-                                            ? Color.teal.opacity(0.6)
-                                            : Color.white.opacity(0.1),
-                                        lineWidth: 1
-                                    )
-                            )
+
+                        Spacer(minLength: max(geometry.size.height * 0.18, 72))
                     }
-                    .buttonStyle(.plain)
+                    .frame(minHeight: geometry.size.height)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 24)
                 }
+                .scrollIndicators(.hidden)
             }
         }
     }
 
-    private var modelField: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(isChinese ? "Model" : "Model")
-                .font(.subheadline.weight(.semibold))
-
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(draft.trimmedModel.isEmpty ? Color.orange : Color.green)
-                    .frame(width: 6, height: 6)
-
-                TextField("gpt-4.1", text: $draft.model)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .frame(maxWidth: .infinity)
-                    .font(.system(size: 13, weight: .semibold))
-
-                Button {
-                    Task { await refreshModels() }
-                } label: {
-                    if isRefreshingModels {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(width: 28, height: 28)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 28, height: 28)
-                    }
-                }
-                .buttonStyle(.plain)
-                .disabled(isRefreshingModels || draft.trimmedBaseURLString.isEmpty || draft.trimmedAPIKey.isEmpty)
-
-                Button {
-                    isModelListExpanded.toggle()
-                } label: {
-                    Image(systemName: isModelListExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 22, height: 22)
-                }
-                .buttonStyle(.plain)
-                .disabled(availableModels.isEmpty && !isRefreshingModels)
+    private var contentStack: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if allowsContinueWithoutAccount {
+                welcomeHeaderSection
             }
-            .padding(.horizontal, 12)
-            .frame(minHeight: 42)
-            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
+            statusBanner
+            accountCard
+            if allowsContinueWithoutAccount && currentSession == nil {
+                continueWithoutAccountButton
+            }
+        }
+    }
+
+    private var welcomeHeaderSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(isChinese ? "登录 EduNode" : "Sign In to EduNode")
+                .font(.title2.weight(.bold))
+                .foregroundStyle(.white)
+
+            Text(
+                isChinese
+                ? "登录后即可使用 AI 搭图、教案生成与参考文档解析。若暂时不登录，也可以先进入工作区继续使用节点画布、文档与导出功能。"
+                : "Sign in to unlock AI-assisted canvas building, lesson-plan generation, and reference-template parsing. You can also continue without an account and still use the canvas, documentation, and exports."
             )
+            .font(.subheadline)
+            .foregroundStyle(.white.opacity(0.88))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 
-            if isModelListExpanded {
-                VStack(alignment: .leading, spacing: 4) {
-                    if availableModels.isEmpty {
-                        Text(isChinese ? "请先刷新模型列表" : "Refresh the model list first")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                    } else {
-                        ScrollView(showsIndicators: false) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                ForEach(availableModels, id: \.self) { model in
-                                    Button {
-                                        draft.model = model
-                                        isModelListExpanded = false
-                                    } label: {
-                                        HStack(spacing: 8) {
-                                            Circle()
-                                                .fill(model == draft.trimmedModel ? Color.green : Color.clear)
-                                                .frame(width: 6, height: 6)
-                                            Text(model)
-                                                .font(.system(size: 11, weight: .semibold))
-                                                .foregroundStyle(.primary)
-                                                .lineLimit(1)
-                                            Spacer(minLength: 0)
-                                            if model == draft.trimmedModel {
-                                                Image(systemName: "checkmark")
-                                                    .font(.system(size: 9, weight: .bold))
-                                                    .foregroundStyle(.green)
-                                            }
-                                        }
-                                        .padding(.horizontal, 10)
-                                        .frame(height: 30)
-                                        .background(
-                                            Color.green.opacity(model == draft.trimmedModel ? 0.14 : 0.02),
-                                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                        .frame(maxHeight: 210)
-                    }
+    @ViewBuilder
+    private var statusBanner: some View {
+        if let lastError, !lastError.isEmpty {
+            messageCard(
+                title: isChinese ? "登录失败" : "Sign-In Failed",
+                message: lastError,
+                tint: .orange
+            )
+        } else if let infoMessage, !infoMessage.isEmpty {
+            messageCard(
+                title: isChinese ? "提示" : "Notice",
+                message: infoMessage,
+                tint: .blue
+            )
+        } else if !accountServicesAvailable {
+            messageCard(
+                title: isChinese ? "在线账户暂不可用" : "Online Account Unavailable",
+                message: isChinese
+                    ? "当前构建尚未接入在线账户服务。你仍然可以先使用节点画布、文档与导出功能；AI 与参考文档解析会在登录能力接通后启用。"
+                    : "This build is not configured with an EduNode backend yet. You can still use the canvas, documentation, and exports first; AI and reference parsing will become available once sign-in is connected.",
+                tint: .gray
+            )
+        }
+    }
+
+    private var accountCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if let currentSession {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(isChinese ? "已登录账户" : "Signed In")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text(currentSession.email.nonEmpty ?? currentSession.userID)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text(
+                        isChinese
+                        ? "现在可以使用 AI 搭图、教案生成与参考文档解析。"
+                        : "AI canvas assistance, lesson-plan generation, and reference parsing are now available."
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(8)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
-                )
-            }
 
-            if let modelRefreshMessage {
-                Text(modelRefreshMessage)
+                VStack(spacing: 10) {
+                    Button {
+                        handleSignedInPrimaryAction()
+                    } label: {
+                        Text(allowsContinueWithoutAccount
+                             ? (isChinese ? "进入工作区" : "Continue to Workspace")
+                             : (isChinese ? "完成" : "Done"))
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button {
+                        Task { await signOut() }
+                    } label: {
+                        Text(isChinese ? "退出登录" : "Sign Out")
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(isChinese ? "邮箱登录" : "Email Sign-In")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+
+                    TextField(isChinese ? "邮箱" : "Email", text: $email)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.emailAddress)
+                        .textContentType(.username)
+                        .padding(12)
+                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    passwordField
+
+                    HStack(spacing: 10) {
+                        Button {
+                            Task { await signIn() }
+                        } label: {
+                            authActionLabel(text: isChinese ? "登录" : "Sign In")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(authActionDisabled)
+
+                        Button {
+                            Task { await createAccount() }
+                        } label: {
+                            authActionLabel(text: isChinese ? "注册" : "Create Account")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(authActionDisabled)
+                    }
+
+                    Text(
+                        isChinese
+                        ? "邮箱和密码只用于当前登录或注册，不会保存在本地设备上。"
+                        : "Your email and password are used only for the current sign-in or registration and are not stored on this device."
+                    )
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                }
             }
+        }
+        .cardStyle()
+    }
+
+    private var continueWithoutAccountButton: some View {
+        Button {
+            clearDraftCredentials()
+            onContinueWithoutAccount?()
+            dismiss()
+        } label: {
+            Text(isChinese ? "稍后进入" : "Continue without Account")
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 6)
+    }
+
+    private var accountServicesAvailable: Bool {
+        backendConfiguration != nil
+    }
+
+    private var authActionDisabled: Bool {
+        isAuthenticating
+            || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || password.isEmpty
+    }
+
+    @ViewBuilder
+    private func authActionLabel(text: String) -> some View {
+        HStack(spacing: 8) {
+            if isAuthenticating {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Text(text)
+                .fontWeight(.semibold)
+                .frame(maxWidth: .infinity)
         }
     }
 
-    private var tuningSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            sectionTitle(isChinese ? "请求参数" : "Request Tuning")
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Temperature")
-                    Spacer()
-                    Text(String(format: "%.2f", draft.temperature))
-                        .foregroundStyle(.secondary)
-                }
-                Slider(value: $draft.temperature, in: 0...1.5, step: 0.05)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(isChinese ? "Max Tokens" : "Max Tokens")
-                    Spacer()
-                    Text("\(draft.maxTokens)")
-                        .foregroundStyle(.secondary)
-                }
-                Slider(
-                    value: Binding(
-                        get: { Double(draft.maxTokens) },
-                        set: { draft.maxTokens = Int($0.rounded()) }
-                    ),
-                    in: 1024...32768,
-                    step: 512
-                )
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(isChinese ? "超时（秒）" : "Timeout (s)")
-                    Spacer()
-                    Text("\(Int(draft.timeoutSeconds.rounded()))")
-                        .foregroundStyle(.secondary)
-                }
-                Slider(value: $draft.timeoutSeconds, in: 30...240, step: 5)
-            }
-        }
-        .padding(16)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
-    }
-
-    private var promptSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionTitle(isChinese ? "附加系统提示" : "Additional System Prompt")
-            Text(isChinese
-                 ? "这里适合放你对自定义模型的全局要求，比如语言风格、输出语气或额外约束。"
-                 : "Use this for provider-specific global guidance such as preferred tone or output constraints.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            TextEditor(text: $draft.additionalSystemPrompt)
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 132)
-                .padding(10)
-                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-        }
-        .padding(16)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
-    }
-
-    private var testSection: some View {
+    private func messageCard(title: String, message: String, tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionTitle(isChinese ? "连通性检查" : "Connection Test")
-            HStack(spacing: 8) {
-                if isTesting {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-                Text(
-                    isTesting
-                        ? (isChinese ? "正在自动测试当前配置..." : "Automatically testing the current configuration...")
-                        : (isChinese ? "配置变更后会自动测试连接。" : "Connection tests run automatically after configuration changes.")
-                )
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(.white)
+            Text(message)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            }
-
-            if let testMessage {
-                Label(testMessage, systemImage: testSucceeded ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .font(.subheadline)
-                    .foregroundStyle(testSucceeded ? .green : .orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(tint.opacity(0.22), lineWidth: 1)
         )
     }
 
-    private func settingsTextField(
-        title: String,
-        text: Binding<String>,
-        placeholder: String
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-            TextField(placeholder, text: text)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .padding(.horizontal, 12)
-                .frame(minHeight: 42)
-                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-        }
-    }
-
-    private var apiKeyField: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(isChinese ? "API Key" : "API Key")
-                .font(.subheadline.weight(.semibold))
-            HStack(spacing: 8) {
-                if revealAPIKey {
-                    TextField("", text: $draft.apiKey)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+    private var passwordField: some View {
+        HStack(spacing: 10) {
+            Group {
+                if isPasswordVisible {
+                    TextField(isChinese ? "密码" : "Password", text: $password)
                 } else {
-                    SecureField("", text: $draft.apiKey)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                    SecureField(isChinese ? "密码" : "Password", text: $password)
                 }
-
-                Button {
-                    revealAPIKey.toggle()
-                } label: {
-                    Image(systemName: revealAPIKey ? "eye.slash" : "eye")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 12)
-            .frame(minHeight: 42)
-            .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .textContentType(.password)
 
-            if draft.trimmedAPIKey.isEmpty {
-                Text(isChinese ? "当前为空，表示尚未配置 API Key。" : "Currently empty, which means no API key is configured.")
-                    .font(.caption)
+            Button {
+                isPasswordVisible.toggle()
+            } label: {
+                Image(systemName: isPasswordVisible ? "eye.slash" : "eye")
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
             }
-        }
-    }
-
-    private func sectionTitle(_ text: String) -> some View {
-        Text(text)
-            .font(.headline)
-            .foregroundStyle(.white)
-    }
-
-    private func isPresetSelected(_ preset: EduAgentProviderPreset) -> Bool {
-        draft.providerName == preset.providerName(isChinese: isChinese)
-            && draft.trimmedBaseURLString == preset.baseURL
-    }
-
-    private func applyPreset(_ preset: EduAgentProviderPreset) {
-        draft.providerName = preset.providerName(isChinese: isChinese)
-        draft.baseURLString = preset.baseURL
-        draft.model = preset.model
-        availableModels = []
-        isModelListExpanded = false
-        modelRefreshMessage = nil
-    }
-
-    @MainActor
-    private func runConnectionTest() async {
-        isTesting = true
-        defer { isTesting = false }
-
-        do {
-            let client = EduOpenAICompatibleClient(settings: draft)
-            let reply = try await client.complete(messages: [
-                EduLLMMessage(role: "system", content: "Reply with a short confirmation."),
-                EduLLMMessage(role: "user", content: "Return OK.")
-            ])
-            testSucceeded = true
-            let normalizedReply = reply.trimmingCharacters(in: .whitespacesAndNewlines)
-            let message = isChinese
-                ? "连接成功。当前配置模型：\(draft.trimmedModel)" + (normalizedReply.isEmpty ? "" : "。回复：\(normalizedReply)")
-                : "Connection succeeded. Configured model: \(draft.trimmedModel)" + (normalizedReply.isEmpty ? "" : ". Reply: \(normalizedReply)")
-            testMessage = message
-            EduAgentConnectionStatusStore.saveResult(
-                isReachable: true,
-                message: message,
-                for: draft
-            )
-        } catch {
-            testSucceeded = false
-            let message = error.localizedDescription
-            testMessage = message
-            EduAgentConnectionStatusStore.saveResult(
-                isReachable: false,
-                message: message,
-                for: draft
+            .buttonStyle(.plain)
+            .accessibilityLabel(
+                isChinese
+                    ? (isPasswordVisible ? "隐藏密码" : "显示密码")
+                    : (isPasswordVisible ? "Hide password" : "Show password")
             )
         }
+        .padding(12)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func hydrateSession() {
+        currentSession = EduBackendSessionStore.load()
     }
 
     @MainActor
-    private func refreshModels() async {
-        isRefreshingModels = true
-        defer { isRefreshingModels = false }
-
-        do {
-            let client = EduOpenAICompatibleClient(settings: draft)
-            let models = try await client.listModels()
-            availableModels = models
-            if draft.trimmedModel.isEmpty, let first = models.first {
-                draft.model = first
-            }
-            modelRefreshMessage = isChinese
-                ? "已加载 \(models.count) 个模型。"
-                : "Loaded \(models.count) models."
-        } catch {
-            availableModels = []
-            modelRefreshMessage = error.localizedDescription
-        }
-    }
-
-    private func scheduleAutoConnectionTest() {
-        autoTestTaskID = UUID()
-    }
-
-    @MainActor
-    private func runAutoConnectionTestIfNeeded() async {
-        guard draft.isConfigured else {
-            isTesting = false
-            testSucceeded = false
-            testMessage = nil
+    private func signIn() async {
+        guard let authService = EduBackendAuthService() else {
+            lastError = isChinese ? "当前构建尚未配置 EduNode 后端地址。" : "The EduNode backend is not configured in this build."
             return
         }
-        try? await Task.sleep(nanoseconds: 800_000_000)
-        await runConnectionTest()
+
+        isAuthenticating = true
+        defer { isAuthenticating = false }
+        lastError = nil
+        infoMessage = nil
+
+        do {
+            let session = try await authService.signIn(
+                email: email,
+                password: password
+            )
+            currentSession = session
+            clearDraftCredentials()
+            handleSignedInPrimaryAction()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func createAccount() async {
+        guard let authService = EduBackendAuthService() else {
+            lastError = isChinese ? "当前构建尚未配置 EduNode 后端地址。" : "The EduNode backend is not configured in this build."
+            return
+        }
+
+        isAuthenticating = true
+        defer { isAuthenticating = false }
+        lastError = nil
+        infoMessage = nil
+
+        do {
+            let result = try await authService.signUp(
+                email: email,
+                password: password
+            )
+            switch result {
+            case .signedIn(let session):
+                currentSession = session
+                clearDraftCredentials()
+                handleSignedInPrimaryAction()
+            case .confirmationRequired(let email):
+                password = ""
+                infoMessage = isChinese
+                    ? "账户已创建，请先检查 \(email) 的验证邮件，完成确认后再回来登录。"
+                    : "Your account was created. Check the verification email sent to \(email), then come back and sign in."
+            }
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func signOut() async {
+        if let authService = EduBackendAuthService() {
+            await authService.signOutCurrentSession()
+        } else {
+            EduBackendSessionStore.clear()
+        }
+        hydrateSession()
+        clearDraftCredentials()
+        lastError = nil
+        infoMessage = isChinese ? "已退出账户登录。" : "Signed out from the account."
+    }
+
+    private func clearDraftCredentials() {
+        email = ""
+        password = ""
+        isPasswordVisible = false
+    }
+
+    private func handleSignedInPrimaryAction() {
+        onSaved?()
+        dismiss()
+    }
+}
+
+private extension View {
+    func cardStyle() -> some View {
+        padding(16)
+            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+    }
+}
+
+private extension String {
+    var nonEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

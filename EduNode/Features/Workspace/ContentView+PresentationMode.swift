@@ -5,7 +5,27 @@ import SwiftData
 extension ContentView {
     func editorToolbarActions(for file: GNodeWorkspaceFile) -> [NodeEditorToolbarAction] {
         let isActive = isPresentationModeEngaged
-        return [
+        var actions: [NodeEditorToolbarAction] = []
+
+        if supportsInlineAccountEntry {
+            actions.append(
+                NodeEditorToolbarAction(
+                    id: "edunode.account",
+                    title: backendSessionSnapshot == nil
+                        ? (isChineseUI() ? "登录" : "Sign In")
+                        : (isChineseUI() ? "账户" : "Account"),
+                    systemImage: backendSessionSnapshot == nil
+                        ? "person.crop.circle.badge.plus"
+                        : "person.crop.circle",
+                    accent: .gray,
+                    minWidth: 92
+                ) {
+                    showingAccountSheet = true
+                }
+            )
+        }
+
+        actions.append(
             NodeEditorToolbarAction(
                 id: "edunode.present",
                 title: S("app.presentation.button"),
@@ -17,7 +37,9 @@ extension ContentView {
             ) {
                 handlePresentationButtonTap(for: file)
             }
-        ]
+        )
+
+        return actions
     }
 
     var isPresentationModeEngaged: Bool {
@@ -27,11 +49,11 @@ extension ContentView {
     @ViewBuilder
     var sidebarToggleButton: some View {
         let btn = Button {
-            withAnimation { splitVisibility = .automatic }
+            withAnimation { splitVisibility = .all }
         } label: {
             Image(systemName: "sidebar.left")
                 .font(.system(size: 17, weight: .semibold))
-                .frame(width: 38, height: 38)
+                .frame(width: workspaceTopToolbarButtonHeight, height: workspaceTopToolbarButtonHeight)
         }
 
         if #available(iOS 26.0, macOS 26.0, *) {

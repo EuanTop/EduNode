@@ -498,12 +498,53 @@ enum EduLessonPlanMaterializationPromptBuilder {
             answersByID: answersByID,
             skippedItemIDs: skippedItemIDs
         )
+        let highPriorityDigestText = highPriorityContextDigest(
+            file: file,
+            template: referenceDocument.templateDocument,
+            teacherResponses: teacherResponses
+        )
         let targetExemplar = referenceDocument.styleProfile.sectionExemplars.first {
             $0.title == targetItem.sectionTitle
         }?.opening ?? "(none)"
         let targetTemplateExcerpt = referenceDocument.templateDocument.schema.sections.first {
             $0.title == targetItem.sectionTitle
         }?.excerpt ?? "(none)"
+        let workspaceSnapshotText = boundedPromptText(
+            EduAgentContextBuilder.encodedJSONString(snapshot),
+            maxChars: 2800
+        )
+        let metadataText = boundedPromptText(
+            EduAgentContextBuilder.encodedJSONString(metadata),
+            maxChars: 1600
+        )
+        let baselineMarkdownText = boundedPromptText(
+            baselineMarkdown,
+            maxChars: 3200
+        )
+        let referenceSchemaText = boundedPromptText(
+            EduAgentContextBuilder.encodedJSONString(referenceDocument.templateDocument.schema),
+            maxChars: 2600
+        )
+        let referenceChecklistText = boundedPromptText(
+            referenceDocument.complianceChecklistText,
+            maxChars: 1800
+        )
+        let targetItemText = boundedPromptText(
+            EduAgentContextBuilder.encodedJSONString(targetItem),
+            maxChars: 1200
+        )
+        let targetTemplateExcerptText = boundedPromptText(
+            targetTemplateExcerpt,
+            maxChars: 500
+        )
+        let targetExemplarText = boundedPromptText(
+            targetExemplar,
+            maxChars: 500
+        )
+        let teacherResponsesText = boundedPromptText(
+            EduAgentContextBuilder.encodedJSONString(teacherResponses),
+            maxChars: 2200
+        )
 
         return [
             .init(
@@ -530,35 +571,38 @@ enum EduLessonPlanMaterializationPromptBuilder {
             .init(
                 role: "user",
                 content: """
+                High-priority context digest JSON:
+                \(highPriorityDigestText)
+
                 Workspace snapshot JSON:
-                \(EduAgentContextBuilder.encodedJSONString(snapshot))
+                \(workspaceSnapshotText)
 
                 Additional course metadata JSON:
-                \(EduAgentContextBuilder.encodedJSONString(metadata))
+                \(metadataText)
 
                 Current baseline lesson-plan markdown:
-                \(baselineMarkdown)
+                \(baselineMarkdownText)
 
                 Reference lesson-plan source:
                 \(referenceDocument.sourceName)
 
                 Reference lesson-plan schema JSON:
-                \(EduAgentContextBuilder.encodedJSONString(referenceDocument.templateDocument.schema))
+                \(referenceSchemaText)
 
                 Reference compliance checklist:
-                \(referenceDocument.complianceChecklistText)
+                \(referenceChecklistText)
 
                 Target missing item JSON:
-                \(EduAgentContextBuilder.encodedJSONString(targetItem))
+                \(targetItemText)
 
                 Target template excerpt:
-                \(targetTemplateExcerpt)
+                \(targetTemplateExcerptText)
 
                 Matching section exemplar opening:
-                \(targetExemplar)
+                \(targetExemplarText)
 
                 Teacher follow-up answers JSON:
-                \(EduAgentContextBuilder.encodedJSONString(teacherResponses))
+                \(teacherResponsesText)
                 """
             )
         ]
@@ -582,6 +626,34 @@ enum EduLessonPlanMaterializationPromptBuilder {
         let targetTemplateExcerpt = referenceDocument.templateDocument.schema.sections.first {
             $0.title == targetItem.sectionTitle
         }?.excerpt ?? "(none)"
+        let workspaceSnapshotText = boundedPromptText(
+            EduAgentContextBuilder.encodedJSONString(snapshot),
+            maxChars: 2200
+        )
+        let targetItemText = boundedPromptText(
+            EduAgentContextBuilder.encodedJSONString(targetItem),
+            maxChars: 1000
+        )
+        let targetTemplateExcerptText = boundedPromptText(
+            targetTemplateExcerpt,
+            maxChars: 420
+        )
+        let targetExemplarText = boundedPromptText(
+            targetExemplar,
+            maxChars: 420
+        )
+        let planningSummaryText = boundedPromptText(
+            planning.planningSummary,
+            maxChars: 800
+        )
+        let groundedEvidenceText = boundedPromptText(
+            planning.groundedEvidence.joined(separator: "\n- "),
+            maxChars: 900
+        )
+        let cautionPointsText = boundedPromptText(
+            planning.cautionPoints.joined(separator: "\n- "),
+            maxChars: 700
+        )
 
         return [
             .init(
@@ -608,25 +680,25 @@ enum EduLessonPlanMaterializationPromptBuilder {
                 role: "user",
                 content: """
                 Workspace snapshot JSON:
-                \(EduAgentContextBuilder.encodedJSONString(snapshot))
+                \(workspaceSnapshotText)
 
                 Target missing item JSON:
-                \(EduAgentContextBuilder.encodedJSONString(targetItem))
+                \(targetItemText)
 
                 Target template excerpt:
-                \(targetTemplateExcerpt)
+                \(targetTemplateExcerptText)
 
                 Matching section exemplar opening:
-                \(targetExemplar)
+                \(targetExemplarText)
 
                 Planning summary:
-                \(planning.planningSummary)
+                \(planningSummaryText)
 
                 Grounded evidence:
-                \(planning.groundedEvidence.joined(separator: "\n- "))
+                \(groundedEvidenceText)
 
                 Caution points:
-                \(planning.cautionPoints.joined(separator: "\n- "))
+                \(cautionPointsText)
                 """
             )
         ]

@@ -27,10 +27,9 @@ struct EduWorkspaceAgentSheet: View {
     @State private var lastError: String?
     @State private var showingSettings = false
     @State private var showingSupplementaryImporter = false
-    @State private var settingsSnapshot = EduAgentSettingsStore.load()
+    @State private var runtimeStatus: EduAgentRuntimeStatusResponse?
     @State private var availableModels: [String] = []
     @State private var isRefreshingModels = false
-    @State private var isRevalidatingModelSelection = false
     @State private var isModelPickerExpanded = false
     @State private var isThinkingEnabled = true
     @State private var landingSuggestedPrompts: [String] = []
@@ -67,36 +66,57 @@ struct EduWorkspaceAgentSheet: View {
         Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
     }
 
-    private var currentSettings: EduAgentProviderSettings {
-        settingsSnapshot
+    private var backendConfig: EduBackendServiceConfig? {
+        EduBackendServiceConfig.loadOptional()
     }
 
-    private var connectionRecord: EduAgentConnectionValidationRecord? {
-        EduAgentConnectionStatusStore.status(for: currentSettings)
+    private var workspaceAgentService: EduWorkspaceAgentService? {
+        EduWorkspaceAgentService(backendConfig: backendConfig)
+    }
+
+    private var isBackendConfigured: Bool {
+        backendConfig != nil
+    }
+
+    private var isSignedIntoBackend: Bool {
+        EduBackendSessionStore.load() != nil
     }
 
     private var isAgentReady: Bool {
-        currentSettings.isConfigured && connectionRecord?.isReachable == true
+        isBackendConfigured && isSignedIntoBackend && runtimeStatus?.providerReachable == true
     }
 
     private var statusBadgeText: String {
-        if !currentSettings.isConfigured {
-            return isChinese ? "未配置 LLM" : "LLM Not Configured"
+        guard isBackendConfigured else {
+            return isChinese ? "未连接后端" : "Backend Unset"
         }
-        return currentSettings.trimmedModel
+        guard isSignedIntoBackend else {
+            return isChinese ? "请先登录" : "Sign In"
+        }
+        guard let runtimeStatus else {
+            return isChinese ? "检测中" : "Checking"
+        }
+        if !runtimeStatus.llmConfigured {
+            return isChinese ? "后端未配置 LLM" : "LLM Not Set"
+        }
+        let model = runtimeStatus.activeModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.isEmpty ? (isChinese ? "模型未命名" : "Unnamed Model") : model
     }
 
     private var statusBadgeTint: Color {
-        if !currentSettings.isConfigured {
+        guard isBackendConfigured else {
             return .orange
         }
-        if isRevalidatingModelSelection {
+        guard isSignedIntoBackend else {
+            return .orange
+        }
+        if isRefreshingModels && runtimeStatus == nil {
             return .blue
         }
-        if let connectionRecord, connectionRecord.isReachable {
+        if let runtimeStatus, runtimeStatus.providerReachable {
             return .green
         }
-        if connectionRecord != nil {
+        if let runtimeStatus, runtimeStatus.llmConfigured {
             return .orange
         }
         return .blue
@@ -104,9 +124,19 @@ struct EduWorkspaceAgentSheet: View {
 
     private var composerPlaceholder: String {
         guard isAgentReady else {
+            if !isBackendConfigured {
+                return isChinese
+                    ? "请先连接 EduNode 在线服务。"
+                    : "Connect the EduNode online service first."
+            }
+            if !isSignedIntoBackend {
+                return isChinese
+                    ? "请先登录 EduNode 账户。"
+                    : "Sign in to your EduNode account first."
+            }
             return isChinese
-                ? "请先在右上角设置中完成 API 配置并测试连接。"
-                : "Configure the API and test the connection from the top-right settings first."
+                ? "请先确保 EduNode 在线服务已启动且模型服务可用。"
+                : "Make sure the EduNode online service is running and its model service is available."
         }
 
         return isChinese
@@ -115,25 +145,25 @@ struct EduWorkspaceAgentSheet: View {
     }
 
     private var composerFootnote: String {
-        if !currentSettings.isConfigured {
+        if !isBackendConfigured {
             return isChinese
-                ? "当前尚未配置可用的 LLM。请先在设置中填写 Base URL、Model 和 API Key。"
-                : "No LLM is configured yet. Fill in Base URL, Model, and API Key in settings first."
+                ? "当前应用只连接 EduNode 在线服务；模型与解析服务都由服务端统一管理。"
+                : "The app connects to EduNode online service only; model and parsing services are managed server-side."
         }
-        if let connectionRecord, !connectionRecord.isReachable {
+        if !isSignedIntoBackend {
             return isChinese
-                ? "最近一次连接测试失败。请修正配置后重新测试。"
-                : "The latest connection test failed. Fix the configuration and test again."
+                ? "请先登录 EduNode 账户，随后即可使用 AI 搭图与其他在线能力。"
+                : "Sign in to your EduNode account first to use AI canvas assistance and other online features."
         }
-        if connectionRecord == nil {
-            if isRevalidatingModelSelection {
-                return isChinese
-                    ? "正在验证新模型连接，完成后会自动启用 Agent。"
-                    : "Validating the newly selected model. Agent chat will re-enable automatically."
-            }
+        if let runtimeStatus, !runtimeStatus.providerReachable {
             return isChinese
-                ? "请先在设置中完成连接测试，再启用 Agent 对话。"
-                : "Run a connection test in settings before enabling agent chat."
+                ? runtimeStatus.message
+                : runtimeStatus.message
+        }
+        if runtimeStatus == nil {
+            return isChinese
+                ? "正在检测后端运行状态与模型可用性。"
+                : "Checking backend runtime status and model availability."
         }
         if pendingCanvasResponse?.operations.isEmpty == false {
             return isChinese
@@ -238,9 +268,11 @@ struct EduWorkspaceAgentSheet: View {
         .background(Color.clear)
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showingSettings) {
-            EduAgentSettingsSheet {
-                reloadSettingsFromStore()
-            }
+            EduAgentSettingsSheet(
+                onSaved: {
+                    Task { await refreshRuntimeStatus(force: true) }
+                }
+            )
         }
         .fileImporter(
             isPresented: $showingSupplementaryImporter,
@@ -282,32 +314,26 @@ struct EduWorkspaceAgentSheet: View {
 
     @ViewBuilder
     private var setupStateCard: some View {
-        if !currentSettings.isConfigured {
+        if !isBackendConfigured {
             EduAgentStatusCard(
-                title: isChinese ? "需要先配置 LLM" : "LLM Setup Required",
+                title: isChinese ? "需要先连接后端" : "Backend Connection Required",
                 message: isChinese
-                    ? "请先在右上角设置中填写 Base URL、Model 与 API Key。未完成配置前，Agent 不会提供推荐或生成任何结果。"
-                    : "Fill in Base URL, Model, and API Key in settings first. Until setup is complete, the agent will not offer recommendations or generate results.",
+                    ? "当前工作区 Agent 需要先连接 EduNode 在线服务。连接成功后，模型与参考教案解析能力会自动可用。"
+                    : "The workspace agent needs an EduNode online service connection first. Once connected, model access and reference-template parsing become available automatically.",
                 tint: .orange
             )
-        } else if let connectionRecord, !connectionRecord.isReachable {
+        } else if let runtimeStatus, !runtimeStatus.providerReachable {
             EduAgentStatusCard(
-                title: isChinese ? "连接测试失败" : "Connection Test Failed",
-                message: connectionRecord.message,
+                title: isChinese ? "后端模型连接失败" : "Backend Model Connection Failed",
+                message: runtimeStatus.message,
                 tint: .orange
             )
-        } else if connectionRecord == nil {
+        } else if runtimeStatus == nil {
             EduAgentStatusCard(
-                title: isRevalidatingModelSelection
-                    ? (isChinese ? "正在验证模型" : "Validating Model")
-                    : (isChinese ? "请先测试连接" : "Test the Connection First"),
-                message: isRevalidatingModelSelection
-                    ? (isChinese
-                        ? "刚切换了模型，系统正在自动验证新配置可用性。验证通过后会恢复 Agent 对话与建议。"
-                        : "The model was just changed, so the app is validating the new configuration automatically. Agent chat and suggestions will return once validation succeeds.")
-                    : (isChinese
-                        ? "配置已填写，但尚未验证可用性。设置页会在配置变化后自动测试连接；确认通过后再启用 Agent 对话。"
-                        : "The configuration is filled in but has not been validated. The settings view tests connectivity automatically after changes."),
+                title: isChinese ? "正在检查后端状态" : "Checking Backend Status",
+                message: isChinese
+                    ? "系统正在读取后端当前模型与可用模型列表。检查完成后会自动恢复对话与建议。"
+                    : "The app is fetching the backend runtime model and available-model list. Chat and suggestions will resume automatically once the check completes.",
                 tint: .blue
             )
         }
@@ -607,13 +633,16 @@ struct EduWorkspaceAgentSheet: View {
 
     @MainActor
     private func send() async {
-        let settings = currentSettings
-        guard settings.isConfigured else {
-            lastError = isChinese ? "请先在右上角齿轮中完成 LLM 配置。" : "Configure the LLM first from the gear button."
+        guard isBackendConfigured else {
+            lastError = isChinese ? "请先连接 EduNode 后端。" : "Connect to EduNode backend first."
             return
         }
-        guard EduAgentConnectionStatusStore.status(for: settings)?.isReachable == true else {
-            lastError = isChinese ? "请先在设置中完成连接测试。" : "Run a connection test in settings first."
+        guard isAgentReady else {
+            lastError = runtimeStatus?.message ?? (isChinese ? "后端模型尚未就绪。" : "The backend model is not ready yet.")
+            return
+        }
+        guard let workspaceAgentService else {
+            lastError = isChinese ? "当前无法初始化后端连接。" : "Unable to initialize the backend connection."
             return
         }
 
@@ -639,81 +668,53 @@ struct EduWorkspaceAgentSheet: View {
         }
 
         do {
-            let client = EduOpenAICompatibleClient(settings: settings)
             let assistantMessageID = UUID()
-            var planningArtifact: EduAgentThinkingPlanResponse?
+            let response = try await workspaceAgentService.send(
+                file: file,
+                conversation: history,
+                userRequest: request,
+                supplementaryMaterial: supplementaryMaterial,
+                thinkingEnabled: isThinkingEnabled
+            )
+            liveThinkingPhase = .solving
+            liveThinkingMarkdown = response.thinkingTraceMarkdown
 
-            if isThinkingEnabled {
-                if let planningReply = try? await client.complete(
-                    messages: EduAgentPromptBuilder.workspacePlanningMessages(
-                        settings: settings,
-                        file: file,
-                        conversation: history,
-                        userRequest: request,
-                        supplementaryMaterial: supplementaryMaterial
-                    )
-                ),
-                let plan = try? EduAgentJSONParser.decodeFirstJSONObject(EduAgentThinkingPlanResponse.self, from: planningReply) {
-                    planningArtifact = plan
-                    liveThinkingMarkdown = plan.thinkingTraceMarkdown
-                }
-                liveThinkingPhase = .solving
-            }
-
-            let reply = try await client.complete(
-                messages: EduAgentPromptBuilder.workspaceAutoMessages(
-                    settings: settings,
-                    file: file,
-                    conversation: history,
-                    userRequest: request,
-                    supplementaryMaterial: supplementaryMaterial,
-                    thinkingEnabled: isThinkingEnabled,
-                    thinkingPlan: planningArtifact
-                )
+            let normalized = EduAgentGraphOperationNormalizer.normalize(
+                envelope: response,
+                userRequest: request
             )
 
-            if let structured = try? EduAgentJSONParser.decodeFirstJSONObject(EduAgentGraphOperationEnvelope.self, from: reply) {
-                let normalized = EduAgentGraphOperationNormalizer.normalize(
-                    envelope: structured,
-                    userRequest: request
+            if pendingCanvasResponse?.operations.isEmpty == false, !normalized.operations.isEmpty {
+                onDismissPendingCanvasResponse()
+            }
+
+            if normalized.operations.isEmpty {
+                conversation.append(
+                    .init(
+                        id: assistantMessageID,
+                        role: .assistant,
+                        content: normalized.assistantReply,
+                        thinkingTraceMarkdown: normalized.thinkingTraceMarkdown
+                    )
                 )
-
-                if pendingCanvasResponse?.operations.isEmpty == false, !normalized.operations.isEmpty {
-                    onDismissPendingCanvasResponse()
-                }
-
-                if normalized.operations.isEmpty {
-                    conversation.append(
-                        .init(
-                            id: assistantMessageID,
-                            role: .assistant,
-                            content: normalized.assistantReply,
-                            thinkingTraceMarkdown: normalized.thinkingTraceMarkdown ?? planningArtifact?.thinkingTraceMarkdown
-                        )
-                    )
-                } else {
-                    conversation.append(
-                        .init(
-                            id: assistantMessageID,
-                            role: .assistant,
-                            content: normalized.assistantReply,
-                            thinkingTraceMarkdown: normalized.thinkingTraceMarkdown ?? planningArtifact?.thinkingTraceMarkdown,
-                            canvasProposal: normalized,
-                            proposalStatus: .pending
-                        )
-                    )
-                    onStorePendingCanvasResponse(normalized)
-                }
-
-                if (normalized.thinkingTraceMarkdown ?? planningArtifact?.thinkingTraceMarkdown)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .isEmpty == false {
-                    expandedThinkingMessageIDs.insert(assistantMessageID)
-                }
             } else {
                 conversation.append(
-                    .init(id: assistantMessageID, role: .assistant, content: reply)
+                    .init(
+                        id: assistantMessageID,
+                        role: .assistant,
+                        content: normalized.assistantReply,
+                        thinkingTraceMarkdown: normalized.thinkingTraceMarkdown,
+                        canvasProposal: normalized,
+                        proposalStatus: .pending
+                    )
                 )
+                onStorePendingCanvasResponse(normalized)
+            }
+
+            if normalized.thinkingTraceMarkdown?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty == false {
+                expandedThinkingMessageIDs.insert(assistantMessageID)
             }
 
             await refreshSuggestedPrompts(attachingTo: assistantMessageID)
@@ -882,10 +883,10 @@ struct EduWorkspaceAgentSheet: View {
 
     @ViewBuilder
     private var modelPickerDropdown: some View {
-        if currentSettings.isConfigured && isModelPickerExpanded {
+        if isBackendConfigured && isModelPickerExpanded {
             VStack(alignment: .leading, spacing: 6) {
                 if availableModels.isEmpty, !isRefreshingModels {
-                    Text(isChinese ? "暂无可选模型" : "No models loaded yet")
+                    Text(isChinese ? "后端暂未返回可用模型" : "No models returned by backend")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 10)
@@ -896,34 +897,28 @@ struct EduWorkspaceAgentSheet: View {
                     ScrollView(showsIndicators: false) {
                         VStack(spacing: 0) {
                             ForEach(availableModels, id: \.self) { model in
-                                Button {
-                                    isModelPickerExpanded = false
-                                    applyModelSelection(model)
-                                } label: {
-                                    HStack(spacing: 8) {
-                                        Circle()
-                                            .fill(model == currentSettings.trimmedModel ? statusBadgeTint : Color.clear)
-                                            .frame(width: 6, height: 6)
-                                        Text(model)
-                                            .font(.system(size: 11, weight: .semibold))
-                                            .foregroundStyle(.white)
-                                            .lineLimit(1)
-                                            .truncationMode(.middle)
-                                        Spacer(minLength: 0)
-                                        if model == currentSettings.trimmedModel {
-                                            Image(systemName: "checkmark")
-                                                .font(.system(size: 9, weight: .bold))
-                                                .foregroundStyle(statusBadgeTint)
-                                        }
+                                HStack(spacing: 8) {
+                                    Circle()
+                                        .fill(model == runtimeStatus?.activeModel ? statusBadgeTint : Color.clear)
+                                        .frame(width: 6, height: 6)
+                                    Text(model)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Spacer(minLength: 0)
+                                    if model == runtimeStatus?.activeModel {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .foregroundStyle(statusBadgeTint)
                                     }
-                                    .padding(.horizontal, 10)
-                                    .frame(height: 28)
-                                    .background(
-                                        (model == currentSettings.trimmedModel ? statusBadgeTint.opacity(0.18) : Color.clear),
-                                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    )
                                 }
-                                .buttonStyle(.plain)
+                                .padding(.horizontal, 10)
+                                .frame(height: 28)
+                                .background(
+                                    (model == runtimeStatus?.activeModel ? statusBadgeTint.opacity(0.18) : Color.clear),
+                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                )
                             }
                         }
                     }
@@ -931,11 +926,11 @@ struct EduWorkspaceAgentSheet: View {
                 }
 
                 Button {
-                    Task { await refreshModels(force: true) }
+                    Task { await refreshRuntimeStatus(force: true) }
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "arrow.clockwise")
-                        Text(isChinese ? "刷新模型列表" : "Refresh Models")
+                        Text(isChinese ? "刷新后端状态" : "Refresh Backend")
                     }
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white)
@@ -953,7 +948,7 @@ struct EduWorkspaceAgentSheet: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "gearshape")
-                        Text(isChinese ? "打开模型设置" : "Open Model Settings")
+                        Text(isChinese ? "账户" : "Account")
                     }
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white)
@@ -980,7 +975,7 @@ struct EduWorkspaceAgentSheet: View {
     @ViewBuilder
     private var modelPickerBadge: some View {
         Button {
-            if currentSettings.isConfigured {
+            if isBackendConfigured {
                 isModelPickerExpanded.toggle()
             } else {
                 showingSettings = true
@@ -997,13 +992,13 @@ struct EduWorkspaceAgentSheet: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                if isRefreshingModels || isRevalidatingModelSelection {
+                if isRefreshingModels {
                     ProgressView()
                         .controlSize(.small)
                 } else {
-                    Image(systemName: currentSettings.isConfigured ? (isModelPickerExpanded ? "chevron.up" : "chevron.down") : "gearshape")
+                    Image(systemName: isBackendConfigured ? (isModelPickerExpanded ? "chevron.up" : "chevron.down") : "gearshape")
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.white.opacity(currentSettings.isConfigured ? 0.82 : 0.6))
+                        .foregroundStyle(.white.opacity(isBackendConfigured ? 0.82 : 0.6))
                 }
             }
             .padding(.horizontal, 10)
@@ -1042,9 +1037,8 @@ struct EduWorkspaceAgentSheet: View {
     private var suggestedPromptTaskID: String {
         [
             file.id.uuidString,
-            currentSettings.trimmedBaseURLString,
-            currentSettings.trimmedModel,
-            currentSettings.trimmedAPIKey.isEmpty ? "no-key" : "has-key",
+            backendConfig?.baseURL.absoluteString ?? "no-backend",
+            runtimeStatus?.activeModel ?? "no-model",
             String(supplementaryMaterial.count),
             isAgentReady ? "ready" : "not-ready"
         ].joined(separator: "|")
@@ -1052,8 +1046,7 @@ struct EduWorkspaceAgentSheet: View {
 
     private var modelCatalogTaskID: String {
         [
-            currentSettings.trimmedBaseURLString,
-            currentSettings.trimmedAPIKey.isEmpty ? "no-key" : "has-key"
+            backendConfig?.baseURL.absoluteString ?? "no-backend"
         ].joined(separator: "|")
     }
 
@@ -1063,22 +1056,20 @@ struct EduWorkspaceAgentSheet: View {
             landingSuggestedPrompts = []
             return
         }
+        guard let workspaceAgentService else {
+            landingSuggestedPrompts = []
+            return
+        }
 
         if conversation.isEmpty, messageID == nil {
             landingSuggestedPrompts = defaultLandingSuggestedPrompts()
         }
 
         do {
-            let client = EduOpenAICompatibleClient(settings: currentSettings)
-            let reply = try await client.complete(
-                messages: EduAgentPromptBuilder.workspaceSuggestedPromptMessages(
-                    settings: currentSettings,
-                    file: file,
-                    supplementaryMaterial: supplementaryMaterial
-                )
+            let prompts = try await workspaceAgentService.suggestedPrompts(
+                file: file,
+                supplementaryMaterial: supplementaryMaterial
             )
-            let structured = try EduAgentJSONParser.decodeFirstJSONObject(EduAgentSuggestedPromptsResponse.self, from: reply)
-            let prompts = structured.suggestions
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
                 .prefix(3)
@@ -1235,88 +1226,39 @@ struct EduWorkspaceAgentSheet: View {
 
     @MainActor
     private func refreshModelsSilently() async {
-        guard currentSettings.isConfigured else {
+        guard isBackendConfigured else {
             availableModels = []
+            runtimeStatus = nil
             isRefreshingModels = false
             return
         }
-        await refreshModels(force: false)
+        await refreshRuntimeStatus(force: false)
     }
 
     @MainActor
-    private func refreshModels(force: Bool) async {
-        guard currentSettings.isConfigured else {
+    private func refreshRuntimeStatus(force: Bool) async {
+        guard let workspaceAgentService else {
             availableModels = []
+            runtimeStatus = nil
             isRefreshingModels = false
             return
         }
         guard !isRefreshingModels else { return }
-        if !force, !availableModels.isEmpty { return }
+        if !force, runtimeStatus != nil, !availableModels.isEmpty { return }
 
         isRefreshingModels = true
         defer { isRefreshingModels = false }
 
         do {
-            let client = EduOpenAICompatibleClient(settings: currentSettings)
-            availableModels = try await client.listModels()
+            let status = try await workspaceAgentService.runtimeStatus()
+            runtimeStatus = status
+            availableModels = status.availableModels
         } catch {
+            runtimeStatus = nil
+            availableModels = []
             if force {
                 lastError = error.localizedDescription
             }
-        }
-    }
-
-    private func applyModelSelection(_ model: String) {
-        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        var updated = currentSettings
-        guard updated.trimmedModel != trimmed else { return }
-        updated.model = trimmed
-        EduAgentSettingsStore.save(updated)
-        settingsSnapshot = updated
-        lastError = nil
-
-        Task {
-            await revalidateModelSelection(using: updated)
-        }
-    }
-
-    private func reloadSettingsFromStore() {
-        settingsSnapshot = EduAgentSettingsStore.load()
-        availableModels = []
-        isModelPickerExpanded = false
-    }
-
-    @MainActor
-    private func revalidateModelSelection(using settings: EduAgentProviderSettings) async {
-        guard settings.isConfigured else { return }
-
-        isRevalidatingModelSelection = true
-        defer { isRevalidatingModelSelection = false }
-
-        do {
-            let client = EduOpenAICompatibleClient(settings: settings)
-            let reply = try await client.complete(messages: [
-                EduLLMMessage(role: "system", content: "Reply with a short confirmation."),
-                EduLLMMessage(role: "user", content: "Return OK.")
-            ])
-            let normalizedReply = reply.trimmingCharacters(in: .whitespacesAndNewlines)
-            let message = isChinese
-                ? "连接成功。当前配置模型：\(settings.trimmedModel)" + (normalizedReply.isEmpty ? "" : "。回复：\(normalizedReply)")
-                : "Connection succeeded. Configured model: \(settings.trimmedModel)" + (normalizedReply.isEmpty ? "" : ". Reply: \(normalizedReply)")
-            EduAgentConnectionStatusStore.saveResult(
-                isReachable: true,
-                message: message,
-                for: settings
-            )
-        } catch {
-            EduAgentConnectionStatusStore.saveResult(
-                isReachable: false,
-                message: error.localizedDescription,
-                for: settings
-            )
-            lastError = error.localizedDescription
         }
     }
 }
@@ -1534,13 +1476,26 @@ struct EduPresentationAgentSheet: View {
 
     @MainActor
     private func send() async {
-        let settings = EduAgentSettingsStore.load()
-        guard settings.isConfigured else {
-            lastError = isChinese ? "请先配置 LLM。" : "Configure the LLM first."
+        guard let service = EduBackendLLMService(),
+              EduBackendSessionStore.load() != nil else {
+            lastError = isChinese ? "请先登录 EduNode 账户后再使用 AI 搭图。" : "Sign in to your EduNode account before using AI canvas assistance."
             return
         }
         let request = userInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !request.isEmpty else { return }
+
+        let activeModel = (EduBackendRuntimeStatusStore.load()?.activeModel ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let settings = EduAgentProviderSettings(
+            providerName: "EduNode Backend",
+            baseURLString: EduBackendServiceConfig.loadOptional()?.baseURL.absoluteString ?? "backend",
+            model: activeModel.isEmpty ? "backend-model" : activeModel,
+            apiKey: "session",
+            temperature: 0.35,
+            maxTokens: 3200,
+            timeoutSeconds: 120,
+            additionalSystemPrompt: ""
+        )
 
         lastError = nil
         isRunning = true
@@ -1549,8 +1504,7 @@ struct EduPresentationAgentSheet: View {
         userInput = ""
 
         do {
-            let client = EduOpenAICompatibleClient(settings: settings)
-            let reply = try await client.complete(
+            let reply = try await service.complete(
                 messages: EduAgentPromptBuilder.presentationRevisionMessages(
                     settings: settings,
                     file: file,
@@ -1746,7 +1700,7 @@ struct EduAgentActionButtonStyle: ButtonStyle {
         var foregroundColor: Color {
             switch self {
             case .primary:
-                return .teal
+                return .accentColor
             case .secondary:
                 return .primary
             case .destructive:
@@ -1757,7 +1711,7 @@ struct EduAgentActionButtonStyle: ButtonStyle {
         var fillColor: Color {
             switch self {
             case .primary:
-                return Color.teal.opacity(0.16)
+                return Color.accentColor.opacity(0.16)
             case .secondary:
                 return Color.white.opacity(0.06)
             case .destructive:
@@ -1768,7 +1722,7 @@ struct EduAgentActionButtonStyle: ButtonStyle {
         var strokeColor: Color {
             switch self {
             case .primary:
-                return Color.teal.opacity(0.30)
+                return Color.accentColor.opacity(0.30)
             case .secondary:
                 return Color.white.opacity(0.12)
             case .destructive:

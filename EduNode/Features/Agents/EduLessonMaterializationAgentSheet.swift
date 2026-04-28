@@ -726,18 +726,29 @@ struct EduLessonMaterializationAgentSheet: View {
 
     @MainActor
     private func send() async {
-        let settings = EduAgentSettingsStore.load()
-        guard settings.isConfigured else {
-            lastError = isChinese ? "请先配置 LLM。" : "Configure the LLM first."
+        guard let service = EduBackendLLMService(),
+              EduBackendSessionStore.load() != nil else {
+            lastError = isChinese ? "请先登录 EduNode 账户后再使用此功能。" : "Sign in to your EduNode account before using this feature."
             return
         }
+
+        let activeModel = (EduBackendRuntimeStatusStore.load()?.activeModel ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let settings = EduAgentProviderSettings(
+            providerName: "EduNode Backend",
+            baseURLString: EduBackendServiceConfig.loadOptional()?.baseURL.absoluteString ?? "backend",
+            model: activeModel.isEmpty ? "backend-model" : activeModel,
+            apiKey: "session",
+            temperature: 0.35,
+            maxTokens: 3200,
+            timeoutSeconds: 120,
+            additionalSystemPrompt: ""
+        )
 
         lastError = nil
         isRunning = true
 
         do {
-            let client = EduOpenAICompatibleClient(settings: settings)
-
             if generatedMarkdown == nil {
                 guard let templateDocument else {
                     lastError = isChinese ? "请先导入模板。" : "Import a template first."
@@ -750,7 +761,7 @@ struct EduLessonMaterializationAgentSheet: View {
                     return
                 }
 
-                let reply = try await client.complete(
+                let reply = try await service.complete(
                     messages: EduLessonPlanMaterializationPromptBuilder.materializationMessages(
                         settings: settings,
                         file: file,
@@ -781,7 +792,7 @@ struct EduLessonMaterializationAgentSheet: View {
                 conversation.append(.init(role: .user, content: request))
                 userInput = ""
 
-                let reply = try await client.complete(
+                let reply = try await service.complete(
                     messages: EduAgentPromptBuilder.lessonPlanRevisionMessages(
                         settings: settings,
                         file: file,

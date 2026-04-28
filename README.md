@@ -30,13 +30,14 @@ Rather than positioning AI as a detached chat layer, EduNode keeps teachers in c
 ## Architecture at a Glance
 
 - App architecture: single native SwiftUI application with SwiftData persistence.
+- Local backend package: repository-root Swift Package with a Vapor-based `EduNodeServer` for the first front/backend split.
 - Graph engine: GNodeKit via Swift Package Manager.
-- LLM integration: direct OpenAI-compatible API calls configured inside the app.
-- Reference-template parsing: MinerU, loaded from runtime `.env` settings for parser access.
+- LLM integration: the workspace-agent path is driven by `EduNodeServer`, which loads OpenAI-compatible model settings from the backend `.env`.
+- Reference-template parsing: MinerU, called only by the backend and configured in `Server/.env`.
 - Artifact outputs: graph-grounded lesson plans and presentation decks rendered as Markdown, HTML, and PDF.
-- Phase-1 delivery strategy - service-oriented monolith: to control early development cost and keep iteration speed high, the current Agent backend is implemented directly in Swift inside the application. In the next phase, these boundaries can be lifted into independent API services and the current in-process calls can be replaced with network requests.
+- Phase-1 delivery strategy - service-oriented monolith: to control early development cost and keep iteration speed high, the Agent, LLM, reference parsing, and auth boundaries are currently implemented as a Swift/Vapor backend package in this repository. In the next phase, these same service boundaries can be split into independently deployed API services without changing the app-side contract.
 
-EduNode does not require a custom backend to run locally. External services are used only when you enable remote LLM calls or reference-PDF parsing.
+EduNode can still render and edit the pedagogical graph locally, but the workspace-agent path now expects `EduNodeServer` whenever you want live LLM-backed assistance.
 
 ## Requirements
 
@@ -56,45 +57,60 @@ EduNode does not require a custom backend to run locally. External services are 
 
 ## Runtime Configuration
 
-### In-app model settings
+### App-side backend connection
 
-LLM settings for the application are configured inside EduNode's Model Settings UI, not from `EduNode/.env`.
-
-Configure:
-
-- provider base URL
-- model name
-- API key
-- temperature
-- max tokens
-- timeout
-- optional extra system prompt
-
-API keys configured in the app are stored through Keychain-backed settings.
-
-### `.env` for reference parsing and smoke scripts
-
-For reference-template parsing and CLI smoke workflows, copy:
+The client only needs the EduNode backend base URL:
 
 ```bash
 cp EduNode/.env.example EduNode/.env
 ```
 
-Important variables include:
+- `EDUNODE_BACKEND_BASE_URL`
 
-- `MINERU_API_TOKEN`
-- `MINERU_API_BASE_URL`
-- `MINERU_APPLY_UPLOAD_URL`
-- `MINERU_BATCH_RESULT_URL_PREFIX`
+The app now signs in only through `EduNodeServer`. Supabase stays behind the Vapor backend, so the client no longer carries Supabase URL or publishable-key configuration.
+Do not place Supabase, LLM, or MinerU secrets in `EduNode/.env`; those stay backend-only in `Server/.env`.
+### Backend-side model configuration
+
+Copy:
+
+```bash
+cp Server/.env.example Server/.env
+```
+
+Key backend variables include:
+
+- `EDUNODE_SUPABASE_URL`
+- `EDUNODE_SUPABASE_PUBLISHABLE_KEY`
+- `EDUNODE_LLM_PROVIDER_NAME`
 - `EDUNODE_LLM_BASE_URL`
 - `EDUNODE_LLM_MODEL`
 - `EDUNODE_LLM_API_KEY`
-- `EDUNODE_REFERENCE_TEMPLATE_PATH`
+- `EDUNODE_LLM_TEMPERATURE`
+- `EDUNODE_LLM_MAX_TOKENS`
+- `EDUNODE_LLM_TIMEOUT_SECONDS`
+- `EDUNODE_LLM_ADDITIONAL_SYSTEM_PROMPT`
+- `MINERU_API_TOKEN`
 
-Notes:
+The app no longer reads provider/model/API-key values from the UI. Users now sign in through EduNode backend endpoints, and the backend brokers Supabase Auth before running any protected agent or parsing workload. For the official MinerU cloud service, `MINERU_API_TOKEN` is enough; the backend now falls back to the official default endpoints automatically.
 
-- The app-side reference parser looks for `.env` in the app's Documents directory or bundled resources.
-- The CLI smoke scripts read `EduNode/.env` directly from the repository.
+## Local Backend
+
+From the repository root:
+
+```bash
+swift run EduNodeServer
+```
+
+Default runtime:
+
+- host: `127.0.0.1`
+- port: `8080`
+
+Optional environment variables:
+
+- `PORT`
+- `EDUNODE_SERVER_HOST`
+- `EDUNODE_SERVER_AGENT_MODE`
 
 ## Local Verification
 
@@ -111,6 +127,11 @@ xcodebuild -project EduNode.xcodeproj -scheme EduNode -destination 'platform=iOS
 Focused local verification scripts are also included under `Scripts/`, primarily for parser inspection, agent-logic smoke checks, and running the core test target.
 
 Current automated coverage is strongest around agent logic, template parsing, compliance checking, and lesson-plan materialization.
+
+If you run backend integration tests against protected routes, seed a valid Supabase session first through either:
+
+- `EDUNODE_TEST_SUPABASE_ACCESS_TOKEN` with optional refresh and user metadata
+- `EDUNODE_TEST_SUPABASE_EMAIL` plus `EDUNODE_TEST_SUPABASE_PASSWORD`
 
 ## Dependency Notes
 

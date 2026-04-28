@@ -44,38 +44,36 @@ struct EduLessonPlanExportSetupSheet: View {
         Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
     }
 
+    private var interfaceAccentColor: Color {
+        .accentColor
+    }
+
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 18) {
-                introCard
-                referenceCard
-                if let lastError {
-                    EduAgentStatusCard(
-                        title: isChinese ? "导入失败" : "Import Failed",
-                        message: lastError,
-                        tint: .orange
-                    )
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(20)
-            .background(Color(white: 0.08).ignoresSafeArea())
-            .navigationTitle(isChinese ? "导出教案" : "Export Lesson Plan")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(isChinese ? "关闭" : "Close") {
-                        dismiss()
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                setupHeaderBar(topInset: geometry.safeAreaInsets.top)
+
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 18) {
+                        referenceCard
+                        if let lastError {
+                            EduAgentStatusCard(
+                                title: isChinese ? "导入失败" : "Import Failed",
+                                message: lastError,
+                                tint: .orange
+                            )
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .padding(.top, 10)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 24)
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(isChinese ? "继续" : "Continue") {
-                        continueToWorkbench()
-                    }
-                    .fontWeight(.semibold)
-                }
+                .background(Color(white: 0.08))
             }
         }
+        .background(Color(white: 0.08).ignoresSafeArea())
+        .ignoresSafeArea(.container, edges: .top)
         .preferredColorScheme(.dark)
         .presentationDetents([.height(setupSheetHeight)])
         .presentationDragIndicator(.visible)
@@ -87,25 +85,61 @@ struct EduLessonPlanExportSetupSheet: View {
         }
     }
 
-    private var introCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(isChinese ? "教案工作台" : "Lesson Plan Workbench")
-                .font(.headline)
-            Text(
-                isChinese
-                    ? "可选上传一份参考教案，让生成结果更贴近目标结构、内容组织与文风。"
-                    : "Optionally upload a reference lesson plan so the generated draft can better match its structure, content organization, and tone."
-            )
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+    private func setupHeaderBar(topInset: CGFloat) -> some View {
+        HStack(spacing: 12) {
+            headerCircleButton(
+                systemImage: "xmark",
+                accessibilityLabel: isChinese ? "关闭" : "Close"
+            ) {
+                dismiss()
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isChinese ? "导出教案" : "Export Lesson Plan")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(isChinese ? "选择参考教案后继续" : "Choose a reference plan, then continue")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .lineLimit(1)
+
+            Spacer(minLength: 12)
+
+            Button {
+                continueToWorkbench()
+            } label: {
+                Text(isChinese ? "继续" : "Continue")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(minWidth: 118)
+                    .frame(height: 42)
+            }
+            .buttonStyle(EduAgentActionButtonStyle(variant: .primary))
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
+        .padding(.leading, 20)
+        .padding(.trailing, 20)
+        .padding(.top, topInset + 12)
+        .padding(.bottom, 12)
+        .background(Color(white: 0.08))
+    }
+
+    private func headerCircleButton(
+        systemImage: String,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: 34, height: 34)
+                .background(Color.white.opacity(0.08), in: Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
     }
 
     private var referenceCard: some View {
@@ -128,7 +162,7 @@ struct EduLessonPlanExportSetupSheet: View {
                 VStack(spacing: 12) {
                     Image(systemName: referenceAttachment == nil ? "square.and.arrow.up" : "doc.badge.gearshape")
                         .font(.system(size: 28, weight: .semibold))
-                        .foregroundStyle(.teal)
+                        .foregroundStyle(interfaceAccentColor)
                     Text(referenceAttachment == nil
                          ? (isChinese ? "点击选择参考教案 PDF" : "Tap to choose a reference lesson-plan PDF")
                          : (isChinese ? "已选择参考教案，点击可替换" : "Reference lesson plan selected. Tap to replace"))
@@ -157,7 +191,7 @@ struct EduLessonPlanExportSetupSheet: View {
             if let referenceAttachment {
                 HStack(spacing: 10) {
                     Image(systemName: "doc.richtext")
-                        .foregroundStyle(.teal)
+                        .foregroundStyle(interfaceAccentColor)
                     Text(referenceAttachment.fileName)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.primary)
@@ -242,14 +276,14 @@ struct EduLessonPlanExportSetupSheet: View {
     }
 
     private var stylePickerBorderColor: Color {
-        referenceAttachment == nil ? Color.white.opacity(0.16) : Color.teal.opacity(0.32)
+        referenceAttachment == nil ? Color.white.opacity(0.16) : interfaceAccentColor.opacity(0.34)
     }
 
     private var setupSheetHeight: CGFloat {
         if referenceAttachment != nil || lastError != nil {
-            return 520
+            return 540
         }
-        return 460
+        return 470
     }
 }
 
@@ -282,6 +316,22 @@ struct EduLessonPlanWorkbenchView: View {
         Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
     }
 
+    private var interfaceAccentColor: Color {
+        .accentColor
+    }
+
+    private var catalystWindowControlReservedWidth: CGFloat {
+        #if targetEnvironment(macCatalyst)
+        return 78
+        #else
+        return 0
+        #endif
+    }
+
+    private var workbenchHeaderLeadingPadding: CGFloat {
+        18 + catalystWindowControlReservedWidth
+    }
+
     private var previewHTML: String {
         if viewModel.generatedMarkdown != nil {
             return EduMarkdownDocumentRenderer.html(
@@ -294,8 +344,10 @@ struct EduLessonPlanWorkbenchView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            GeometryReader { proxy in
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                workbenchHeaderBar(topInset: proxy.safeAreaInsets.top)
+
                 HStack(spacing: 0) {
                     previewPanel
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -308,28 +360,18 @@ struct EduLessonPlanWorkbenchView: View {
                         .frame(width: min(392, max(332, proxy.size.width * 0.31)))
                         .background(Color(white: 0.09))
                 }
-                .background(Color(white: 0.07).ignoresSafeArea())
-            }
-            .navigationTitle(isChinese ? "教案工作台" : "Lesson Plan Workbench")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(isChinese ? "关闭" : "Close") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 10) {
-                        exportActions
-                    }
-                }
+                .background(Color(white: 0.07))
             }
         }
+        .background(Color(white: 0.07).ignoresSafeArea())
+        .ignoresSafeArea(.container, edges: .top)
         .preferredColorScheme(.dark)
         .sheet(isPresented: $viewModel.showingSettings) {
-            EduAgentSettingsSheet {
-                viewModel.reloadSettingsFromStore()
-            }
+            EduAgentSettingsSheet(
+                onSaved: {
+                    viewModel.reloadSettingsFromStore()
+                }
+            )
         }
         .fileExporter(
             isPresented: $showExporter,
@@ -342,12 +384,54 @@ struct EduLessonPlanWorkbenchView: View {
         .task {
             viewModel.bootstrapIfNeeded()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .eduNodeBackendSessionDidChange)) { _ in
+            viewModel.reloadSettingsFromStore()
+        }
         .onChange(of: viewModel.generatedMarkdown) { _, newValue in
             let isDone = !(newValue?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
             payload.sourceFile.lessonPlanMarkedDone = isDone
             payload.sourceFile.updatedAt = .now
             try? modelContext.save()
         }
+    }
+
+    private func workbenchHeaderBar(topInset: CGFloat) -> some View {
+        HStack(spacing: 12) {
+            headerCircleButton(
+                systemImage: "xmark",
+                accessibilityLabel: isChinese ? "关闭" : "Close"
+            ) {
+                dismiss()
+            }
+
+            Spacer(minLength: 12)
+
+            exportActions
+        }
+        .padding(.leading, workbenchHeaderLeadingPadding)
+        .padding(.trailing, 18)
+        .padding(.top, topInset + 12)
+        .padding(.bottom, 12)
+        .background(Color(white: 0.07))
+    }
+
+    private func headerCircleButton(
+        systemImage: String,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 34, height: 34)
+                .background(Color.white.opacity(0.08), in: Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
     }
 
     private var previewPanel: some View {
@@ -404,7 +488,7 @@ struct EduLessonPlanWorkbenchView: View {
             } else {
                 Image(systemName: "doc.text.magnifyingglass")
                     .font(.system(size: 30, weight: .semibold))
-                    .foregroundStyle(.teal)
+                    .foregroundStyle(interfaceAccentColor)
             }
             Text(previewPlaceholderTitle)
                 .font(.headline)
@@ -636,22 +720,27 @@ struct EduLessonPlanWorkbenchView: View {
     }
 
     private var currentModelText: String {
-        let settings = EduAgentSettingsStore.load()
-        if !settings.isConfigured {
-            return isChinese ? "未配置 LLM" : "LLM Not Configured"
+        guard EduBackendServiceConfig.loadOptional() != nil else {
+            return isChinese ? "未配置后端" : "Backend Unset"
         }
-        return settings.trimmedModel
+        guard EduBackendSessionStore.load() != nil else {
+            return isChinese ? "未登录账户" : "Account Sign-in Required"
+        }
+        let cachedModel = EduBackendRuntimeStatusStore.load()?.activeModel.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return cachedModel.isEmpty ? (isChinese ? "模型检测中" : "Checking Model") : cachedModel
     }
 
     private var currentModelColor: Color {
-        let settings = EduAgentSettingsStore.load()
-        if !settings.isConfigured {
+        guard EduBackendServiceConfig.loadOptional() != nil else {
             return .orange
         }
-        if EduAgentConnectionStatusStore.status(for: settings)?.isReachable == true {
+        guard EduBackendSessionStore.load() != nil else {
+            return .orange
+        }
+        if EduBackendRuntimeStatusStore.load()?.providerReachable == true {
             return .green
         }
-        return .teal
+        return interfaceAccentColor
     }
 
     private var conversationSignature: String {
@@ -711,7 +800,7 @@ struct EduLessonPlanWorkbenchView: View {
                     text: isChinese
                         ? "\(referenceDocument.styleProfile.sectionCount) 个章节"
                         : "\(referenceDocument.styleProfile.sectionCount) sections",
-                    tint: .teal
+                    tint: interfaceAccentColor
                 )
             }
             Text(referenceDocument.sourceName)
@@ -813,13 +902,13 @@ struct EduLessonPlanWorkbenchView: View {
                         if viewModel.activeFollowUpItem?.id == item.id {
                             Image(systemName: "pencil.circle.fill")
                                 .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.teal)
+                                .foregroundStyle(interfaceAccentColor)
                         }
                     }
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
-                        (viewModel.activeFollowUpItem?.id == item.id ? Color.teal.opacity(0.1) : Color.white.opacity(0.04)),
+                        (viewModel.activeFollowUpItem?.id == item.id ? interfaceAccentColor.opacity(0.12) : Color.white.opacity(0.04)),
                         in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                     )
                 }
@@ -901,7 +990,7 @@ struct EduLessonPlanWorkbenchView: View {
                             .font(.caption.weight(.semibold))
                         Text(suggestion.suggestedAnswer)
                             .font(.caption2)
-                            .foregroundStyle(Color.teal.opacity(0.94))
+                            .foregroundStyle(interfaceAccentColor.opacity(0.96))
                             .lineLimit(6)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -994,7 +1083,7 @@ struct EduLessonPlanWorkbenchView: View {
 
     private var readinessBadgeTint: Color {
         if payload.referenceAttachment == nil {
-            return .teal
+            return interfaceAccentColor
         }
         if viewModel.referenceDocument == nil {
             return .orange
@@ -1106,27 +1195,44 @@ struct EduLessonPlanWorkbenchView: View {
     }
 
     private var exportActions: some View {
-        HStack(spacing: 0) {
-            Button(".md", action: exportMarkdown)
-                .buttonStyle(.plain)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-
-            Rectangle()
-                .fill(Color.white.opacity(0.32))
-                .frame(width: 1, height: 16)
-                .padding(.horizontal, 4)
-
-            Button(".pdf", action: exportPDF)
-                .buttonStyle(.plain)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
+        HStack(spacing: 8) {
+            exportFormatButton(
+                title: ".md",
+                systemImage: "doc.plaintext",
+                action: exportMarkdown
+            )
+            exportFormatButton(
+                title: ".pdf",
+                systemImage: "doc.richtext",
+                action: exportPDF
+            )
         }
         .disabled(isExportingPDF)
+        .opacity(isExportingPDF ? 0.66 : 1)
+    }
+
+    private func exportFormatButton(
+        title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .frame(height: 34)
+            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
