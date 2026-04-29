@@ -78,8 +78,32 @@ struct EduNodeApp: App {
                 Button("Account…") {
                     NotificationCenter.default.post(name: .eduNodeCommandOpenAccount, object: nil)
                 }
+                .keyboardShortcut(",", modifiers: [.command, .shift])
+            }
+
+            CommandMenu("Support") {
+                Button("Contact Euan…") {
+                    openExternalURL("https://www.notion.so/EduNode-Tech-Support-3510891ad1ec8062b263d8878e104158")
+                }
+
+                Button("Website") {
+                    openExternalURL("https://www.euantop.work")
+                }
+
+                Divider()
+
+                Button("Documentation") {
+                    NotificationCenter.default.post(name: .eduNodeCommandOpenDocumentation, object: nil)
+                }
             }
         }
+    }
+
+    private func openExternalURL(_ rawValue: String) {
+        guard let url = URL(string: rawValue) else { return }
+        #if canImport(UIKit)
+        UIApplication.shared.open(url)
+        #endif
     }
 
     private func bootLog(_ message: String) {

@@ -160,7 +160,11 @@ extension ContentView {
                 file: file,
                 conversation: Binding(
                     get: { workspaceAgentConversationByFile[file.id] ?? [] },
-                    set: { workspaceAgentConversationByFile[file.id] = $0 }
+                    set: { newMessages in
+                        updateWorkspaceAgentConversation(fileID: file.id) { messages in
+                            messages = newMessages
+                        }
+                    }
                 ),
                 pendingCanvasResponse: workspaceAgentPendingResponseByFile[file.id],
                 onStorePendingCanvasResponse: { response in
@@ -270,6 +274,7 @@ extension ContentView {
         var messages = workspaceAgentConversationByFile[fileID] ?? []
         transform(&messages)
         workspaceAgentConversationByFile[fileID] = messages
+        EduAgentConversationPersistence.saveWorkspaceConversations(workspaceAgentConversationByFile)
     }
 
     func markLatestWorkspaceAgentProposal(

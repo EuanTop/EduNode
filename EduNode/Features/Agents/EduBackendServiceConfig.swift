@@ -8,6 +8,7 @@ struct EduDotEnvDocument {
 enum EduDotEnvLoader {
     private static let sourceAnchorPath = #filePath
     private static let allowedFrontendKeys: Set<String> = [
+        "EDUNODE_ENV",
         "EDUNODE_BACKEND_BASE_URL",
         "EDUNODE_SERVER_HOST",
         "PORT"
@@ -66,22 +67,36 @@ enum EduDotEnvLoader {
         let fileManager = FileManager.default
 
         if let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
+            for name in environmentSpecificDotEnvNames() {
+                urls.append(documents.appendingPathComponent(name))
+            }
             urls.append(documents.appendingPathComponent(".env"))
         }
 
         if let resourceURL = Bundle.main.resourceURL {
+            for name in environmentSpecificDotEnvNames() {
+                urls.append(resourceURL.appendingPathComponent(name))
+            }
             urls.append(resourceURL.appendingPathComponent(".env"))
         }
 
         urls.append(Bundle.main.bundleURL.appendingPathComponent(".env"))
 
         let currentDirectory = URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
+        for name in environmentSpecificDotEnvNames() {
+            urls.append(currentDirectory.appendingPathComponent(name))
+            urls.append(currentDirectory.appendingPathComponent("EduNode/\(name)"))
+        }
         urls.append(currentDirectory.appendingPathComponent(".env"))
         urls.append(currentDirectory.appendingPathComponent("EduNode/.env"))
         urls.append(currentDirectory.appendingPathComponent("Server/.env"))
 
         var sourceDirectory = URL(fileURLWithPath: sourceAnchorPath).deletingLastPathComponent()
         for _ in 0..<8 {
+            for name in environmentSpecificDotEnvNames() {
+                urls.append(sourceDirectory.appendingPathComponent(name))
+                urls.append(sourceDirectory.appendingPathComponent("EduNode/\(name)"))
+            }
             urls.append(sourceDirectory.appendingPathComponent(".env"))
             urls.append(sourceDirectory.appendingPathComponent("EduNode/.env"))
             urls.append(sourceDirectory.appendingPathComponent("Server/.env"))
@@ -93,6 +108,23 @@ enum EduDotEnvLoader {
             let normalized = url.standardizedFileURL.path
             return seen.insert(normalized).inserted
         }
+    }
+
+    private static func environmentSpecificDotEnvNames() -> [String] {
+        let raw = ProcessInfo.processInfo.environment["EDUNODE_ENV"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        guard !raw.isEmpty else { return [] }
+        let normalized: String
+        switch raw {
+        case "prod", "production", "release":
+            normalized = "production"
+        case "dev", "development", "debug":
+            normalized = "dev"
+        default:
+            normalized = raw
+        }
+        return [".env.\(normalized)"]
     }
 
     private static func parse(_ text: String) -> [String: String] {

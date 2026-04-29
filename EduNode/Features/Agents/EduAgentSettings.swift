@@ -282,37 +282,34 @@ struct EduAgentSettingsSheet: View {
     }
 
     private var accountSheetBody: some View {
-        NavigationStack {
-            ScrollView {
+        VStack(spacing: 0) {
+            accountHeaderBar
+
+            ScrollView(showsIndicators: false) {
                 contentStack
-                    .padding(20)
-            }
-            .background(Color(white: 0.08).ignoresSafeArea())
-            .navigationTitle(isChinese ? "账户" : "Account")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(isChinese ? "关闭" : "Close") {
-                        dismiss()
-                    }
-                }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                    .padding(.bottom, 24)
             }
         }
+        .eduSheetChrome()
     }
 
     private var startupGateBody: some View {
-        ZStack {
-            Color(white: 0.08)
-                .ignoresSafeArea()
+        GeometryReader { geometry in
+            ZStack {
+                EduPanelStyle.sheetBackground
 
-            GeometryReader { geometry in
                 ScrollView {
                     VStack(spacing: 0) {
                         Spacer(minLength: max(geometry.size.height * 0.16, 56))
 
-                        contentStack
-                            .frame(maxWidth: 560)
-                            .frame(maxWidth: .infinity)
+                        VStack(alignment: .leading, spacing: 12) {
+                            welcomeHeaderSection
+                            contentStack
+                        }
+                        .frame(maxWidth: 560)
+                        .frame(maxWidth: .infinity)
 
                         Spacer(minLength: max(geometry.size.height * 0.18, 72))
                     }
@@ -328,9 +325,6 @@ struct EduAgentSettingsSheet: View {
 
     private var contentStack: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if allowsContinueWithoutAccount {
-                welcomeHeaderSection
-            }
             statusBanner
             accountCard
             if allowsContinueWithoutAccount && currentSession == nil {
@@ -368,7 +362,7 @@ struct EduAgentSettingsSheet: View {
             messageCard(
                 title: isChinese ? "提示" : "Notice",
                 message: infoMessage,
-                tint: .blue
+                tint: .secondary
             )
         } else if !accountServicesAvailable {
             messageCard(
@@ -433,8 +427,9 @@ struct EduAgentSettingsSheet: View {
                         .autocorrectionDisabled()
                         .keyboardType(.emailAddress)
                         .textContentType(.username)
-                        .padding(12)
-                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .padding(.horizontal, 12)
+                        .frame(height: 48)
+                        .authInputBackground()
 
                     passwordField
 
@@ -526,6 +521,40 @@ struct EduAgentSettingsSheet: View {
         )
     }
 
+    private var accountHeaderBar: some View {
+        HStack(spacing: 12) {
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 34, height: 34)
+                    .background(EduPanelStyle.controlFill, in: Circle())
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isChinese ? "关闭" : "Close")
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isChinese ? "账户" : "Account")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(isChinese ? "登录后启用 AI 与参考文档解析" : "Sign in to unlock AI and reference parsing")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 12)
+        }
+        .padding(.leading, 18)
+        .padding(.trailing, 18)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
+    }
+
     private var passwordField: some View {
         HStack(spacing: 10) {
             Group {
@@ -554,8 +583,10 @@ struct EduAgentSettingsSheet: View {
                     : (isPasswordVisible ? "Hide password" : "Show password")
             )
         }
-        .padding(12)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.leading, 12)
+        .padding(.trailing, 9)
+        .frame(height: 48)
+        .authInputBackground()
     }
 
     private func hydrateSession() {
@@ -648,11 +679,11 @@ struct EduAgentSettingsSheet: View {
 private extension View {
     func cardStyle() -> some View {
         padding(16)
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
+            .eduPanelCard(cornerRadius: 18)
+    }
+
+    func authInputBackground() -> some View {
+        background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 

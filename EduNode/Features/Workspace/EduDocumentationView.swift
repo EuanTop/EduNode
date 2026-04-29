@@ -40,7 +40,11 @@ struct EduDocumentationView: View {
     }
 
     private var sidebarBackgroundColor: Color {
+        #if targetEnvironment(macCatalyst)
         Color(white: 0.12)
+        #else
+        Color.clear
+        #endif
     }
 
     private var detailPanelBackgroundColor: Color {
@@ -92,7 +96,7 @@ struct EduDocumentationView: View {
                             .zIndex(40)
                     }
                 }
-                .background(Color(white: 0.08).ignoresSafeArea())
+                .background(EduPanelStyle.sheetBackground)
 
                 if !isSidebarVisible {
                     collapsedHeaderBar(topInset: geometry.safeAreaInsets.top)
@@ -129,6 +133,7 @@ struct EduDocumentationView: View {
         VStack(spacing: 0) {
             sidebarHeaderBar
 
+            #if targetEnvironment(macCatalyst)
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     sidebarIntroCard
@@ -145,16 +150,46 @@ struct EduDocumentationView: View {
                                     sidebarDocEntry(for: doc)
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 14)
             }
             .scrollIndicators(.hidden)
+            #else
+            List {
+                Section {
+                    sidebarIntroCard
+                        .padding(.vertical, 8)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                        .listRowBackground(Color.clear)
+                }
+
+                ForEach(sortedCategories, id: \.self) { categoryKey in
+                    Section(NodeDocumentation.categoryTitle(for: categoryKey)) {
+                        ForEach(NodeDocumentation.docs(in: categoryKey)) { doc in
+                            sidebarDocListEntry(for: doc)
+                        }
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(Color.clear)
+            #endif
         }
         .frame(width: width)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(sidebarBackgroundColor)
+        .background {
+            #if targetEnvironment(macCatalyst)
+            sidebarBackgroundColor
+            #else
+            Color.clear
+            #endif
+        }
     }
 
     private var sidebarHeaderBar: some View {
@@ -186,7 +221,6 @@ struct EduDocumentationView: View {
         .padding(.trailing, 16)
         .padding(.top, 12)
         .padding(.bottom, 10)
-        .background(sidebarBackgroundColor)
     }
 
     private func collapsedHeaderBar(topInset: CGFloat) -> some View {
@@ -211,23 +245,46 @@ struct EduDocumentationView: View {
         .padding(.top, topInset + 12)
     }
 
+    @ViewBuilder
     private func docsHeaderButton(
         systemImage: String,
         accessibilityLabel: String,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        let button = Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .semibold))
-                .frame(width: 34, height: 34)
-                .background(Color.white.opacity(0.08), in: Circle())
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 32, height: 32)
+        }
+
+        #if targetEnvironment(macCatalyst)
+        button
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.92))
+            .background(Color.white.opacity(0.08), in: Circle())
             .overlay(
                 Circle()
                     .stroke(Color.white.opacity(0.10), lineWidth: 1)
             )
+            .accessibilityLabel(accessibilityLabel)
+        #else
+        if #available(iOS 26.0, macOS 26.0, *) {
+            button
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .accessibilityLabel(accessibilityLabel)
+        } else {
+            button
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                )
+                .accessibilityLabel(accessibilityLabel)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(accessibilityLabel)
+        #endif
     }
 
     private var sidebarIntroCard: some View {
@@ -250,7 +307,7 @@ struct EduDocumentationView: View {
 
     private var examplePanel: some View {
         ZStack {
-            Color(white: 0.09)
+            EduPanelStyle.sidebarBase
 
             if let selectedType {
                 NodeEditorView(exampleForNodeType: selectedType)
@@ -500,6 +557,76 @@ struct EduDocumentationView: View {
         }
     }
 
+    @ViewBuilder
+    private func sidebarDocListEntry(for doc: NodeDoc) -> some View {
+        if shouldShowMethodSubmenu(for: doc) {
+            Button {
+                selectedType = doc.type
+                toggleSidebarDocExpansion(doc.type)
+            } label: {
+                docsListNodeRow(
+                    title: doc.name,
+                    dotColor: nodeColor(doc.type),
+                    isSelected: selectedDocBaseType == doc.type
+                )
+            }
+            .buttonStyle(.plain)
+            .listRowBackground(selectedDocBaseType == doc.type ? Color.accentColor.opacity(0.18) : Color.clear)
+
+            if expandedSidebarDocTypes.contains(doc.type) {
+                ForEach(sidebarMethodItems(for: doc)) { item in
+                    Button {
+                        selectedType = item.id
+                    } label: {
+                        docsListMethodRow(title: item.title, isSelected: selectedType == item.id)
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(selectedType == item.id ? Color.accentColor.opacity(0.14) : Color.clear)
+                }
+            }
+        } else {
+            Button {
+                selectedType = doc.type
+            } label: {
+                docsListNodeRow(
+                    title: doc.name,
+                    dotColor: nodeColor(doc.type),
+                    isSelected: selectedDocBaseType == doc.type
+                )
+            }
+            .buttonStyle(.plain)
+            .listRowBackground(selectedDocBaseType == doc.type ? Color.accentColor.opacity(0.18) : Color.clear)
+        }
+    }
+
+    private func docsListNodeRow(title: String, dotColor: Color, isSelected: Bool) -> some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(dotColor)
+                .frame(width: 10, height: 10)
+
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(isSelected ? .white : .primary)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func docsListMethodRow(title: String, isSelected: Bool) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(isSelected ? .white : .secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 24)
+        .contentShape(Rectangle())
+    }
+
     private func sidebarNodeRow(
         title: String,
         dotColor: Color,
@@ -527,9 +654,12 @@ struct EduDocumentationView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
             )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private func sidebarMethodRow(
@@ -553,9 +683,12 @@ struct EduDocumentationView: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(isSelected ? Color.accentColor.opacity(0.14) : Color.clear)
             )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private func sidebarMethodItems(for doc: NodeDoc) -> [SidebarMethodItem] {

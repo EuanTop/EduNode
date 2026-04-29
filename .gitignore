@@ -12,6 +12,16 @@ xcuserdata/
 .swiftpm/
 Packages/
 EduNode/.env
+EduNode/.env.*
+!EduNode/.env.*.example
 Server/.env
+Server/.env.*
+!Server/.env.*.example
+Server/llm_models.json
+Server/.venv/
+Server/logs/
+__pycache__/
+*.py[cod]
+edunode-server*.tar.gz
 
 # Keep automated tests and smoke scripts in version control.

@@ -60,6 +60,7 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
     @Published var debugTraceEvents: [EduLessonAgentTraceEvent] = []
 
     private var didBootstrap = false
+    private var persistenceCancellables: Set<AnyCancellable> = []
 
     init(
         file: GNodeWorkspaceFile,
@@ -71,6 +72,29 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
         self.baseFileName = baseFileName
         self.baselineMarkdown = baselineMarkdown
         self.referenceAttachment = referenceAttachment
+
+        if let snapshot = EduAgentConversationPersistence.loadLessonPlanSnapshot(fileID: file.id) {
+            self.conversation = snapshot.conversation
+            self.generatedMarkdown = snapshot.generatedMarkdown
+        }
+
+        $conversation
+            .dropFirst()
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.persistConversationSnapshot()
+                }
+            }
+            .store(in: &persistenceCancellables)
+
+        $generatedMarkdown
+            .dropFirst()
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.persistConversationSnapshot()
+                }
+            }
+            .store(in: &persistenceCancellables)
     }
 
     var isChinese: Bool {
@@ -233,6 +257,18 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
         didBootstrap = true
         appendTrace(stage: "bootstrap", detail: "begin hasReference=\(referenceAttachment != nil)")
 
+        if !conversation.isEmpty {
+            appendTrace(stage: "bootstrap", detail: "restored local conversation messages=\(conversation.count)")
+            if let referenceAttachment,
+               referenceDocument == nil,
+               generatedMarkdown == nil {
+                Task {
+                    await prepareReferenceFlow(using: referenceAttachment)
+                }
+            }
+            return
+        }
+
         if let referenceAttachment {
             conversation = [
                 .init(
@@ -255,6 +291,16 @@ final class EduLessonPlanWorkbenchViewModel: ObservableObject {
                 )
             ]
         }
+    }
+
+    private func persistConversationSnapshot() {
+        EduAgentConversationPersistence.saveLessonPlanSnapshot(
+            .init(
+                conversation: conversation,
+                generatedMarkdown: generatedMarkdown
+            ),
+            fileID: file.id
+        )
     }
 
     func reloadSettingsFromStore() {

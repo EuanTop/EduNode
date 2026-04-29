@@ -59,7 +59,7 @@ struct EduPresentationPreviewSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color(white: 0.1).ignoresSafeArea()
+                EduPanelStyle.sheetBackground
                 Group {
                     #if canImport(UIKit) && canImport(WebKit)
                     EduPresentationHTMLView(html: renderedHTML)
@@ -113,6 +113,7 @@ struct EduPresentationPreviewSheet: View {
                 }
             }
         }
+        .eduSheetChrome()
         .sheet(isPresented: $showingAgentSheet) {
             EduPresentationAgentSheet(
                 file: payload.sourceFile,

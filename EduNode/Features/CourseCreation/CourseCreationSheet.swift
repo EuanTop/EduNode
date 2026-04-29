@@ -497,15 +497,7 @@ struct CourseCreationSheet: View {
     }
 
     private var sheetBackground: some View {
-        LinearGradient(
-            colors: [
-                Color.black.opacity(0.08),
-                Color.black.opacity(0.03)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .ignoresSafeArea()
+        EduPanelStyle.sheetBackground
     }
 
     var body: some View {

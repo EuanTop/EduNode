@@ -2,14 +2,14 @@ import Foundation
 import CoreGraphics
 import GNodeKit
 
-enum EduAgentProposalStatus: String {
+enum EduAgentProposalStatus: String, Codable {
     case pending
     case applied
     case dismissed
 }
 
-struct EduAgentConversationMessage: Identifiable {
-    enum Role: String {
+struct EduAgentConversationMessage: Identifiable, Codable {
+    enum Role: String, Codable {
         case user
         case assistant
     }

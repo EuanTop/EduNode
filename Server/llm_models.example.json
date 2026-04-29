@@ -1,0 +1,46 @@
+{
+  "models": [
+    {
+      "id": "openai-fast",
+      "provider_name": "OpenAI",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4o-mini",
+      "litellm_model": "openai/gpt-4o-mini",
+      "custom_llm_provider": "openai",
+      "api_key": "sk-...",
+      "priority": 10,
+      "temperature": 0.35,
+      "max_tokens": 3200,
+      "timeout_seconds": 90,
+      "enabled": true
+    },
+    {
+      "id": "minimax-primary",
+      "provider_name": "MiniMax",
+      "base_url": "https://api.minimax.chat/v1",
+      "model": "MiniMax-M2.7",
+      "litellm_model": "openai/MiniMax-M2.7",
+      "custom_llm_provider": "openai",
+      "api_key": "your-minimax-api-key",
+      "priority": 20,
+      "temperature": 0.35,
+      "max_tokens": 3200,
+      "timeout_seconds": 90,
+      "enabled": true
+    },
+    {
+      "id": "deepseek-fallback",
+      "provider_name": "DeepSeek",
+      "base_url": "https://api.deepseek.com/v1",
+      "model": "deepseek-v4-pro",
+      "litellm_model": "openai/deepseek-v4-pro",
+      "custom_llm_provider": "openai",
+      "api_key": "sk-...",
+      "priority": 30,
+      "temperature": 0.35,
+      "max_tokens": 3200,
+      "timeout_seconds": 90,
+      "enabled": true
+    }
+  ]
+}

@@ -245,9 +245,9 @@ struct EduLessonMaterializationAgentSheet: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(16)
-                .background(Color(white: 0.09))
+                .background(EduPanelStyle.headerBase)
             }
-            .background(Color(white: 0.08).ignoresSafeArea())
+            .background(EduPanelStyle.sheetBackground)
             .navigationTitle(isChinese ? "教案 Agent" : "Lesson Plan Agent")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -274,7 +274,7 @@ struct EduLessonMaterializationAgentSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .eduSheetChrome()
         .sheet(isPresented: $showingSettings) {
             EduAgentSettingsSheet()
         }

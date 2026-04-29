@@ -749,7 +749,7 @@ enum EduNodePluginConfig {
                 categoryTitle: coreTitle,
                 description: Bilingual.text(
                     en: "One unified evaluation node for indicator setup, formula selection, and score output.",
-                    zh: "统一成绩节点：在同一节点完成指标配置、公式选择与得分输出。"
+                    zh: "统一评价节点：在同一节点完成指标配置、公式选择与得分输出。"
                 ),
                 inputs: [
                     PortDoc(
@@ -1234,7 +1234,7 @@ enum EduNodePluginConfig {
                     type: EduNodeType.evaluation,
                     x: 260,
                     y: 240,
-                    customTitle: Bilingual.text(en: "Evaluation Score", zh: "成绩节点"),
+                    customTitle: Bilingual.text(en: "Evaluation Score", zh: "评价节点"),
                     formTextFields: [
                         "evaluation_indicators": Bilingual.text(
                             en: "Knowledge Understanding | score | 0.4\nExperiment Completion | completion | 0.3\nTeam Explanation | score | 0.3",

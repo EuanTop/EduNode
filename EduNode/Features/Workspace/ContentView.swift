@@ -145,7 +145,7 @@ struct ContentView: View {
 
     var workspaceSidebarToggleLeadingPadding: CGFloat {
         #if targetEnvironment(macCatalyst)
-        return 112
+        return splitVisibility == .detailOnly ? 96 : 112
         #else
         14
         #endif
@@ -159,7 +159,7 @@ struct ContentView: View {
         #if targetEnvironment(macCatalyst)
         return 18
         #else
-        return 8
+        return 16
         #endif
     }
 
@@ -230,11 +230,7 @@ struct ContentView: View {
     }
 
     var supportsInlineAccountEntry: Bool {
-        #if targetEnvironment(macCatalyst)
         return false
-        #else
-        return true
-        #endif
     }
 
     struct ResolvedPresentationSelection {
@@ -401,31 +397,31 @@ struct ContentView: View {
             ),
             TutorialStep(
                 enMessage: "This is a Knowledge node — it defines WHAT to teach.",
-                zhMessage: "这是 Knowledge 节点——它定义「学什么」。",
+                zhMessage: "这是知识节点——它定义「学什么」。",
                 advanceMode: .tapAnywhere,
                 demoAction: .showKnowledgeNode
             ),
             TutorialStep(
                 enMessage: "This is a Toolkit node — it defines HOW to teach.",
-                zhMessage: "这是 Toolkit 节点——它定义「怎么学」。",
+                zhMessage: "这是工具节点——它定义「怎么学」。",
                 advanceMode: .tapAnywhere,
                 demoAction: .showToolkitNode
             ),
             TutorialStep(
                 enMessage: "This is an Evaluation node — it verifies HOW WELL students learn.",
-                zhMessage: "这是 Evaluation 节点——它验证「学得怎么样」。",
+                zhMessage: "这是评价节点——它验证「学得怎么样」。",
                 advanceMode: .tapAnywhere,
                 demoAction: .showEvaluationNode
             ),
             TutorialStep(
                 enMessage: "Now watch — we auto-connect from Knowledge right output \"\(S("edu.knowledge.output.content")) (String)\" to Toolkit left input \"\(S("edu.toolkit.input.knowledge")) (Any)\".",
-                zhMessage: "现在看——系统会自动从 Knowledge 右侧输出「Content（String）」连到 Toolkit 左侧输入「Knowledge（Any）」。",
+                zhMessage: "现在看——系统会自动从知识节点右侧输出「内容（String）」连到工具节点左侧输入「知识输入（Any）」。",
                 advanceMode: .tapAnywhere,
                 demoAction: .connectKnowledgeToToolkit
             ),
             TutorialStep(
                 enMessage: "Next, Evaluation needs at least one indicator input. We auto-add \"Quick Check | score\", then connect Toolkit first output \"\(S("edu.output.toolkit")) (String)\" to Evaluation input \"Quick Check (Any)\".",
-                zhMessage: "接着，Evaluation 必须先有至少一个指标输入。系统会自动添加「Quick Check | score」，再将 Toolkit 第一个输出「\(S("edu.output.toolkit"))（String）」连到 Evaluation 输入「Quick Check（Any）」。",
+                zhMessage: "接着，评价节点必须先有至少一个指标输入。系统会自动添加「快速检查 | score」，再将工具节点第一个输出「\(S("edu.output.toolkit"))（String）」连到评价节点输入「快速检查（Any）」。",
                 advanceMode: .tapAnywhere,
                 demoAction: .connectToolkitToEvaluation
             ),
@@ -442,37 +438,37 @@ struct ContentView: View {
         [
             TutorialStep(
                 enMessage: "The demo nodes have been cleared. Now it's your turn!\nDouble-tap anywhere to open the node menu, then add a Knowledge node.",
-                zhMessage: "演示节点已清除，现在轮到你了！\n双击画布空白区域打开节点面板，添加一个 Knowledge 节点。",
+                zhMessage: "演示节点已清除，现在轮到你了！\n双击画布空白区域打开节点面板，添加一个知识节点。",
                 advanceMode: .nodeAdded
             ),
             TutorialStep(
                 enMessage: "Great! Now double-tap again and add ONE Toolkit node (any of the 4 Toolkit categories is accepted).",
-                zhMessage: "很好！再次双击画布，添加 1 个 Toolkit 节点（四类 Toolkit 任意一种都可以）。",
+                zhMessage: "很好！再次双击画布，添加 1 个工具节点（四类工具节点任意一种都可以）。",
                 advanceMode: .nodeAdded
             ),
             TutorialStep(
                 enMessage: "Connect them precisely: drag from Knowledge right output \"\(S("edu.knowledge.output.content")) (String)\" to Toolkit left input \"\(S("edu.toolkit.input.knowledge")) (Any)\".",
-                zhMessage: "请精确连线：从 Knowledge 右侧输出「Content（String）」拖到 Toolkit 左侧输入「Knowledge（Any）」。",
+                zhMessage: "请精确连线：从知识节点右侧输出「内容（String）」拖到工具节点左侧输入「知识输入（Any）」。",
                 advanceMode: .connectionAdded
             ),
             TutorialStep(
                 enMessage: "Add an Evaluation node. Then in its Indicators table, add one row (for example: \"Quick Check | score\") so the left input port appears.",
-                zhMessage: "添加一个 Evaluation 节点。然后在它的 Indicators 表格里新增一行（例如「Quick Check | score」），这样左侧输入端口才会出现。",
+                zhMessage: "添加一个评价节点。然后在它的指标表格里新增一行（例如「快速检查 | score」），这样左侧输入端口才会出现。",
                 advanceMode: .nodeAdded
             ),
             TutorialStep(
                 enMessage: "Now connect Toolkit first output \"\(S("edu.output.toolkit")) (String)\" to Evaluation indicator input (Any).",
-                zhMessage: "现在连接 Toolkit 第一个输出「\(S("edu.output.toolkit"))（String）」到 Evaluation 指标输入端口（Any）。",
+                zhMessage: "现在连接工具节点第一个输出「\(S("edu.output.toolkit"))（String）」到评价节点指标输入端口（Any）。",
                 advanceMode: .connectionAdded
             ),
             TutorialStep(
                 enMessage: "Delete one Evaluation node: long-press that node to open quick actions, then tap Delete.",
-                zhMessage: "删除 1 个 Evaluation 节点：长按该节点呼出操作，再点击删除。",
+                zhMessage: "删除 1 个评价节点：长按该节点呼出操作，再点击删除。",
                 advanceMode: .nodeDeleted
             ),
             TutorialStep(
                 enMessage: "One more operation: long-press an existing connection line to delete it.\nAfter you do this, we'll jump to Documentation automatically.",
-                zhMessage: "最后一个操作：长按一条已有连线即可删除。\n完成后会自动跳转到 Documentation 介绍教育模型。",
+                zhMessage: "最后一个操作：长按一条已有连线即可删除。\n完成后会自动跳转到文档页面介绍教育模型。",
                 advanceMode: .connectionDeleted
             ),
         ]
@@ -504,7 +500,7 @@ struct ContentView: View {
             ),
             TutorialStep(
                 enMessage: "Keep the pre-filled form and click Next/Create to generate the course template.",
-                zhMessage: "保持预填信息，直接点击 Next/Create 生成课程模板。",
+                zhMessage: "保持预填信息，直接点击「下一步 / 创建」生成课程模板。",
                 advanceMode: .waitForCourseCreated
             ),
             TutorialStep(
@@ -534,42 +530,42 @@ struct ContentView: View {
             ),
             TutorialStep(
                 enMessage: "Step 5 (Why): add a concrete evidence-analysis activity.\nCreate ONE \"Inquiry\" toolkit. The tutorial will auto-switch it to Source Analysis, fill fields, and auto-link it from \"UbD Stage 3: Learning Plan\" as the activity-flow driver.",
-                zhMessage: "第 5 步（为什么）：补上一段“证据分析”活动。\n新增 1 个「Inquiry」Toolkit，教程会自动切到 Source Analysis、填好参数，并自动接到「UbD 阶段3」作为活动流程驱动。",
+                zhMessage: "第 5 步（为什么）：补上一段“证据分析”活动。\n新增 1 个「探究」工具节点，教程会自动切到「资料分析」、填好参数，并自动接到「UbD 阶段3」作为活动流程驱动。",
                 advanceMode: .waitForSpecificToolkitConfigured
             ),
             TutorialStep(
                 enMessage: "Step 6: keep existing UbD links as-is.\nNow add ONE more link from \"UbD Stage 2: Acceptable Evidence\" output \"\(S("edu.knowledge.output.content"))\" to the highlighted Inquiry Toolkit (Source Analysis) input \"\(S("edu.toolkit.input.knowledge"))\".",
-                zhMessage: "第 6 步：保持原有 UbD 连线不变。\n现在再新增 1 条连线：从「UbD 阶段2：可接受证据」输出「\(S("edu.knowledge.output.content"))」，连接到当前高亮的 Inquiry Toolkit（Source Analysis）输入「\(S("edu.toolkit.input.knowledge"))」。",
+                zhMessage: "第 6 步：保持原有 UbD 连线不变。\n现在再新增 1 条连线：从「UbD 阶段2：可接受证据」输出「\(S("edu.knowledge.output.content"))」，连接到当前高亮的探究工具节点（资料分析）输入「\(S("edu.toolkit.input.knowledge"))」。",
                 advanceMode: .waitForKnowledgeToSpecificToolkitConnectionAdded
             ),
             TutorialStep(
                 enMessage: "Why this matters: for this same toolkit, Stage 3 defines activity sequence, while Stage 2 adds evidence criteria.\nIn Lesson Plan / PPT preview, this stage will now show extra evidence-alignment guidance.",
-                zhMessage: "这一步的意义：对同一个 Toolkit，Stage 3 负责活动流程，Stage 2 负责证据标准。\n在教案/PPT 预览里，这个环节会出现额外的“证据对齐”提示。",
+                zhMessage: "这一步的意义：对同一个工具节点，Stage 3 负责活动流程，Stage 2 负责证据标准。\n在教案/PPT 预览里，这个环节会出现额外的“证据对齐”提示。",
                 advanceMode: .tapAnywhere
             ),
             TutorialStep(
                 enMessage: "Now click Present to enter presentation mode.",
-                zhMessage: "现在点击 Present 进入演示模式。",
+                zhMessage: "现在点击「演示」进入演示模式。",
                 advanceMode: .waitForPresentationEnter
             ),
             TutorialStep(
                 enMessage: "Click the Design button to open quick styling.",
-                zhMessage: "点击 Design 按钮，进入快速美化。",
+                zhMessage: "点击「设计」按钮，进入快速美化。",
                 advanceMode: .waitForStylingPanelEnter
             ),
             TutorialStep(
                 enMessage: "Return and click Present again to exit presentation mode.",
-                zhMessage: "返回后再次点击 Present，退出演示模式。",
+                zhMessage: "返回后再次点击「演示」，退出演示模式。",
                 advanceMode: .waitForPresentationExit
             ),
             TutorialStep(
                 enMessage: "Use the Export button in the top-right toolbar, then open Lesson Plan Preview.\nCheck this toolkit section now includes evidence-alignment notes.",
-                zhMessage: "请点击右上角 Export 按钮，然后打开 Lesson Plan Preview。\n请查看该 Toolkit 环节现在多了“证据对齐”说明。",
+                zhMessage: "请点击右上角「导出」按钮，然后打开「教案预览」。\n请查看该工具节点环节现在多了“证据对齐”说明。",
                 advanceMode: .waitForLessonPlanPreview
             ),
             TutorialStep(
                 enMessage: "Use the Export button in the top-right toolbar, then open PPT Preview.\nYou should see extra evidence cue text for the same activity slide.",
-                zhMessage: "请点击右上角 Export 按钮，然后打开 PPT Preview。\n同一活动页会出现额外的证据提示文本。",
+                zhMessage: "请点击右上角「导出」按钮，然后打开「PPT 预览」。\n同一活动页会出现额外的证据提示文本。",
                 advanceMode: .waitForPresentationPreview
             ),
             TutorialStep(
@@ -600,6 +596,9 @@ struct ContentView: View {
         rootView
         .onAppear {
             persistenceLog("ContentView.onAppear files=\(workspaceFiles.count)", force: true)
+            if workspaceAgentConversationByFile.isEmpty {
+                workspaceAgentConversationByFile = EduAgentConversationPersistence.loadWorkspaceConversations()
+            }
             refreshBackendSessionSnapshot()
             resolveStartupAccountGateIfNeeded()
             seedDefaultCourseIfNeeded()
@@ -640,6 +639,8 @@ struct ContentView: View {
                 self.presentationModeActivationToken = nil
             }
             pendingPresentationThumbnailIDsByFile = pendingPresentationThumbnailIDsByFile.filter { existingIDs.contains($0.key) }
+            workspaceAgentConversationByFile = workspaceAgentConversationByFile.filter { existingIDs.contains($0.key) }
+            EduAgentConversationPersistence.saveWorkspaceConversations(workspaceAgentConversationByFile)
             requestCameraFocusOnFirstNodeForSelectedFile()
         }
         .onChange(of: selectedFileID) { _, _ in
@@ -710,8 +711,7 @@ struct ContentView: View {
 
     var startupLaunchPlaceholder: some View {
         ZStack {
-            Color(white: 0.08)
-                .ignoresSafeArea()
+            EduPanelStyle.sheetBackground
             ProgressView()
                 .tint(.white)
                 .controlSize(.large)
@@ -1029,106 +1029,204 @@ struct ContentView: View {
                     }
                 }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .background(sidebarLayoutDebugEnabled ? Color.blue.opacity(0.22) : sidebarChromeBackground)
+            .listStyle(.sidebar)
+            .background(sidebarLayoutDebugEnabled ? Color.blue.opacity(0.22) : Color.clear)
             #endif
         }
         .frame(width: workspaceSidebarColumnWidth)
-        .background(sidebarLayoutDebugEnabled ? Color.red.opacity(0.16) : sidebarChromeBackground)
+        .background {
+            #if targetEnvironment(macCatalyst)
+            sidebarLayoutDebugEnabled ? Color.red.opacity(0.16) : sidebarChromeBackground
+            #else
+            sidebarLayoutDebugEnabled ? Color.red.opacity(0.16) : Color.clear
+            #endif
+        }
         .toolbar(.hidden, for: .navigationBar)
     }
 
     private func sidebarHeaderBar(topInset: CGFloat) -> some View {
-        HStack(spacing: 10) {
-            sidebarVisibilityButton(
-                systemImage: "sidebar.left",
-                accessibilityLabel: isChineseUI() ? "隐藏侧栏" : "Hide Sidebar"
-            ) {
-                withAnimation { splitVisibility = .detailOnly }
-            }
+        Group {
+            #if targetEnvironment(macCatalyst)
+            HStack(spacing: 10) {
+                sidebarVisibilityButton(
+                    systemImage: "sidebar.left",
+                    accessibilityLabel: isChineseUI() ? "隐藏侧栏" : "Hide Sidebar"
+                ) {
+                    withAnimation { splitVisibility = .detailOnly }
+                }
 
-            sidebarCommandButtonGroup
-            Spacer(minLength: 0)
+                sidebarAccountButton
+                sidebarCommandButtonGroup
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, workspaceSidebarHeaderLeadingPadding)
+            .padding(.trailing, 14)
+            #else
+            HStack(spacing: 0) {
+                sidebarVisibilityButton(
+                    systemImage: "sidebar.left",
+                    accessibilityLabel: isChineseUI() ? "隐藏侧栏" : "Hide Sidebar"
+                ) {
+                    withAnimation { splitVisibility = .detailOnly }
+                }
+                .frame(maxWidth: .infinity)
+
+                sidebarAccountButton
+                    .frame(maxWidth: .infinity)
+
+                sidebarDocsButton
+                    .frame(maxWidth: .infinity)
+
+                sidebarGuideButton
+                    .frame(maxWidth: .infinity)
+
+                sidebarCreateMenu
+                    .frame(maxWidth: .infinity)
+            }
+            .padding(.horizontal, 10)
+            #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, workspaceSidebarHeaderLeadingPadding)
-        .padding(.trailing, 14)
         .padding(.top, topInset + workspaceTopToolbarPadding)
         .padding(.bottom, 10)
-        .background(sidebarLayoutDebugEnabled ? Color.green.opacity(0.28) : sidebarChromeBackground)
+        .background {
+            #if targetEnvironment(macCatalyst)
+            sidebarLayoutDebugEnabled ? Color.green.opacity(0.28) : sidebarChromeBackground
+            #else
+            if sidebarLayoutDebugEnabled {
+                Color.green.opacity(0.28)
+            } else {
+                Color.clear
+            }
+            #endif
+        }
+    }
+
+    private var sidebarAccountButton: some View {
+        Button {
+            showingAccountSheet = true
+        } label: {
+            sidebarHeaderIconButton(
+                systemImage: backendSessionSnapshot == nil
+                    ? "person.crop.circle.badge.plus"
+                    : "person.crop.circle"
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(backendSessionSnapshot == nil
+            ? (isChineseUI() ? "登录" : "Sign In")
+            : (isChineseUI() ? "账户" : "Account"))
+    }
+
+    private var sidebarDocsButton: some View {
+        Button {
+            showingDocs = true
+            handleDocsOpenedDuringTutorial()
+        } label: {
+            sidebarHeaderIconButton(systemImage: "book.closed")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(S("app.sidebar.docs"))
+    }
+
+    private var sidebarGuideButton: some View {
+        Button {
+            showingOnboardingGuide = true
+        } label: {
+            sidebarHeaderIconButton(systemImage: "questionmark.circle")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isChineseUI() ? "说明" : "Guide")
+    }
+
+    private var sidebarCreateMenu: some View {
+        Menu {
+            Button {
+                presentCreateCourseSheet()
+            } label: {
+                Label(S("app.files.newCourse"), systemImage: "plus")
+            }
+
+            Button {
+                showingSidebarImporter = true
+            } label: {
+                Label(S("app.files.import"), systemImage: "square.and.arrow.down")
+            }
+        } label: {
+            sidebarHeaderIconButton(systemImage: "plus")
+        }
+        .menuStyle(.button)
+        .accessibilityLabel(S("app.files.newCourse"))
     }
 
     private var sidebarCommandButtonGroup: some View {
         HStack(spacing: 10) {
-            Button {
-                showingDocs = true
-                handleDocsOpenedDuringTutorial()
-            } label: {
-                sidebarHeaderIconButton(systemImage: "book.closed")
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(S("app.sidebar.docs"))
-
-            Button {
-                showingOnboardingGuide = true
-            } label: {
-                sidebarHeaderIconButton(systemImage: "questionmark.circle")
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isChineseUI() ? "说明" : "Guide")
-
-            Menu {
-                Button {
-                    presentCreateCourseSheet()
-                } label: {
-                    Label(S("app.files.newCourse"), systemImage: "plus")
-                }
-
-                Button {
-                    showingSidebarImporter = true
-                } label: {
-                    Label(S("app.files.import"), systemImage: "square.and.arrow.down")
-                }
-            } label: {
-                sidebarHeaderIconButton(systemImage: "plus")
-            }
-            .menuStyle(.button)
-            .accessibilityLabel(S("app.files.newCourse"))
+            sidebarDocsButton
+            sidebarGuideButton
+            sidebarCreateMenu
         }
         .fixedSize(horizontal: true, vertical: false)
     }
 
+    @ViewBuilder
     private func sidebarVisibilityButton(
         systemImage: String,
         accessibilityLabel: String,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .semibold))
-                .frame(width: workspaceTopToolbarButtonHeight, height: workspaceTopToolbarButtonHeight)
-                .foregroundStyle(.white.opacity(0.92))
-                .background(Color.white.opacity(0.07), in: Circle())
-                .overlay(
-                    Circle()
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
+        let button = Button(action: action) {
+            sidebarHeaderIconButton(systemImage: systemImage)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(accessibilityLabel)
+
+        #if targetEnvironment(macCatalyst)
+        button
+            .buttonStyle(.plain)
+            .accessibilityLabel(accessibilityLabel)
+        #else
+        button
+            .buttonStyle(.plain)
+            .accessibilityLabel(accessibilityLabel)
+        #endif
     }
 
+    @ViewBuilder
     private func sidebarHeaderIconButton(systemImage: String) -> some View {
-        Image(systemName: systemImage)
-            .font(.system(size: 14, weight: .semibold))
+        let icon = Image(systemName: systemImage)
+            .font(.system(size: 17, weight: .semibold))
             .frame(width: workspaceTopToolbarButtonHeight, height: workspaceTopToolbarButtonHeight)
-        .foregroundStyle(.white.opacity(0.92))
-        .background(Color.white.opacity(0.07), in: Circle())
-        .overlay(
-            Circle()
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
+
+        #if targetEnvironment(macCatalyst)
+        icon
+            .foregroundStyle(.white.opacity(0.92))
+            .background(Color.white.opacity(0.07), in: Circle())
+            .overlay(
+                Circle()
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+        #else
+        if #available(iOS 26.0, macOS 26.0, *) {
+            icon
+                .foregroundStyle(.primary)
+                .background {
+                    Button(action: {}) {
+                        Color.clear
+                            .frame(width: workspaceTopToolbarButtonHeight, height: workspaceTopToolbarButtonHeight)
+                    }
+                    .buttonStyle(GlassButtonStyle())
+                    .buttonBorderShape(.circle)
+                    .allowsHitTesting(false)
+                }
+                .clipShape(Circle())
+        } else {
+            icon
+                .foregroundStyle(.primary)
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                )
+        }
+        #endif
     }
 
     private func workspaceTopRightToolbar(file: GNodeWorkspaceFile, topPadding: CGFloat) -> some View {
@@ -1492,23 +1590,23 @@ struct ContentView: View {
             Color.black.opacity(0.56)
                 .ignoresSafeArea()
 
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
-                    onboardingHeaderSection(chinese: chinese)
-                    onboardingStepsSection(chinese: chinese)
-                    onboardingButtonsSection(chinese: chinese)
-                        .padding(.top, 4)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 22)
-                .padding(.vertical, 20)
+            VStack(alignment: .leading, spacing: 14) {
+                onboardingHeaderSection(chinese: chinese)
+                onboardingStepsSection(chinese: chinese)
+                onboardingDismissButton(chinese: chinese)
             }
-            .frame(maxWidth: 640, alignment: .leading)
-            .frame(maxHeight: 560)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 20)
+            .frame(maxWidth: 560, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(EduPanelStyle.sheetBase)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
+                    .stroke(EduPanelStyle.cardStroke, lineWidth: 1)
             )
             .padding(.horizontal, 20)
         }
@@ -1532,163 +1630,123 @@ struct ContentView: View {
 
     @ViewBuilder
     func onboardingStepsSection(chinese: Bool) -> some View {
-        onboardingStepRow(
+        VStack(spacing: 10) {
+            onboardingStepButton(
             index: 1,
             title: chinese ? "5 分钟入门" : "5-Min Basics",
             detail: chinese
             ? "带读了解 EduNode → 教育模型简介 → 画布操作练习。"
             : "Guided reading → Education Models → Canvas practice.",
             isCompleted: didCompleteBasics
-        )
+            ) {
+                startOnboardingTutorial(.aboutDemo)
+            }
 
-        onboardingStepRow(
+            onboardingStepButton(
             index: 2,
             title: chinese ? "实战训练" : "Practice",
             detail: chinese
             ? "自动创建一门科学课程，在生成的画布上填写节点。"
             : "Auto-create a science course, then fill in nodes on the canvas.",
             isCompleted: didCompletePractice
-        )
+            ) {
+                startOnboardingTutorial(.practice)
+            }
 
-        onboardingStepRow(
+            onboardingStepButton(
             index: 3,
             title: chinese ? "示例探索" : "Explore Example",
             detail: chinese
             ? "打开内置观鸟案例，参考完整课程结构。"
             : "Open the built-in bird sample to see a complete course.",
             isCompleted: didCompleteExplore
-        )
+            ) {
+                startOnboardingTutorial(.explore)
+            }
+        }
     }
 
     @ViewBuilder
-    func onboardingButtonsSection(chinese: Bool) -> some View {
-        VStack(spacing: 8) {
-            ViewThatFits {
-                HStack(alignment: .center, spacing: 12) {
-                    onboardingBasicsButton(chinese: chinese)
-                    onboardingPracticeButton(chinese: chinese)
-                    onboardingExploreButton(chinese: chinese)
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-
-                VStack(spacing: 8) {
-                    onboardingBasicsButton(chinese: chinese)
-                    onboardingPracticeButton(chinese: chinese)
-                    onboardingExploreButton(chinese: chinese)
-                }
-            }
-
+    func onboardingDismissButton(chinese: Bool) -> some View {
+        HStack {
+            Spacer()
             Button {
                 dismissOnboardingGuideForNow()
             } label: {
                 Text(chinese ? "稍后再看" : "Maybe Later")
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.58))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
             }
-            .buttonStyle(EduAgentActionButtonStyle(variant: .secondary))
-            .padding(.top, 4)
+            .buttonStyle(.plain)
+            Spacer()
         }
+        .padding(.top, 2)
     }
 
-    func onboardingBasicsButton(chinese: Bool) -> some View {
-        Button {
-            showingOnboardingGuide = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                startTutorial(.aboutDemo)
-            }
-        } label: {
-            HStack(spacing: 6) {
-                if didCompleteBasics {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                }
-                Text(chinese
-                     ? (didCompleteBasics ? "重新学习基础" : "5 分钟入门")
-                     : (didCompleteBasics ? "Redo Basics" : "5-Min Basics"))
-                    .font(.subheadline.weight(.semibold))
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
+    func startOnboardingTutorial(_ kind: TutorialKind) {
+        showingOnboardingGuide = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            startTutorial(kind)
         }
-        .buttonStyle(EduAgentActionButtonStyle(variant: .primary))
-        .frame(minWidth: 168, maxWidth: .infinity)
-    }
-
-    func onboardingPracticeButton(chinese: Bool) -> some View {
-        Button {
-            showingOnboardingGuide = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                startTutorial(.practice)
-            }
-        } label: {
-            HStack(spacing: 6) {
-                if didCompletePractice {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                }
-                Text(chinese
-                     ? (didCompletePractice ? "重新实战训练" : "实战训练")
-                     : (didCompletePractice ? "Redo Practice" : "Practice"))
-                    .font(.subheadline.weight(.semibold))
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
-        }
-        .buttonStyle(EduAgentActionButtonStyle(variant: .secondary))
-        .frame(minWidth: 168, maxWidth: .infinity)
-    }
-
-    func onboardingExploreButton(chinese: Bool) -> some View {
-        Button {
-            showingOnboardingGuide = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                startTutorial(.explore)
-            }
-        } label: {
-            HStack(spacing: 6) {
-                if didCompleteExplore {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                }
-                Text(chinese
-                     ? (didCompleteExplore ? "再次查看示例" : "探索观鸟示例")
-                     : (didCompleteExplore ? "View Example Again" : "Explore Bird Example"))
-                    .font(.subheadline.weight(.semibold))
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
-        }
-        .buttonStyle(EduAgentActionButtonStyle(variant: .secondary))
-        .frame(minWidth: 168, maxWidth: .infinity)
     }
 
     @ViewBuilder
-    func onboardingStepRow(index: Int, title: String, detail: String, isCompleted: Bool) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            if isCompleted {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.green)
-                    .frame(width: 18, height: 18)
-            } else {
-                Text("\(index)")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.black.opacity(0.78))
-                    .frame(width: 18, height: 18)
-                    .background(Color.white.opacity(0.3), in: Circle())
-            }
+    func onboardingStepButton(
+        index: Int,
+        title: String,
+        detail: String,
+        isCompleted: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(isCompleted ? Color.green.opacity(0.95) : Color.white.opacity(0.24))
+                        .frame(width: 30, height: 30)
+                    if isCompleted {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.white)
+                    } else {
+                        Text("\(index)")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(.white.opacity(0.9))
+                    }
+                }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(isCompleted ? .green : .white)
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.84))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(isCompleted ? Color.green : .white)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.84))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(isCompleted ? Color.green.opacity(0.9) : Color.white.opacity(0.42))
+                    .padding(.top, 7)
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isCompleted ? Color.green.opacity(0.13) : EduPanelStyle.cardFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(isCompleted ? Color.green.opacity(0.42) : EduPanelStyle.cardStroke, lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
-        .padding(.vertical, 2)
+        .buttonStyle(.plain)
     }
 
     // MARK: - Tutorial Coach Mark Overlay
@@ -1794,7 +1852,7 @@ struct ContentView: View {
                             Image(systemName: "list.bullet.rectangle")
                                 .font(.caption)
                                 .foregroundStyle(.white.opacity(0.6))
-                            Text(chinese ? "请在 Docs 左栏点击任一教育模型" : "Select any Education Model in Docs sidebar")
+                            Text(chinese ? "请在文档左栏点击任一教育模型" : "Select any Education Model in Docs sidebar")
                                 .font(.caption)
                                 .foregroundStyle(.white.opacity(0.6))
                         }
@@ -1806,7 +1864,7 @@ struct ContentView: View {
                                 .font(.caption)
                                 .foregroundStyle(.orange)
                                 .scaleEffect(tutorialHintPulsePhase ? 1.05 : 0.92)
-                            Text(chinese ? "双击画布空白处 → 选择 Toolkit → Inquiry" : "Double-tap empty canvas -> Toolkit -> Inquiry")
+                            Text(chinese ? "双击画布空白处 → 选择工具节点 → 探究" : "Double-tap empty canvas -> Toolkit -> Inquiry")
                                 .font(.caption)
                                 .foregroundStyle(.white.opacity(0.72))
                         }

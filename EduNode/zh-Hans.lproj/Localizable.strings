@@ -103,7 +103,7 @@
 "menu.node.courseInfo" = "课程信息";
 "menu.node.knowledge" = "知识节点";
 "menu.node.goal" = "目标";
-"menu.node.evaluation" = "成绩节点";
+"menu.node.evaluation" = "评价节点";
 "menu.node.toolkit" = "教学环节";
 "menu.node.perceptionInquiry" = "探究";
 "menu.node.constructionPrototype" = "原型";

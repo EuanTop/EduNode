@@ -1392,9 +1392,9 @@ struct EduPresentationAgentSheet: View {
                     }
                 }
                 .padding(16)
-                .background(Color(white: 0.09))
+                .background(EduPanelStyle.headerBase)
             }
-            .background(Color(white: 0.08).ignoresSafeArea())
+            .background(EduPanelStyle.sheetBackground)
             .navigationTitle(isChinese ? "课件 Agent" : "Presentation Agent")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1420,7 +1420,7 @@ struct EduPresentationAgentSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .eduSheetChrome()
         .sheet(isPresented: $showingSettings) {
             EduAgentSettingsSheet()
         }

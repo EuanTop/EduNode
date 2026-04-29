@@ -49,31 +49,26 @@ struct EduLessonPlanExportSetupSheet: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            VStack(spacing: 0) {
-                setupHeaderBar(topInset: geometry.safeAreaInsets.top)
+        VStack(spacing: 0) {
+            setupHeaderBar()
 
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: 18) {
-                        referenceCard
-                        if let lastError {
-                            EduAgentStatusCard(
-                                title: isChinese ? "导入失败" : "Import Failed",
-                                message: lastError,
-                                tint: .orange
-                            )
-                        }
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 18) {
+                    referenceCard
+                    if let lastError {
+                        EduAgentStatusCard(
+                            title: isChinese ? "导入失败" : "Import Failed",
+                            message: lastError,
+                            tint: .orange
+                        )
                     }
-                    .frame(maxWidth: .infinity, alignment: .top)
-                    .padding(.top, 10)
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 24)
                 }
-                .background(Color(white: 0.08))
+                .frame(maxWidth: .infinity, alignment: .top)
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+                .padding(.bottom, 24)
             }
         }
-        .background(Color(white: 0.08).ignoresSafeArea())
-        .ignoresSafeArea(.container, edges: .top)
         .preferredColorScheme(.dark)
         .presentationDetents([.height(setupSheetHeight)])
         .presentationDragIndicator(.visible)
@@ -85,7 +80,7 @@ struct EduLessonPlanExportSetupSheet: View {
         }
     }
 
-    private func setupHeaderBar(topInset: CGFloat) -> some View {
+    private func setupHeaderBar() -> some View {
         HStack(spacing: 12) {
             headerCircleButton(
                 systemImage: "xmark",
@@ -116,11 +111,10 @@ struct EduLessonPlanExportSetupSheet: View {
             }
             .buttonStyle(EduAgentActionButtonStyle(variant: .primary))
         }
-        .padding(.leading, 20)
-        .padding(.trailing, 20)
-        .padding(.top, topInset + 12)
+        .padding(.leading, 18)
+        .padding(.trailing, 18)
+        .padding(.top, 16)
         .padding(.bottom, 12)
-        .background(Color(white: 0.08))
     }
 
     private func headerCircleButton(
@@ -132,7 +126,7 @@ struct EduLessonPlanExportSetupSheet: View {
             Image(systemName: systemImage)
                 .font(.system(size: 14, weight: .semibold))
                 .frame(width: 34, height: 34)
-                .background(Color.white.opacity(0.08), in: Circle())
+                .background(EduPanelStyle.controlFill, in: Circle())
                 .overlay(
                     Circle()
                         .stroke(Color.white.opacity(0.10), lineWidth: 1)
@@ -177,10 +171,7 @@ struct EduLessonPlanExportSetupSheet: View {
                 }
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: 172)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color.white.opacity(0.04))
-                )
+                .background(EduPanelStyle.cardFill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .stroke(stylePickerBorderColor, style: StrokeStyle(lineWidth: 1.2, dash: [8, 8]))
@@ -208,7 +199,7 @@ struct EduLessonPlanExportSetupSheet: View {
                 }
                 .padding(.horizontal, 10)
                 .frame(height: 42)
-                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(EduPanelStyle.cardFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .stroke(Color.white.opacity(0.08), lineWidth: 1)
@@ -217,11 +208,7 @@ struct EduLessonPlanExportSetupSheet: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
+        .eduPanelCard(cornerRadius: 18)
     }
 
     private func handleReferenceImport(_ result: Result<URL, Error>) {
@@ -281,9 +268,9 @@ struct EduLessonPlanExportSetupSheet: View {
 
     private var setupSheetHeight: CGFloat {
         if referenceAttachment != nil || lastError != nil {
-            return 540
+            return 560
         }
-        return 470
+        return 500
     }
 }
 
@@ -353,19 +340,18 @@ struct EduLessonPlanWorkbenchView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     Rectangle()
-                        .fill(Color.white.opacity(0.08))
+                        .fill(EduPanelStyle.divider)
                         .frame(width: 1)
 
                     sidebar(proxy: proxy)
                         .frame(width: min(392, max(332, proxy.size.width * 0.31)))
-                        .background(Color(white: 0.09))
+                        .background(EduPanelStyle.sidebarBase)
                 }
-                .background(Color(white: 0.07))
+                .background(EduPanelStyle.sheetBackground)
             }
         }
-        .background(Color(white: 0.07).ignoresSafeArea())
+        .eduSheetChrome()
         .ignoresSafeArea(.container, edges: .top)
-        .preferredColorScheme(.dark)
         .sheet(isPresented: $viewModel.showingSettings) {
             EduAgentSettingsSheet(
                 onSaved: {
@@ -412,7 +398,7 @@ struct EduLessonPlanWorkbenchView: View {
         .padding(.trailing, 18)
         .padding(.top, topInset + 12)
         .padding(.bottom, 12)
-        .background(Color(white: 0.07))
+        .background(EduPanelStyle.sheetBase)
     }
 
     private func headerCircleButton(
@@ -424,7 +410,7 @@ struct EduLessonPlanWorkbenchView: View {
                 Image(systemName: systemImage)
                     .font(.system(size: 14, weight: .semibold))
                     .frame(width: 34, height: 34)
-                .background(Color.white.opacity(0.08), in: Circle())
+                .background(EduPanelStyle.controlFill, in: Circle())
                 .overlay(
                     Circle()
                         .stroke(Color.white.opacity(0.10), lineWidth: 1)
@@ -706,7 +692,7 @@ struct EduLessonPlanWorkbenchView: View {
             }
         }
         .padding(16)
-        .background(Color(white: 0.09))
+        .background(EduPanelStyle.headerBase)
     }
 
     private var actionButtonDisabled: Bool {
@@ -811,11 +797,7 @@ struct EduLessonPlanWorkbenchView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
+        .eduPanelCard(cornerRadius: 16)
     }
 
     private var sidebarReadinessStrip: some View {
@@ -859,11 +841,7 @@ struct EduLessonPlanWorkbenchView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
+        .eduPanelCard(cornerRadius: 16)
     }
 
     private var followUpWorkbenchCard: some View {
@@ -925,11 +903,7 @@ struct EduLessonPlanWorkbenchView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
+        .eduPanelCard(cornerRadius: 16)
     }
 
     private func followUpEditorSection(for item: EduLessonMissingInfoItem) -> some View {
@@ -1059,11 +1033,7 @@ struct EduLessonPlanWorkbenchView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
+        .eduPanelCard(cornerRadius: 16)
         .task(id: item.id) {
             await viewModel.prepareFollowUpSuggestionIfNeeded(for: item)
         }
