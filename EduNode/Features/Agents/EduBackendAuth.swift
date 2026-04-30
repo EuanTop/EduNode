@@ -160,6 +160,24 @@ struct EduBackendAuthService {
         return session
     }
 
+    func signInWithApple(
+        identityToken: String,
+        nonce: String
+    ) async throws -> EduBackendSession {
+        let response: EduBackendAuthTokenSessionResponse = try await postJSON(
+            path: ["auth", "sign-in", "apple"],
+            accessToken: nil,
+            requestBody: EduBackendAuthAppleSignInRequest(
+                idToken: identityToken,
+                nonce: nonce
+            ),
+            responseType: EduBackendAuthTokenSessionResponse.self
+        )
+        let session = response.asBackendSession
+        EduBackendSessionStore.save(session)
+        return session
+    }
+
     func signUp(
         email: String,
         password: String
@@ -183,6 +201,28 @@ struct EduBackendAuthService {
         }
 
         return .confirmationRequired(email: response.email.nonEmpty ?? normalizedEmail)
+    }
+
+    func requestPasswordReset(email: String) async throws -> String {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let response: EduBackendAuthStatusResponse = try await postJSON(
+            path: ["auth", "password-reset"],
+            accessToken: nil,
+            requestBody: EduBackendAuthEmailRequest(email: normalizedEmail),
+            responseType: EduBackendAuthStatusResponse.self
+        )
+        return response.email.nonEmpty ?? normalizedEmail
+    }
+
+    func resendConfirmation(email: String) async throws -> String {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let response: EduBackendAuthStatusResponse = try await postJSON(
+            path: ["auth", "resend-confirmation"],
+            accessToken: nil,
+            requestBody: EduBackendAuthEmailRequest(email: normalizedEmail),
+            responseType: EduBackendAuthStatusResponse.self
+        )
+        return response.email.nonEmpty ?? normalizedEmail
     }
 
     func signOutCurrentSession() async {
@@ -327,7 +367,19 @@ struct EduBackendAuthService {
     }
 
     private func send(_ request: URLRequest) async throws -> Data {
-        let (data, response) = try await session.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            let endpoint = request.url?.absoluteString ?? backendConfig.baseURL.absoluteString
+            let isChinese = Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") == true
+            let message = isChinese
+                ? "无法连接 EduNode 服务器：\(endpoint)。请检查网络后重试。底层错误：\(error.localizedDescription)"
+                : "Unable to connect to the EduNode server: \(endpoint). Check your network and try again. Underlying error: \(error.localizedDescription)"
+            throw EduBackendAuthError.requestFailed(message)
+        }
+
         guard let http = response as? HTTPURLResponse else {
             throw EduBackendAuthError.requestFailed("Missing HTTP response from EduNode backend.")
         }
@@ -346,7 +398,7 @@ struct EduBackendAuthService {
 
     private func decodedBackendErrorMessage(from data: Data) -> String {
         if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            for key in ["reason", "message", "error_description", "error"] {
+            for key in ["reason", "message", "detail", "error_description", "error"] {
                 if let message = object[key] as? String,
                    !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     return message

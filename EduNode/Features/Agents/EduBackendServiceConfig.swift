@@ -73,16 +73,8 @@ enum EduDotEnvLoader {
             urls.append(documents.appendingPathComponent(".env"))
         }
 
-        if let resourceURL = Bundle.main.resourceURL {
-            for name in environmentSpecificDotEnvNames() {
-                urls.append(resourceURL.appendingPathComponent(name))
-            }
-            urls.append(resourceURL.appendingPathComponent(".env"))
-        }
-
-        urls.append(Bundle.main.bundleURL.appendingPathComponent(".env"))
-
         let currentDirectory = URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
+        #if DEBUG
         for name in environmentSpecificDotEnvNames() {
             urls.append(currentDirectory.appendingPathComponent(name))
             urls.append(currentDirectory.appendingPathComponent("EduNode/\(name)"))
@@ -102,6 +94,17 @@ enum EduDotEnvLoader {
             urls.append(sourceDirectory.appendingPathComponent("Server/.env"))
             sourceDirectory.deleteLastPathComponent()
         }
+        #endif
+
+        if let resourceURL = Bundle.main.resourceURL {
+            urls.append(resourceURL.appendingPathComponent("frontend.env"))
+            for name in environmentSpecificDotEnvNames() {
+                urls.append(resourceURL.appendingPathComponent(name))
+            }
+            urls.append(resourceURL.appendingPathComponent(".env"))
+        }
+
+        urls.append(Bundle.main.bundleURL.appendingPathComponent(".env"))
 
         var seen: Set<String> = []
         return urls.filter { url in
@@ -186,11 +189,7 @@ struct EduBackendServiceConfig {
             return trimmed
         }
 
-        #if DEBUG
-        return "http://127.0.0.1:8080"
-        #else
-        return ""
-        #endif
+        return "https://api.euantop.work"
     }
 
     private static func derivedLocalBackendURL(from values: [String: String]) -> String {

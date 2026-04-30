@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Security
 import CryptoKit
+import AuthenticationServices
 
 struct EduAgentProviderSettings: Equatable {
     var providerName: String = "OpenAI-Compatible"
@@ -239,8 +240,11 @@ struct EduAgentSettingsSheet: View {
     @State private var isPasswordVisible = false
     @State private var currentSession: EduBackendSession?
     @State private var isAuthenticating = false
+    @State private var isSendingAccountEmail = false
     @State private var lastError: String?
     @State private var infoMessage: String?
+    @State private var pendingConfirmationEmail: String?
+    @State private var currentAppleSignInNonce: String?
 
     let onSaved: (() -> Void)?
     let allowsContinueWithoutAccount: Bool
@@ -432,6 +436,20 @@ struct EduAgentSettingsSheet: View {
                         .authInputBackground()
 
                     passwordField
+                    passwordGuidance
+
+                    HStack {
+                        Spacer()
+                        Button {
+                            Task { await requestPasswordReset() }
+                        } label: {
+                            Text(isChinese ? "忘记密码？" : "Forgot password?")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .disabled(isSendingAccountEmail || isAuthenticating)
+                    }
 
                     HStack(spacing: 10) {
                         Button {
@@ -449,6 +467,26 @@ struct EduAgentSettingsSheet: View {
                         }
                         .buttonStyle(.bordered)
                         .disabled(authActionDisabled)
+                    }
+
+                    appleSignInSection
+
+                    if let pendingConfirmationEmail {
+                        Button {
+                            Task { await resendConfirmation(email: pendingConfirmationEmail) }
+                        } label: {
+                            HStack(spacing: 8) {
+                                if isSendingAccountEmail {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+                                Text(isChinese ? "重新发送验证邮件" : "Resend verification email")
+                                    .font(.caption.weight(.semibold))
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .disabled(isSendingAccountEmail || isAuthenticating)
                     }
 
                     Text(
@@ -480,14 +518,42 @@ struct EduAgentSettingsSheet: View {
         .padding(.vertical, 6)
     }
 
+    private var appleSignInSection: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                Rectangle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(height: 1)
+                Text(isChinese ? "或" : "or")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Rectangle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(height: 1)
+            }
+
+            SignInWithAppleButton(.signIn) { request in
+                prepareAppleSignIn(request)
+            } onCompletion: { result in
+                Task { await handleAppleSignIn(result) }
+            }
+            .signInWithAppleButtonStyle(.white)
+            .frame(height: 48)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .disabled(isAuthenticating || isSendingAccountEmail || !accountServicesAvailable)
+        }
+    }
+
     private var accountServicesAvailable: Bool {
         backendConfiguration != nil
     }
 
     private var authActionDisabled: Bool {
         isAuthenticating
+            || isSendingAccountEmail
             || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || password.isEmpty
+            || password.count < 8
     }
 
     @ViewBuilder
@@ -589,6 +655,13 @@ struct EduAgentSettingsSheet: View {
         .authInputBackground()
     }
 
+    private var passwordGuidance: some View {
+        Text(isChinese ? "密码至少 8 位。" : "Password must be at least 8 characters.")
+            .font(.caption)
+            .foregroundStyle(password.isEmpty || password.count >= 8 ? Color.secondary : Color.orange)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     private func hydrateSession() {
         currentSession = EduBackendSessionStore.load()
     }
@@ -604,6 +677,9 @@ struct EduAgentSettingsSheet: View {
         defer { isAuthenticating = false }
         lastError = nil
         infoMessage = nil
+        pendingConfirmationEmail = nil
+
+        guard validateEmailAndPassword() else { return }
 
         do {
             let session = try await authService.signIn(
@@ -629,6 +705,9 @@ struct EduAgentSettingsSheet: View {
         defer { isAuthenticating = false }
         lastError = nil
         infoMessage = nil
+        pendingConfirmationEmail = nil
+
+        guard validateEmailAndPassword() else { return }
 
         do {
             let result = try await authService.signUp(
@@ -642,6 +721,7 @@ struct EduAgentSettingsSheet: View {
                 handleSignedInPrimaryAction()
             case .confirmationRequired(let email):
                 password = ""
+                pendingConfirmationEmail = email
                 infoMessage = isChinese
                     ? "账户已创建，请先检查 \(email) 的验证邮件，完成确认后再回来登录。"
                     : "Your account was created. Check the verification email sent to \(email), then come back and sign in."
@@ -664,6 +744,129 @@ struct EduAgentSettingsSheet: View {
         infoMessage = isChinese ? "已退出账户登录。" : "Signed out from the account."
     }
 
+    @MainActor
+    private func requestPasswordReset() async {
+        guard let authService = EduBackendAuthService() else {
+            lastError = isChinese ? "当前构建尚未配置 EduNode 后端地址。" : "The EduNode backend is not configured in this build."
+            return
+        }
+        guard validateEmailOnly() else { return }
+
+        isSendingAccountEmail = true
+        defer { isSendingAccountEmail = false }
+        lastError = nil
+        infoMessage = nil
+
+        do {
+            let targetEmail = try await authService.requestPasswordReset(email: email)
+            infoMessage = isChinese
+                ? "如果 \(targetEmail) 已注册，我们会向该邮箱发送密码重置邮件。"
+                : "If \(targetEmail) is registered, a password reset email has been sent."
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func resendConfirmation(email: String) async {
+        guard let authService = EduBackendAuthService() else {
+            lastError = isChinese ? "当前构建尚未配置 EduNode 后端地址。" : "The EduNode backend is not configured in this build."
+            return
+        }
+
+        isSendingAccountEmail = true
+        defer { isSendingAccountEmail = false }
+        lastError = nil
+        infoMessage = nil
+
+        do {
+            let targetEmail = try await authService.resendConfirmation(email: email)
+            pendingConfirmationEmail = targetEmail
+            infoMessage = isChinese
+                ? "验证邮件已重新发送至 \(targetEmail)。"
+                : "A new verification email has been sent to \(targetEmail)."
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    private func validateEmailOnly() -> Bool {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedEmail.range(
+            of: #"^[^@\s]+@[^@\s]+\.[^@\s]+$"#,
+            options: .regularExpression
+        ) != nil else {
+            lastError = isChinese ? "请输入有效邮箱地址。" : "Enter a valid email address."
+            return false
+        }
+        return true
+    }
+
+    private func validateEmailAndPassword() -> Bool {
+        guard validateEmailOnly() else { return false }
+        guard password.count >= 8 else {
+            lastError = isChinese ? "密码至少需要 8 位。" : "Password must be at least 8 characters."
+            return false
+        }
+        return true
+    }
+
+    private func prepareAppleSignIn(_ request: ASAuthorizationAppleIDRequest) {
+        let nonce = Self.randomNonceString()
+        currentAppleSignInNonce = nonce
+        request.requestedScopes = [.email, .fullName]
+        request.nonce = Self.sha256(nonce)
+        lastError = nil
+        infoMessage = nil
+    }
+
+    @MainActor
+    private func handleAppleSignIn(_ result: Result<ASAuthorization, Error>) async {
+        guard let authService = EduBackendAuthService() else {
+            lastError = isChinese ? "当前构建尚未配置 EduNode 后端地址。" : "The EduNode backend is not configured in this build."
+            return
+        }
+
+        switch result {
+        case .success(let authorization):
+            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+                  let identityTokenData = credential.identityToken,
+                  let identityToken = String(data: identityTokenData, encoding: .utf8),
+                  let nonce = currentAppleSignInNonce?.nonEmpty else {
+                lastError = isChinese ? "Apple 登录返回信息不完整，请重试。" : "Apple sign-in returned an incomplete response. Please try again."
+                return
+            }
+
+            isAuthenticating = true
+            defer {
+                isAuthenticating = false
+                currentAppleSignInNonce = nil
+            }
+            lastError = nil
+            infoMessage = nil
+            pendingConfirmationEmail = nil
+
+            do {
+                let session = try await authService.signInWithApple(
+                    identityToken: identityToken,
+                    nonce: nonce
+                )
+                currentSession = session
+                clearDraftCredentials()
+                handleSignedInPrimaryAction()
+            } catch {
+                lastError = error.localizedDescription
+            }
+        case .failure(let error):
+            currentAppleSignInNonce = nil
+            if let authError = error as? ASAuthorizationError,
+               authError.code == .canceled {
+                return
+            }
+            lastError = error.localizedDescription
+        }
+    }
+
     private func clearDraftCredentials() {
         email = ""
         password = ""
@@ -673,6 +876,34 @@ struct EduAgentSettingsSheet: View {
     private func handleSignedInPrimaryAction() {
         onSaved?()
         dismiss()
+    }
+
+    private static func randomNonceString(length: Int = 32) -> String {
+        precondition(length > 0)
+        let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
+        var result = ""
+        var remainingLength = length
+
+        while remainingLength > 0 {
+            var random: UInt8 = 0
+            let status = SecRandomCopyBytes(kSecRandomDefault, 1, &random)
+            guard status == errSecSuccess else {
+                fatalError("Unable to generate nonce.")
+            }
+
+            if random < charset.count {
+                result.append(charset[Int(random)])
+                remainingLength -= 1
+            }
+        }
+
+        return result
+    }
+
+    private static func sha256(_ input: String) -> String {
+        let data = Data(input.utf8)
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }
 

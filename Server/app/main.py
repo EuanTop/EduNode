@@ -58,10 +58,43 @@ async def sign_in(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@app.post("/auth/sign-in/apple")
+async def sign_in_with_apple(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return await auth_manager.sign_in_with_apple(
+            str(payload.get("id_token", "")),
+            str(payload.get("nonce", "")),
+        )
+    except AuthNotConfigured as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except AuthError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @app.post("/auth/sign-up")
 async def sign_up(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         return await auth_manager.sign_up(str(payload.get("email", "")), str(payload.get("password", "")))
+    except AuthNotConfigured as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except AuthError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/auth/password-reset")
+async def password_reset(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return await auth_manager.request_password_reset(str(payload.get("email", "")))
+    except AuthNotConfigured as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except AuthError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/auth/resend-confirmation")
+async def resend_confirmation(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return await auth_manager.resend_confirmation(str(payload.get("email", "")))
     except AuthNotConfigured as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except AuthError as error:

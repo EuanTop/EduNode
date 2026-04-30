@@ -136,6 +136,21 @@ public struct EduBackendAuthEmailPasswordRequest: Codable, Hashable, Sendable {
     }
 }
 
+public struct EduBackendAuthAppleSignInRequest: Codable, Hashable, Sendable {
+    public let idToken: String
+    public let nonce: String
+
+    public init(idToken: String, nonce: String) {
+        self.idToken = idToken
+        self.nonce = nonce
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case idToken = "id_token"
+        case nonce
+    }
+}
+
 public struct EduBackendAuthRefreshRequest: Codable, Hashable, Sendable {
     public let refreshToken: String
 
@@ -145,6 +160,24 @@ public struct EduBackendAuthRefreshRequest: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case refreshToken = "refresh_token"
+    }
+}
+
+public struct EduBackendAuthEmailRequest: Codable, Hashable, Sendable {
+    public let email: String
+
+    public init(email: String) {
+        self.email = email
+    }
+}
+
+public struct EduBackendAuthStatusResponse: Codable, Hashable, Sendable {
+    public let status: String
+    public let email: String
+
+    public init(status: String, email: String) {
+        self.status = status
+        self.email = email
     }
 }
 

@@ -80,6 +80,8 @@ def _int(value: str | None, fallback: int, minimum: int | None = None) -> int:
 class SupabaseSettings:
     url: str
     publishable_key: str
+    auth_redirect_url: str
+    session_store_path: Path
 
     @property
     def configured(self) -> bool:
@@ -235,6 +237,13 @@ def load_settings() -> RuntimeSettings:
     usage_path = Path(env.get("EDUNODE_USAGE_LOG_PATH", str(SERVER_DIR / "logs" / "llm_usage.jsonl")))
     if not usage_path.is_absolute():
         usage_path = (REPO_ROOT if usage_path.parts and usage_path.parts[0] == "Server" else SERVER_DIR) / usage_path
+    auth_session_store_path = Path(
+        env.get("EDUNODE_AUTH_SESSION_STORE_PATH", str(SERVER_DIR / "data" / "auth_sessions.sqlite3"))
+    )
+    if not auth_session_store_path.is_absolute():
+        auth_session_store_path = (
+            REPO_ROOT if auth_session_store_path.parts and auth_session_store_path.parts[0] == "Server" else SERVER_DIR
+        ) / auth_session_store_path
     return RuntimeSettings(
         host=env.get("EDUNODE_SERVER_HOST", "127.0.0.1").strip() or "127.0.0.1",
         port=_int(env.get("PORT"), 8080),
@@ -246,6 +255,8 @@ def load_settings() -> RuntimeSettings:
                 or env.get("EDUNODE_SUPABASE_ANON_KEY")
                 or ""
             ).strip(),
+            auth_redirect_url=env.get("EDUNODE_AUTH_REDIRECT_URL", "").strip(),
+            session_store_path=auth_session_store_path,
         ),
         mineru=MinerUSettings(
             api_token=env.get("MINERU_API_TOKEN", "").strip(),
